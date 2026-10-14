@@ -345,6 +345,68 @@ pub(crate) fn parse_push_porcelain(out: &str) -> Vec<PushRef> {
         .collect()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PullOutcome {
+    /// The upstream rebased onto, e.g. `origin/hangar/fix-login`.
+    pub upstream: String,
+    /// Commits taken from the upstream.
+    pub pulled: u32,
+}
+
+/// After a non-fast-forward rejection: fetches the branch's upstream and rebases the local
+/// commits onto it (uncommitted changes are stashed and put back). A conflicting rebase is
+/// aborted, leaving the branch as it was, and reported as [`Error::RebaseConflicts`].
+pub fn pull_rebase(worktree: &Path) -> Result<PullOutcome> {
+    pull_rebase_within(worktree, PUSH_TIMEOUT)
+}
+
+fn pull_rebase_within(worktree: &Path, timeout: Duration) -> Result<PullOutcome> {
+    let branch = current_branch(worktree)?.ok_or(Error::DetachedHead)?;
+    let up = upstream(worktree)?.ok_or_else(|| Error::NoUpstream(branch.clone()))?;
+    let git = Git::new(worktree);
+    let fetch = git.output_timeout(["fetch", "--quiet", "--", &up.remote], timeout)?;
+    if !fetch.status.success() {
+        return Err(git.failure(fetch));
+    }
+    let behind = upstream(worktree)?.map_or(0, |u| u.behind);
+    if behind == 0 {
+        return Ok(PullOutcome {
+            upstream: up.name,
+            pulled: 0,
+        });
+    }
+    let out = git.output(["rebase", "--autostash", "--quiet", &up.name], None)?;
+    if out.status.success() {
+        return Ok(PullOutcome {
+            upstream: up.name,
+            pulled: behind,
+        });
+    }
+    let conflicted = git.run_bytes(["diff", "--name-only", "-z", "--diff-filter=U"]);
+    let in_progress = git
+        .run([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "rebase-merge",
+        ])
+        .is_ok_and(|p| Path::new(p.trim()).exists());
+    if in_progress && let Err(e) = git.run(["rebase", "--abort"]) {
+        tracing::warn!("rebase --abort failed: {e}");
+    }
+    match conflicted {
+        Ok(paths) if in_progress => Err(Error::RebaseConflicts {
+            onto: up.name,
+            paths: paths
+                .split(|&b| b == 0)
+                .filter(|p| !p.is_empty())
+                .map(bytes_to_path)
+                .collect(),
+        }),
+        _ => Err(git.failure(out)),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeStrategy {
     /// `git merge --no-ff`: a merge commit keeps the branch's history.

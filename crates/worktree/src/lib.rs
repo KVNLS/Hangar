@@ -25,8 +25,9 @@ pub use repo::{
     branch_exists, current_branch, default_branch, is_valid_branch_name, local_branches, repo_root,
 };
 pub use review::{
-    BaseCheckout, CommitOptions, MergeOutcome, MergeStrategy, PushOutcome, Upstream, base_checkout,
-    commit, merge_conflicts, merge_into_base, push, remotes, stage, stage_all, unstage, upstream,
+    BaseCheckout, CommitOptions, MergeOutcome, MergeStrategy, PullOutcome, PushOutcome, Upstream,
+    base_checkout, commit, merge_conflicts, merge_into_base, pull_rebase, push, remotes, stage,
+    stage_all, unstage, upstream,
 };
 pub use status::{ChangeKind, ChangedPath, Status, parse_status, status, status_paths};
 pub use worktree::{

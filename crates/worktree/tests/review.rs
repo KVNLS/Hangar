@@ -10,8 +10,8 @@ use std::process::Command;
 
 use hangar_worktree::{
     CommitOptions, CreateOptions, CreatePr, Error, Gh, GhStatus, MergeStrategy, PrInfo,
-    base_checkout, commit, create, merge_into_base, push, remotes, stage, stage_all, status,
-    unstage, upstream,
+    base_checkout, commit, create, merge_into_base, pull_rebase, push, remotes, stage, stage_all,
+    status, unstage, upstream,
 };
 use tempfile::TempDir;
 
@@ -280,6 +280,56 @@ fn push_sets_upstream_then_pushes_and_reports_rejection() {
         git(&fx.origin, &["rev-parse", "hangar/task"]).trim(),
         theirs
     );
+
+    // Pull and rebase, with an uncommitted edit carried over, then the push goes through.
+    fx.write(&fx.wt, "wip.txt", "wip\n");
+    let pulled = pull_rebase(&fx.wt).unwrap();
+    assert_eq!(
+        (pulled.upstream.as_str(), pulled.pulled),
+        ("origin/hangar/task", 1)
+    );
+    assert!(fx.wt.join("theirs.txt").exists() && fx.wt.join("wip.txt").exists());
+    assert!(!push(&fx.wt, None).unwrap().up_to_date);
+    let log = git(&fx.origin, &["log", "--format=%s", "hangar/task"]);
+    assert!(log.starts_with("c\ntheirs\n"), "{log}");
+    assert_eq!(pull_rebase(&fx.wt).unwrap().pulled, 0);
+}
+
+#[test]
+fn pull_rebase_conflict_is_aborted() {
+    let fx = Fixture::new();
+    fx.commit_in_wt("a.txt", "a\n", "a");
+    push(&fx.wt, None).unwrap();
+    let other = fx.root.join("other");
+    git(
+        &fx.root,
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "hangar/task",
+            fx.origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    configure(&other, &fx.hooks);
+    fx.write(&other, "a.txt", "theirs\n");
+    git(&other, &["commit", "-qam", "theirs"]);
+    git(&other, &["push", "-q"]);
+    let ours = fx.commit_in_wt("a.txt", "ours\n", "ours");
+
+    match pull_rebase(&fx.wt) {
+        Err(Error::RebaseConflicts { onto, paths }) => {
+            assert_eq!(onto, "origin/hangar/task");
+            assert_eq!(paths, [PathBuf::from("a.txt")]);
+        }
+        other => panic!("expected RebaseConflicts, got {other:?}"),
+    }
+    assert_eq!(fx.head(&fx.wt), ours);
+    assert!(status(&fx.wt).unwrap().is_clean());
+
+    git(&fx.wt, &["branch", "--unset-upstream"]);
+    assert!(matches!(pull_rebase(&fx.wt), Err(Error::NoUpstream(_))));
 }
 
 #[test]
