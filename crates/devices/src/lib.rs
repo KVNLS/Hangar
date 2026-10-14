@@ -1,1 +1,166 @@
-//! Simulators and emulators behind the Device trait.
+//! Simulators and emulators behind the [`Device`] trait. Headless: no UI types here.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+pub mod geometry;
+pub mod simctl;
+
+#[cfg(target_os = "macos")]
+pub mod ios;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("unsupported: {0}")]
+    Unsupported(&'static str),
+    #[error("device not found: {0}")]
+    NotFound(String),
+    #[error("command failed: {0}")]
+    Command(String),
+    #[error("private API: {0}")]
+    PrivateApi(String),
+    #[error("parse error: {0}")]
+    Parse(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Physical description of the main screen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenSpec {
+    pub width_px: u32,
+    pub height_px: u32,
+    pub scale: f64,
+}
+
+impl ScreenSpec {
+    pub fn width_pt(&self) -> f64 {
+        f64::from(self.width_px) / self.scale
+    }
+
+    pub fn height_pt(&self) -> f64 {
+        f64::from(self.height_px) / self.scale
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceInfo {
+    pub udid: String,
+    pub name: String,
+    pub runtime: String,
+    pub state: String,
+    pub device_type: Option<String>,
+    pub screen: Option<ScreenSpec>,
+}
+
+/// One captured frame, tightly packed BGRA (`stride == width * 4` unless stated otherwise).
+#[derive(Debug, Clone)]
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub stride: usize,
+    pub bgra: Arc<[u8]>,
+    pub captured_at: Instant,
+    pub seq: u64,
+}
+
+impl Frame {
+    /// Fraction (0..=1) of sampled pixels that differ between two frames; 1.0 if sizes differ.
+    pub fn diff_ratio(&self, other: &Frame) -> f64 {
+        if self.width != other.width || self.height != other.height {
+            return 1.0;
+        }
+        const STEP: usize = 7; // sample every 7th pixel in both directions
+        let (mut total, mut changed) = (0u64, 0u64);
+        for y in (0..self.height as usize).step_by(STEP) {
+            for x in (0..self.width as usize).step_by(STEP) {
+                let a = y * self.stride + x * 4;
+                let b = y * other.stride + x * 4;
+                total += 1;
+                if self.bgra.get(a..a + 3) != other.bgra.get(b..b + 3) {
+                    changed += 1;
+                }
+            }
+        }
+        if total == 0 {
+            0.0
+        } else {
+            changed as f64 / total as f64
+        }
+    }
+
+    /// Writes the frame as an RGBA PNG (for debugging and verification).
+    pub fn save_png(&self, path: &std::path::Path) -> Result<()> {
+        let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
+        for y in 0..self.height as usize {
+            let row = &self.bgra[y * self.stride..y * self.stride + self.width as usize * 4];
+            for px in row.as_chunks::<4>().0 {
+                rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+            }
+        }
+        image::save_buffer(
+            path,
+            &rgba,
+            self.width,
+            self.height,
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| Error::Parse(format!("png encode: {e}")))
+    }
+}
+
+/// Input in device points (origin top-left, portrait).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Input {
+    Tap {
+        x: f64,
+        y: f64,
+    },
+    TouchDown {
+        x: f64,
+        y: f64,
+    },
+    TouchMove {
+        x: f64,
+        y: f64,
+    },
+    TouchUp {
+        x: f64,
+        y: f64,
+    },
+    /// Hardware Home button press (on Face ID devices it still returns to the home screen).
+    Home,
+}
+
+/// Latest-frame channel: receivers always see the most recent frame; slow consumers skip frames.
+pub type FrameReceiver = tokio::sync::watch::Receiver<Option<Frame>>;
+pub type FrameSender = tokio::sync::watch::Sender<Option<Frame>>;
+
+pub trait Device: Send + Sync {
+    fn info(&self) -> &DeviceInfo;
+
+    /// Short backend name for logs ("private", "simctl").
+    fn backend(&self) -> &'static str;
+
+    fn frames(&self) -> FrameReceiver;
+
+    fn send_input(&self, input: Input) -> Result<()>;
+
+    fn boot(&self) -> Result<()> {
+        Err(Error::Unsupported("boot"))
+    }
+
+    fn install(&self, _app_path: &std::path::Path) -> Result<()> {
+        Err(Error::Unsupported("install"))
+    }
+
+    fn launch(&self, _bundle_id: &str) -> Result<()> {
+        Err(Error::Unsupported("launch"))
+    }
+
+    fn logs(&self) -> Result<()> {
+        Err(Error::Unsupported("logs"))
+    }
+}
