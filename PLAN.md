@@ -56,7 +56,8 @@ Git access is the `git` CLI with porcelain output, not a library.
 10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
 
 ## Explicitly unimplemented (return `Unsupported`)
-- `devices`: `set_orientation` (iOS: no working route on Xcode 27, see spikes/m5-ios-notes.md);
+- `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
+  Android rotation needs a sensor-following foreground app and upside-down is usually refused (spikes/m4-android-notes.md);
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
   `Lock`/volume buttons (private backend only); iOS `AppSwitch`/`Back`; text beyond printable ASCII +
   `\n`/`\t` on the private backend.
