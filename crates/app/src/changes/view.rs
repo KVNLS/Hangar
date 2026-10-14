@@ -667,6 +667,18 @@ impl ChangesPanel {
                             .child(div().flex_shrink_0().child(name)),
                     )
                     .child(counts(file, cx))
+                    .when(self.wide, |this| {
+                        let viewed = self.is_viewed(&file.path);
+                        // Viewed files fade, so what is left to read stands out.
+                        this.when(viewed && !selected, |this| this.opacity(0.55))
+                            .child(div().w(px(14.)).flex_shrink_0().when(viewed, |this| {
+                                this.child(
+                                    Icon::new(Lucide::Check)
+                                        .size(px(12.))
+                                        .text_color(cx.tokens().grn),
+                                )
+                            }))
+                    })
                     .into_any_element()
             }
         }
