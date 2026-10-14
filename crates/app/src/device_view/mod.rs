@@ -127,6 +127,11 @@ impl DeviceView {
         cx.notify();
     }
 
+    /// The latest stats line (once a second while stats are enabled and frames are painted).
+    pub fn stats_report(&self) -> Option<String> {
+        self.stats.borrow().report.clone()
+    }
+
     /// The frame currently on screen, once it has actually been painted.
     pub fn painted_frame(&self) -> Option<&Frame> {
         self.shown
