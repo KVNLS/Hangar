@@ -6,10 +6,6 @@ mod setup_tab;
 mod usage_tab;
 
 use std::cell::Cell;
-use std::io::Read as _;
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::{Input, NumberInput};
@@ -115,9 +111,6 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Answer later", "escape", "Answer sheet"),
 ];
 
-/// How long `<agent> --version` may take before it is given up on.
-const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
-
 /// View state of the settings screen that outlives a render.
 pub(super) struct SettingsUi {
     keys_filter: Entity<InputState>,
@@ -156,50 +149,6 @@ impl SettingsUi {
             sub,
         )
     }
-}
-
-/// The first version-looking word of `--version` output (`2.1.4 (Claude Code)` → `2.1.4`,
-/// `zsh 5.9 (arm64-apple-darwin24.0)` → `5.9`, `v0.3.1` → `0.3.1`).
-pub(super) fn parse_version(output: &str) -> Option<String> {
-    output
-        .lines()
-        .find(|l| !l.trim().is_empty())?
-        .split_whitespace()
-        .find_map(|word| {
-            let word = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-            let word = word.strip_prefix('v').unwrap_or(word);
-            (word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('.'))
-                .then(|| word.to_owned())
-        })
-}
-
-/// Runs `<program> --version` with `path` as `PATH`; `None` when it fails, prints no version or
-/// outlasts [`VERSION_TIMEOUT`]. Blocking: call it off the UI thread.
-fn program_version(program: &Path, path: Option<&str>) -> Option<String> {
-    let mut command = Command::new(program);
-    command
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    if let Some(path) = path {
-        command.env("PATH", path);
-    }
-    let mut child = command.spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
-    let (tx, rx) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("agent-version".into())
-        .spawn(move || {
-            let mut out = String::new();
-            let _ = stdout.read_to_string(&mut out);
-            let _ = tx.send(out);
-        })
-        .ok()?;
-    let out = rx.recv_timeout(VERSION_TIMEOUT).ok();
-    let _ = child.kill();
-    let _ = child.wait();
-    parse_version(&out?)
 }
 
 /// Whether a SHORTCUTS row matches the keybindings search: by action, context or keys (`cmd-k`,
@@ -573,23 +522,7 @@ impl HangarApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{SHORTCUTS, key_caps, parse_version, shortcut_matches};
-
-    #[test]
-    fn versions() {
-        assert_eq!(
-            parse_version("2.1.4 (Claude Code)\n").as_deref(),
-            Some("2.1.4")
-        );
-        assert_eq!(
-            parse_version("zsh 5.9 (arm64-apple-darwin24.0)").as_deref(),
-            Some("5.9")
-        );
-        assert_eq!(parse_version("\nv0.3.1").as_deref(), Some("0.3.1"));
-        assert_eq!(parse_version("codex-cli 0.46.0").as_deref(), Some("0.46.0"));
-        assert_eq!(parse_version("usage: foo [options]"), None);
-        assert_eq!(parse_version(""), None);
-    }
+    use super::{SHORTCUTS, key_caps, shortcut_matches};
 
     #[test]
     fn shortcut_search() {

@@ -20,8 +20,12 @@ impl HangarApp {
                 .into_iter()
                 .map(|(id, program)| {
                     let path = path.clone();
-                    cx.background_executor()
-                        .spawn(async move { (id, program_version(&program, path.as_deref())) })
+                    cx.background_executor().spawn(async move {
+                        (
+                            id,
+                            crate::adapters::program_version(&program, path.as_deref()),
+                        )
+                    })
                 })
                 .collect();
             for task in tasks {
