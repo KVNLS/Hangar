@@ -278,9 +278,10 @@ impl HangarApp {
         });
         let queued = workspace_id.and_then(|id| Some((id, self.queued_ahead(id)?)));
         let start = workspace.and_then(|ws| {
+            // Without a session the pane's empty state offers Start/Resume instead.
             let can_start = !self.work.busy.contains(&ws.id)
                 && queued.is_none()
-                && live.is_none_or(|l| l.session.status.is_terminal());
+                && live.is_some_and(|l| l.session.status.is_terminal());
             let ws_id = ws.id;
             let agent = self.agent_for(ws_id);
             let resumable = self.resumable_chat(ws_id, &agent).is_some();
@@ -393,8 +394,7 @@ impl HangarApp {
                 .justify_center()
                 .bg(t.term)
                 .child(match workspace {
-                    Some(_) => EmptyState::new(Lucide::Terminal, "No agent running")
-                        .hint("Start an agent to work in this workspace."),
+                    Some(ws) => self.render_no_agent(pane, ws.id, cx),
                     None => EmptyState::new(Lucide::Terminal, "Empty pane")
                         .hint("Select a workspace in the sidebar to show it here."),
                 }),
@@ -632,6 +632,61 @@ impl HangarApp {
                 }))
                 .child(handle)
                 .into_any_element(),
+        )
+    }
+
+    /// The empty agent pane: start the workspace's agent, resume its last chat or pick another agent.
+    fn render_no_agent(
+        &self,
+        pane: usize,
+        ws_id: WorkspaceId,
+        cx: &mut Context<Self>,
+    ) -> EmptyState {
+        let agent = self.agent_for(ws_id);
+        let resumable = self.resumable_chat(ws_id, &agent).is_some();
+        let state = EmptyState::new(Lucide::Terminal, "No agent running").hint(if resumable {
+            "Pick up the last conversation or start a new one."
+        } else {
+            "Start an agent to work in this workspace."
+        });
+        if self.work.busy.contains(&ws_id) {
+            return state;
+        }
+        let name = agent_display_name(&agent);
+        let start = h_flex()
+            .items_center()
+            .child(
+                UiButton::new(("empty-start", pane))
+                    .icon(Lucide::Play)
+                    .label(if resumable {
+                        format!("Resume {name}")
+                    } else {
+                        format!("Start {name}")
+                    })
+                    .primary()
+                    .small()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.start_agent_in(ws_id, true, window, cx)
+                    })),
+            )
+            .child(self.agent_menu(pane, ws_id, agent, cx));
+        state.action(
+            h_flex()
+                .justify_center()
+                .gap_2()
+                .child(start)
+                .when(resumable, |this| {
+                    this.child(
+                        UiButton::new(("empty-new-chat", pane))
+                            .icon(Lucide::Plus)
+                            .label("New conversation")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_agent_in(ws_id, false, window, cx)
+                            })),
+                    )
+                }),
         )
     }
 
