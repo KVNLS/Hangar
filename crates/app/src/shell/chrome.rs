@@ -204,32 +204,61 @@ impl HangarApp {
             .count();
         let focused = self.layout.panes.slot(self.layout.panes.focused());
         let pool = self.device_pool.read(cx);
-        let device = match focused {
-            Some(id) => {
-                let name = pool.device_name(id).map(str::to_owned);
-                let state = match pool.status(id) {
-                    crate::device_pool::DeviceStatus::Open { .. } => Some("open"),
-                    crate::device_pool::DeviceStatus::Opening { .. } => Some("starting"),
-                    crate::device_pool::DeviceStatus::ShuttingDown { .. } => Some("shutting down"),
-                    crate::device_pool::DeviceStatus::Closed { .. } => Some("off"),
-                    crate::device_pool::DeviceStatus::Unknown => None,
-                };
-                name.zip(state).map(|(n, s)| format!("{n} · {s}"))
-            }
-            None => self
-                .device_panel
-                .read(cx)
-                .picker()
-                .selected_entry()
-                .map(|entry| format!("{} · {}", entry.info.name, entry.info.state.to_lowercase())),
-        };
-        let run = match focused {
+        // Every device the pool runs, booted or on its way, not only the focused workspace's.
+        let mut devices: Vec<String> = pool
+            .rows()
+            .into_iter()
+            .filter_map(|row| match row.state {
+                "open" | "running" => Some(format!("{} · booted", row.name)),
+                "starting" | "shutting down" => Some(format!("{} · {}", row.name, row.state)),
+                _ => None,
+            })
+            .collect();
+        devices.sort();
+        if devices.is_empty() {
+            let fallback = match focused {
+                Some(id) => {
+                    let name = pool.device_name(id).map(str::to_owned);
+                    let state = match pool.status(id) {
+                        crate::device_pool::DeviceStatus::Closed { .. } => Some("off"),
+                        _ => None,
+                    };
+                    name.zip(state).map(|(n, s)| format!("{n} · {s}"))
+                }
+                None => self
+                    .device_panel
+                    .read(cx)
+                    .picker()
+                    .selected_entry()
+                    .map(|entry| {
+                        format!("{} · {}", entry.info.name, entry.info.state.to_lowercase())
+                    }),
+            };
+            devices.extend(fallback);
+        }
+        let pressure = pool.pressure();
+        // The focused workspace's run when it is busy or failed, else any run in progress.
+        let focused_run = match focused {
             Some(id) if pool.is_waiting(id) => {
                 Some(("Waiting for the device".to_owned(), AgentState::Working))
             }
-            Some(id) => self.live.runs.get(&id).map(|run| run.summary()),
+            Some(id) => self
+                .live
+                .runs
+                .get(&id)
+                .map(|run| run.summary())
+                .filter(|(_, state)| matches!(state, AgentState::Working | AgentState::Failed)),
             None => None,
         };
+        let run = focused_run
+            .or_else(|| {
+                self.live
+                    .runs
+                    .values()
+                    .map(|run| run.summary())
+                    .find(|(_, state)| *state == AgentState::Working)
+            })
+            .unwrap_or_else(|| ("builds idle".to_owned(), AgentState::Idle));
         h_flex()
             .flex_none()
             .h(STATUS_BAR_HEIGHT)
@@ -255,34 +284,49 @@ impl HangarApp {
                             .child(format!("{n} {}", state.short_label()))
                     }),
             )
-            .when_some(device, |this, device| {
-                this.child(div().w(px(1.)).h(px(12.)).bg(t.line2)).child(
-                    h_flex()
-                        .gap(px(5.))
-                        .items_center()
-                        .child(gpui_kit::component::Icon::new(Lucide::Smartphone).size(px(11.)))
-                        .child(device),
-                )
-            })
-            .when_some(run, |this, (text, state)| {
+            .child(div().w(px(1.)).h(px(12.)).bg(t.line2))
+            .child({
+                let (text, state) = run;
                 let color = match state {
                     AgentState::Failed => t.red,
                     AgentState::Working => t.acc,
                     _ => t.tx2,
                 };
-                this.child(div().w(px(1.)).h(px(12.)).bg(t.line2)).child(
-                    h_flex()
-                        .gap(px(5.))
-                        .items_center()
-                        .text_color(color)
-                        .child(gpui_kit::component::Icon::new(Lucide::Hammer).size(px(11.)))
-                        .child(text),
-                )
+                h_flex()
+                    .gap(px(5.))
+                    .items_center()
+                    .text_color(color)
+                    .child(gpui_kit::component::Icon::new(Lucide::Hammer).size(px(11.)))
+                    .child(text)
             })
+            .children(devices.into_iter().map(|device| {
+                h_flex()
+                    .gap(px(5.))
+                    .items_center()
+                    .child(gpui_kit::component::Icon::new(Lucide::Smartphone).size(px(11.)))
+                    .child(device)
+            }))
             .child(div().flex_1())
             .child(format!(
                 "{agents} agent{} running",
                 if agents == 1 { "" } else { "s" }
             ))
+            // Memory pressure is the only live host figure the pool tracks; RAM totals are a
+            // launch-time snapshot and per-agent memory is not measured.
+            .when_some(pressure, |this, pressure| {
+                let color = match pressure {
+                    hangar_devices::capacity::Pressure::Normal => t.tx2,
+                    hangar_devices::capacity::Pressure::Warn => t.amb,
+                    hangar_devices::capacity::Pressure::Critical => t.red,
+                };
+                this.child(
+                    h_flex()
+                        .gap(px(5.))
+                        .items_center()
+                        .text_color(color)
+                        .child(gpui_kit::component::Icon::new(Lucide::MemoryStick).size(px(11.)))
+                        .child(format!("memory {pressure}")),
+                )
+            })
     }
 }
