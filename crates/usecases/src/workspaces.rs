@@ -23,6 +23,8 @@ pub struct NewWorkspace {
     pub branch: Option<String>,
     pub task: Option<String>,
     pub group: Option<WorkspaceGroupId>,
+    /// The workspace whose agent asked for this one (orchestration tools).
+    pub parent: Option<WorkspaceId>,
 }
 
 impl NewWorkspace {
@@ -294,6 +296,7 @@ impl<'a> Workspaces<'a> {
             created_at: Timestamp::now(),
             task: task.map(str::to_owned),
             group: spec.group,
+            parent: spec.parent,
         };
         if let Err(err) = self.store.insert_workspace(&workspace) {
             self.rollback(repo, &path, &workspace.branch);
@@ -596,6 +599,7 @@ mod tests {
             created_at: Timestamp::now(),
             task: None,
             group: None,
+            parent: None,
         };
         store.insert_workspace(&ws).unwrap();
         let err = Workspaces::new(&store, &git)

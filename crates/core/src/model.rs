@@ -140,6 +140,9 @@ pub struct Workspace {
     /// The attempts this workspace was created with, if it is one of several.
     #[serde(default)]
     pub group: Option<WorkspaceGroupId>,
+    /// The workspace whose agent created this one through the orchestration tools.
+    #[serde(default)]
+    pub parent: Option<WorkspaceId>,
 }
 
 impl Workspace {
@@ -270,6 +273,7 @@ mod tests {
             created_at: Timestamp::now(),
             task: None,
             group: None,
+            parent: None,
         };
         assert_eq!(ws.title(), "Login");
         ws.task = Some("\n  Fix the login crash \nwith a test".into());

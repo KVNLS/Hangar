@@ -255,6 +255,7 @@ mod tests {
                 created_at: Timestamp::now(),
                 task: None,
                 group: None,
+                parent: None,
             },
             repo: "/repo".into(),
         }

@@ -128,6 +128,7 @@ mod tests {
             created_at: Timestamp(0),
             task: task.map(str::to_owned),
             group: None,
+            parent: None,
         }
     }
 

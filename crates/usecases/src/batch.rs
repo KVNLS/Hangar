@@ -96,6 +96,7 @@ pub fn plan(request: &BatchRequest) -> Result<Vec<Planned>, BatchError> {
                     branch: branch.clone(),
                     task: task.clone(),
                     group,
+                    parent: None,
                 },
                 agent: agent.clone(),
             });
@@ -187,6 +188,7 @@ mod tests {
                     branch: Some("fix/login".into()),
                     task: Some("Fix it".into()),
                     group: None,
+                    parent: None,
                 },
                 agent: "claude".into(),
             }]
@@ -294,6 +296,7 @@ mod tests {
             created_at: hangar_core::Timestamp(at),
             task: None,
             group,
+            parent: None,
         }
     }
 

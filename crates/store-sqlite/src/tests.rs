@@ -26,6 +26,7 @@ fn workspace(project_id: ProjectId, name: &str) -> Workspace {
         created_at: Timestamp::now(),
         task: None,
         group: None,
+        parent: None,
     }
 }
 
@@ -602,4 +603,75 @@ fn sessions_since_span_workspaces_latest_ended_first() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn v4_workspaces_migrate_without_a_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hangar.db");
+    let p = project("/repos/v4");
+    let ws = Workspace {
+        task: Some("Fix it".to_owned()),
+        group: Some(WorkspaceGroupId::new()),
+        ..workspace(p.id, "Old")
+    };
+    {
+        // A database as written by a v4 build: no `parent_id` column yet.
+        let conn = Connection::open(&path).unwrap();
+        for sql in &MIGRATIONS[..4] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, repo_path, default_base, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                p.id.0.to_string(),
+                p.name,
+                "/repos/v4",
+                p.default_base,
+                p.created_at.0
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces
+             (id, project_id, name, slug, branch, base, worktree_path, status, created_at, task,
+              group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                ws.id.0.to_string(),
+                p.id.0.to_string(),
+                ws.name,
+                ws.slug,
+                ws.branch,
+                ws.base,
+                "/tmp/worktrees/old",
+                "active",
+                ws.created_at.0,
+                ws.task,
+                ws.group.map(|g| g.0.to_string()),
+            ],
+        )
+        .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert!(store.schema_version().unwrap() >= 5);
+    assert_eq!(store.get_workspace(ws.id).unwrap(), ws);
+}
+
+#[test]
+fn a_workspace_parent_round_trips() {
+    let store = store();
+    let p = project("/repos/parent");
+    store.insert_project(&p).unwrap();
+    let lead = workspace(p.id, "Lead");
+    let child = Workspace {
+        parent: Some(lead.id),
+        ..workspace(p.id, "Child")
+    };
+    store.insert_workspace(&lead).unwrap();
+    store.insert_workspace(&child).unwrap();
+    assert_eq!(store.get_workspace(child.id).unwrap(), child);
+    assert_eq!(store.list_workspaces(p.id).unwrap(), vec![lead, child]);
 }

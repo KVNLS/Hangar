@@ -68,6 +68,10 @@ ALTER TABLE workspaces ADD COLUMN task TEXT;
     r#"
 ALTER TABLE workspaces ADD COLUMN group_id TEXT;
 "#,
+    // v5: the workspace whose agent created this one (orchestration).
+    r#"
+ALTER TABLE workspaces ADD COLUMN parent_id TEXT;
+"#,
     // v6: session history (the first prompt and the workspace diff when the session ended).
     r#"
 ALTER TABLE sessions ADD COLUMN prompt TEXT;
@@ -206,8 +210,8 @@ impl Store {
             .execute(
                 "INSERT INTO workspaces
                  (id, project_id, name, slug, branch, base, worktree_path, status, created_at, task,
-                  group_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                  group_id, parent_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     workspace.id.0.to_string(),
                     workspace.project_id.0.to_string(),
@@ -220,6 +224,7 @@ impl Store {
                     workspace.created_at.0,
                     workspace.task,
                     workspace.group.map(|g| g.0.to_string()),
+                    workspace.parent.map(|p| p.0.to_string()),
                 ],
             )
             .map_err(|e| {
@@ -241,7 +246,7 @@ impl Store {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at,
-                    task, group_id
+                    task, group_id, parent_id
              FROM workspaces WHERE project_id = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([project_id.0.to_string()], workspace_from_row)?;
@@ -252,7 +257,7 @@ impl Store {
         self.conn()
             .query_row(
                 "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at,
-                    task, group_id
+                    task, group_id, parent_id
                  FROM workspaces WHERE id = ?1",
                 [id.0.to_string()],
                 workspace_from_row,
@@ -573,6 +578,14 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
                 Uuid::parse_str(&text)
                     .map(WorkspaceGroupId)
                     .map_err(|e| conversion_error(10, e))
+            })
+            .transpose()?,
+        parent: row
+            .get::<_, Option<String>>(11)?
+            .map(|text| {
+                Uuid::parse_str(&text)
+                    .map(WorkspaceId)
+                    .map_err(|e| conversion_error(11, e))
             })
             .transpose()?,
     })

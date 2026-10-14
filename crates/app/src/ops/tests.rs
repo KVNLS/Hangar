@@ -531,6 +531,7 @@ fn delete_refuses_paths_that_are_not_linked_worktrees() {
             created_at: Timestamp::now(),
             task: None,
             group: None,
+            parent: None,
         };
         f.store.insert_workspace(&ws).unwrap();
         let force = DeleteOptions {
