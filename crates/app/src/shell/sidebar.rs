@@ -131,7 +131,7 @@ impl HangarApp {
                 .flex_none()
                 .w(px(58.))
                 .justify_end()
-                .when(row.counts.is_some(), |this| {
+                .when(counts.files > 0, |this| {
                     this.child(Delta::new(counts.insertions, counts.deletions))
                 })
                 .into_any_element()

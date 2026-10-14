@@ -148,6 +148,8 @@ impl HangarApp {
     pub(super) fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
         let counts = self.state_counts(cx);
+        // Idle workspaces are only counted when nothing else is going on.
+        let all_idle = counts.iter().all(|(s, _)| *s == AgentState::Idle);
         let agents = self
             .sessions
             .values()
@@ -175,7 +177,7 @@ impl HangarApp {
             .children(
                 counts
                     .into_iter()
-                    .filter(|(s, _)| *s != AgentState::Idle)
+                    .filter(|(s, _)| all_idle || *s != AgentState::Idle)
                     .map(|(state, n)| {
                         h_flex()
                             .gap(px(5.))

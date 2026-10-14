@@ -166,14 +166,13 @@ impl HangarApp {
                 .icon(Lucide::Terminal)
                 .active(focused),
             Some(ws) => {
-                let agent = live.map_or_else(|| "No agent".into(), |l| l.agent_name.clone());
-                UiTab::new(
-                    ("pane-tab", pane),
-                    TabStyle::Pane,
-                    format!("{agent} · {}", ws.name),
-                )
-                .leading(StateGlyph::new(self.agent_state(ws.id, cx)))
-                .active(focused)
+                let label = match live {
+                    Some(l) => format!("{} · {}", l.agent_name, ws.name),
+                    None => ws.name.clone(),
+                };
+                UiTab::new(("pane-tab", pane), TabStyle::Pane, label)
+                    .leading(StateGlyph::new(self.agent_state(ws.id, cx)))
+                    .active(focused)
             }
         };
         let start = workspace.and_then(|ws| {
