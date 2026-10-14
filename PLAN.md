@@ -56,7 +56,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
 
 ## Explicitly unimplemented (return `Unsupported`)
-- `devices`: `boot`, `install`, `launch`, `logs`; simctl backend input on Xcode 27.
+- `devices`: `boot`, `install`, `launch`; iOS log history (`LogFilter::history`); simctl backend input on Xcode 27.
 
 ## What M1 taught us
 - GPUI comes through `gpui-kit` (same repo/rev as gpui-component). gpui-kit's Root binds Tab/Shift-Tab for

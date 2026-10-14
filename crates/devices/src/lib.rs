@@ -5,7 +5,10 @@ use std::time::Instant;
 
 pub mod android;
 pub mod geometry;
+pub mod logs;
 pub mod simctl;
+
+pub use logs::{LogEntry, LogFilter, LogLevel, LogStream};
 
 #[cfg(target_os = "macos")]
 pub mod ios;
@@ -185,7 +188,8 @@ pub trait Device: Send + Sync {
         Err(Error::Unsupported("launch"))
     }
 
-    fn logs(&self) -> Result<()> {
+    /// Streams the device log. Blocking/threaded: poll the returned [`LogStream`].
+    fn logs(&self, _filter: &LogFilter) -> Result<LogStream> {
         Err(Error::Unsupported("logs"))
     }
 }

@@ -177,6 +177,10 @@ impl Device for AdbDevice {
         &self.info
     }
 
+    fn logs(&self, filter: &crate::LogFilter) -> Result<crate::LogStream> {
+        super::logcat::logcat_with(&self.adb.path, &self.info.udid, filter)
+    }
+
     fn backend(&self) -> &'static str {
         "adb"
     }

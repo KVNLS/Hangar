@@ -235,6 +235,10 @@ impl Device for GrpcEmulator {
         &self.info
     }
 
+    fn logs(&self, filter: &crate::LogFilter) -> Result<crate::LogStream> {
+        super::logcat::logcat_with(&self.sdk.adb, &self.serial(), filter)
+    }
+
     fn backend(&self) -> &'static str {
         "grpc"
     }
