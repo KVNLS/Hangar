@@ -154,6 +154,9 @@ pub struct PaneLayout {
     /// when each tab had its own width.
     #[serde(default)]
     pub panel_width: Option<f32>,
+    /// Width of the sidebar; missing in layouts saved before it could be resized.
+    #[serde(default)]
+    pub sidebar_width: Option<f32>,
 }
 
 impl PaneLayout {
@@ -162,6 +165,13 @@ impl PaneLayout {
         self.panel_width
             .and_then(panel_width)
             .unwrap_or(PANEL_DEFAULT_WIDTH)
+    }
+
+    /// The saved sidebar width, clamped; the default when missing or unusable.
+    pub fn sidebar_width(&self) -> f32 {
+        self.sidebar_width
+            .and_then(sidebar_width)
+            .unwrap_or(SIDEBAR_DEFAULT_WIDTH)
     }
 
     /// Rebuilds panes from the layout, keeping only workspaces `keep` accepts, never showing one
@@ -477,6 +487,7 @@ impl Panes {
             rows: self.shares.rows.clone(),
             split: None,
             panel_width: None,
+            sidebar_width: None,
         }
     }
 }
@@ -490,6 +501,17 @@ pub fn panel_width(width: f32) -> Option<f32> {
     width
         .is_finite()
         .then(|| width.clamp(PANEL_WIDTH_RANGE.0, PANEL_WIDTH_RANGE.1))
+}
+
+/// Width range of the sidebar, in pixels.
+pub const SIDEBAR_WIDTH_RANGE: (f32, f32) = (200.0, 480.0);
+pub const SIDEBAR_DEFAULT_WIDTH: f32 = 256.0;
+
+/// A usable sidebar width, clamped to [`SIDEBAR_WIDTH_RANGE`].
+pub fn sidebar_width(width: f32) -> Option<f32> {
+    width
+        .is_finite()
+        .then(|| width.clamp(SIDEBAR_WIDTH_RANGE.0, SIDEBAR_WIDTH_RANGE.1))
 }
 
 /// Whether the changes tab of the right panel is open, saved across launches.
@@ -544,7 +566,8 @@ pub fn status_label(status: &SessionStatus) -> String {
 mod tests {
     use super::{
         ChangesLayout, DeviceLayout, PANEL_DEFAULT_WIDTH, PANEL_WIDTH_RANGE, PaneLayout, Panes,
-        ProjectList, pane_shares, panel_width, sanitize_shares, status_label,
+        ProjectList, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_WIDTH_RANGE, pane_shares, panel_width,
+        sanitize_shares, sidebar_width, status_label,
     };
     use crate::device_panel::{DeviceKey, LogsSettings, Platform};
     use hangar_core::{Project, SessionStatus, Timestamp, Workspace, WorkspaceId, WorkspaceStatus};
@@ -874,6 +897,32 @@ mod tests {
         assert_eq!(
             crate::ui::RIGHT_PANEL_MIN_WIDTH,
             gpui_kit::px(PANEL_WIDTH_RANGE.0)
+        );
+    }
+
+    #[test]
+    fn sidebar_width_saved_and_migrated() {
+        let saved = |json: &str| serde_json::from_str::<PaneLayout>(json).unwrap();
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0}"#).sidebar_width(),
+            SIDEBAR_DEFAULT_WIDTH
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"sidebar_width":300.0}"#).sidebar_width(),
+            300.0
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"sidebar_width":50.0}"#).sidebar_width(),
+            SIDEBAR_WIDTH_RANGE.0
+        );
+        assert_eq!(sidebar_width(f32::NAN), None);
+        assert_eq!(
+            crate::ui::SIDEBAR_WIDTH,
+            gpui_kit::px(SIDEBAR_DEFAULT_WIDTH)
+        );
+        assert_eq!(
+            crate::ui::SIDEBAR_MIN_WIDTH,
+            gpui_kit::px(SIDEBAR_WIDTH_RANGE.0)
         );
     }
 

@@ -48,7 +48,7 @@ impl Render for HangarApp {
                 .flex_1()
                 .min_h_0()
                 .when(self.layout.sidebar_open, |this| {
-                    this.child(self.render_sidebar(cx))
+                    this.child(self.render_resizable_sidebar(cx))
                 })
                 .child(self.render_overview(cx)),
             Screen::Workspace => {
@@ -58,7 +58,7 @@ impl Render for HangarApp {
                     .flex_1()
                     .min_h_0()
                     .when(self.layout.sidebar_open, |this| {
-                        this.child(self.render_sidebar(cx))
+                        this.child(self.render_resizable_sidebar(cx))
                     })
                     .map(|this| {
                         if self.work.projects.is_empty()
@@ -174,6 +174,12 @@ impl Render for HangarApp {
                     this.open_new_workspace(project, window, cx);
                 }
             }))
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<SidebarResize>, window, cx| {
+                    let width = event.event.position.x - event.bounds.left();
+                    this.resize_sidebar(width.as_f32(), window, cx);
+                }),
+            )
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<PanelResize>, window, cx| {
                     let width = event.bounds.right() - event.event.position.x;
@@ -401,6 +407,26 @@ impl HangarApp {
             )
             .child(tab_bar)
             .child(body)
+    }
+
+    /// The sidebar with a drag handle on its right edge.
+    fn render_resizable_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .relative()
+            .flex_none()
+            .h_full()
+            .child(self.render_sidebar(cx))
+            .child(
+                div()
+                    .id("sidebar-resize")
+                    .absolute()
+                    .right(px(-3.))
+                    .top_0()
+                    .h_full()
+                    .w(px(6.))
+                    .cursor_col_resize()
+                    .on_drag(SidebarResize, |_, _, _, cx| cx.new(|_| SidebarResize)),
+            )
     }
 
     /// Secondary pane actions: new conversation, right panel, close pane.

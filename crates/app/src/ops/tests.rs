@@ -559,6 +559,7 @@ fn settings_are_loaded_and_bad_ones_reported() {
         rows: vec![Vec::new(), Vec::new()],
         split: None,
         panel_width: Some(480.0),
+        sidebar_width: Some(300.0),
     };
     save_layout(&f.store, &layout).unwrap();
     save_agent(&f.store, "codex").unwrap();

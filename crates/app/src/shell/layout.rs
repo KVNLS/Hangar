@@ -30,6 +30,7 @@ impl HangarApp {
     fn saved_layout(&self) -> PaneLayout {
         PaneLayout {
             panel_width: Some(self.layout.panel_width),
+            sidebar_width: Some(self.layout.sidebar_width),
             ..self.layout.panes.layout()
         }
     }
@@ -269,7 +270,7 @@ impl HangarApp {
     /// Resizes the right panel (all its tabs), leaving the panes their minimum width.
     pub(super) fn resize_panel(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
         let sidebar = if self.layout.sidebar_open {
-            SIDEBAR_WIDTH
+            self.layout.sidebar_width
         } else {
             0.
         };
@@ -282,6 +283,30 @@ impl HangarApp {
             return;
         }
         self.layout.panel_width = width;
+        cx.notify();
+        self.save_layout(window, cx);
+    }
+
+    /// Resizes the sidebar, leaving the panes their minimum width.
+    pub(super) fn resize_sidebar(
+        &mut self,
+        width: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = if self.open_panel_tab().is_some() {
+            self.layout.panel_width
+        } else {
+            0.
+        };
+        let max = window.viewport_size().width.as_f32() - panel - MIN_PANES_WIDTH;
+        let Some(width) = sidebar_width(width.min(max)) else {
+            return;
+        };
+        if (width - self.layout.sidebar_width).abs() < 0.5 {
+            return;
+        }
+        self.layout.sidebar_width = width;
         cx.notify();
         self.save_layout(window, cx);
     }
@@ -351,6 +376,7 @@ impl HangarApp {
         let projects = &self.work.projects;
         self.layout.panes = layout.restore(|id| projects.is_active(id));
         self.layout.panel_width = layout.panel_width();
+        self.layout.sidebar_width = layout.sidebar_width();
         self.apply_pane_shares(window, cx);
     }
 

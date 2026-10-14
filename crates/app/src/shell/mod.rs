@@ -56,7 +56,8 @@ use crate::paths;
 use crate::setting_keys;
 use crate::state::{
     ChangesLayout, DeviceLayout, MAX_PANES, PANEL_DEFAULT_WIDTH, PANEL_WIDTH_RANGE, PaneLayout,
-    Panes, ProjectEntry, ProjectList, pane_shares, panel_width, status_label,
+    Panes, ProjectEntry, ProjectList, SIDEBAR_DEFAULT_WIDTH, pane_shares, panel_width,
+    sidebar_width, status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
 pub use chrome::titlebar_options;
@@ -67,8 +68,6 @@ use dialogs::DeleteWorkspaceDialog;
 pub use run::RunConfig;
 use view::agent_options;
 
-/// Width of the sidebar; the panes share the rest.
-const SIDEBAR_WIDTH: f32 = 256.;
 /// How long a killed agent gets to exit before its worktree is removed.
 const KILL_GRACE: Duration = Duration::from_secs(3);
 /// The panes keep at least this much width when the right panel is dragged wider.
@@ -265,6 +264,15 @@ struct DiffEntry {
     _observe: Subscription,
 }
 
+/// Drag payload of the sidebar's resize handle.
+struct SidebarResize;
+
+impl Render for SidebarResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 /// Drag payload of the right panel's resize handle.
 struct PanelResize;
 
@@ -310,6 +318,7 @@ struct Layout {
     /// The pending (debounced) pane layout save.
     save_panes: Option<Task<()>>,
     sidebar_open: bool,
+    sidebar_width: f32,
     screen: Screen,
     /// Focused while the overview or settings fill the window, so esc returns to the workspace.
     screen_focus: FocusHandle,
@@ -522,6 +531,7 @@ impl HangarApp {
                 panel_tab: Default::default(),
                 save_panes: None,
                 sidebar_open: true,
+                sidebar_width: SIDEBAR_DEFAULT_WIDTH,
                 screen: Screen::Workspace,
                 screen_focus: cx.focus_handle(),
                 sidebar_filter,
