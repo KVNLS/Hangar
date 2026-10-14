@@ -132,25 +132,54 @@ fn gradle_library_only_is_not_a_stack() {
 }
 
 #[test]
-fn picks_the_stack_for_the_device_platform() {
+fn choosing_a_stack_for_the_device() {
     use hangar_core::device::Platform;
-    let native = vec![
-        Stack::Xcode {
-            container: PathBuf::from("ios/Demo.xcodeproj"),
-        },
+    let ios = Stack::Xcode {
+        container: PathBuf::from("ios/Demo.xcodeproj"),
+    };
+    let other = Stack::Xcode {
+        container: PathBuf::from("Tool/Tool.xcodeproj"),
+    };
+    let android = Stack::Gradle {
+        dir: PathBuf::from("android"),
+        module: "app".into(),
+    };
+    let found = vec![ios.clone(), android.clone(), other.clone()];
+    assert_eq!(
+        choose_stack(&found, Platform::Android, None),
+        Some(Choice::Run(&android))
+    );
+    assert_eq!(
+        choose_stack(&found, Platform::Ios, None),
+        Some(Choice::Choose(vec![&ios, &other]))
+    );
+    assert_eq!(
+        choose_stack(&found, Platform::Ios, Some(&other.key())),
+        Some(Choice::Run(&other))
+    );
+    // A saved choice that is gone, or for another platform, asks again.
+    assert!(matches!(
+        choose_stack(&found, Platform::Ios, Some("xcode:Gone.xcodeproj")),
+        Some(Choice::Choose(_))
+    ));
+    assert_eq!(choose_stack(&[ios], Platform::Android, None), None);
+    // React Native and Expo build for both platforms.
+    let expo = Stack::Expo {
+        dir: PathBuf::from("apps/mobile"),
+    };
+    assert_eq!(
+        choose_stack(std::slice::from_ref(&expo), Platform::Ios, None),
+        Some(Choice::Run(&expo))
+    );
+    assert_eq!(expo.describe(), "Expo app in apps/mobile");
+    assert_eq!(
         Stack::Gradle {
-            dir: PathBuf::from("android"),
-            module: "app".into(),
-        },
-    ];
-    assert_eq!(pick_stack(&native, Platform::Android), native.get(1));
-    assert_eq!(pick_stack(&native, Platform::Ios), native.first());
-    let expo = vec![Stack::Expo {
-        dir: PathBuf::new(),
-    }];
-    assert_eq!(pick_stack(&expo, Platform::Ios), expo.first());
-    assert_eq!(pick_stack(&expo, Platform::Android), expo.first());
-    assert_eq!(pick_stack(&native[..1], Platform::Android), None);
+            dir: PathBuf::new(),
+            module: "apps:phone".into()
+        }
+        .describe(),
+        "Gradle module apps:phone"
+    );
 }
 
 #[test]

@@ -13,6 +13,8 @@ pub enum Error {
     SchemeRequired(String),
     #[error("{0} has no scheme")]
     NoScheme(String),
+    #[error("{} is missing or not executable: Gradle builds run the project's wrapper (`gradle wrapper` creates it)", .0.display())]
+    GradleWrapper(PathBuf),
     #[error("build output not found: {}", .0.display())]
     ArtifactMissing(PathBuf),
     #[error("cannot parse {what}: {detail}")]

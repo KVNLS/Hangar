@@ -186,3 +186,30 @@ fn quoting() {
     assert_eq!(shell_quote("it's"), r"'it'\''s'");
     assert_eq!(shell_quote(""), "''");
 }
+
+#[test]
+fn gradle_needs_an_executable_wrapper() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let tmp = tempfile::tempdir().unwrap();
+    let stack = Stack::Gradle {
+        dir: PathBuf::from("android"),
+        module: "app".into(),
+    };
+    assert!(matches!(
+        check(&stack, tmp.path()),
+        Err(Error::GradleWrapper(_))
+    ));
+    let wrapper = tmp.path().join("android/gradlew");
+    std::fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+    assert!(matches!(
+        check(&stack, tmp.path()),
+        Err(Error::GradleWrapper(_))
+    ));
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(check(&stack, tmp.path()).is_ok());
+    let expo = Stack::Expo {
+        dir: PathBuf::new(),
+    };
+    assert!(check(&expo, tmp.path()).is_ok());
+}

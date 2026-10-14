@@ -10,7 +10,9 @@ mod plan;
 mod port;
 
 pub use artifact::{Built, pick_scheme, resolve_artifact, xcode_schemes};
-pub use detect::{Stack, detect, pick_stack};
+pub use detect::{Choice, Stack, choose_stack, detect};
 pub use error::{Error, Result};
-pub use plan::{Artifact, Command, PlanInput, RunPlan, Step, Target, plan, setup, shell_quote};
+pub use plan::{
+    Artifact, Command, PlanInput, RunPlan, Step, Target, check, plan, setup, shell_quote,
+};
 pub use port::{PORT_RANGE, allocate_port, allocate_port_with, is_free, pick_port};

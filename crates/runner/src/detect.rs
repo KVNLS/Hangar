@@ -38,10 +38,59 @@ impl Stack {
     }
 }
 
-/// The first detected stack that builds for `platform`: a repository with native `ios/` and
-/// `android/` apps runs the one matching the open device.
-pub fn pick_stack(stacks: &[Stack], platform: hangar_core::device::Platform) -> Option<&Stack> {
-    stacks.iter().find(|stack| stack.targets(platform))
+impl Stack {
+    /// Identifies the stack across runs, to save which one the user picked.
+    pub fn key(&self) -> String {
+        match self {
+            Self::Expo { dir } => format!("expo:{}", dir.display()),
+            Self::ReactNative { dir } => format!("react-native:{}", dir.display()),
+            Self::Xcode { container } => format!("xcode:{}", container.display()),
+            Self::Gradle { dir, module } => format!("gradle:{}:{module}", dir.display()),
+        }
+    }
+
+    /// What a picker shows for it.
+    pub fn describe(&self) -> String {
+        let place = |kind: &str, dir: &Path| match dir.as_os_str().is_empty() {
+            true => format!("{kind} app"),
+            false => format!("{kind} app in {}", dir.display()),
+        };
+        match self {
+            Self::Expo { dir } => place("Expo", dir),
+            Self::ReactNative { dir } => place("React Native", dir),
+            Self::Xcode { container } => container.display().to_string(),
+            Self::Gradle { dir, module } if dir.as_os_str().is_empty() => {
+                format!("Gradle module {module}")
+            }
+            Self::Gradle { dir, module } => format!("Gradle module {module} in {}", dir.display()),
+        }
+    }
+}
+
+/// What to run on a device.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Choice<'a> {
+    Run(&'a Stack),
+    /// Several apps build for it and none was picked yet: the user chooses.
+    Choose(Vec<&'a Stack>),
+}
+
+/// The stack to run for `platform`: the one `saved` names, else the only candidate, else the
+/// candidates to choose from. `None` when nothing builds for that platform.
+pub fn choose_stack<'a>(
+    stacks: &'a [Stack],
+    platform: hangar_core::device::Platform,
+    saved: Option<&str>,
+) -> Option<Choice<'a>> {
+    let candidates: Vec<&Stack> = stacks.iter().filter(|s| s.targets(platform)).collect();
+    if let Some(picked) = candidates.iter().find(|s| Some(s.key().as_str()) == saved) {
+        return Some(Choice::Run(picked));
+    }
+    match candidates.as_slice() {
+        [] => None,
+        [only] => Some(Choice::Run(only)),
+        _ => Some(Choice::Choose(candidates)),
+    }
 }
 
 /// Native subprojects that cross-platform stacks keep next to their sources.
