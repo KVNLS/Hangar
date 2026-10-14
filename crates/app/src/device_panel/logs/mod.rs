@@ -569,6 +569,7 @@ impl LogsPane {
             "device-logs-list",
             self.model.len(),
             cx.processor(|this, range: Range<usize>, _, cx| {
+                tracing::trace!(?range, total = this.model.len(), "device log rows rendered");
                 range
                     .filter_map(|ix| this.model.get(ix).map(|l| this.render_line(ix, l, cx)))
                     .collect::<Vec<_>>()
