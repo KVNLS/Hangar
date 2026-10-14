@@ -1204,15 +1204,18 @@ impl DevicePanel {
                     this.send(input, cx);
                 }))
         });
-        let status = self.input_status.as_ref().map(|s| {
-            div()
-                .min_w_0()
-                .truncate()
-                .font_mono()
-                .text_size(px(11.))
-                .text_color(if s.error { t.red } else { t.tx3 })
-                .child(s.text.clone())
-        });
+        // The row is always there so the controls above do not jump when a status appears.
+        let status = div()
+            .h(px(16.))
+            .min_w_0()
+            .truncate()
+            .font_mono()
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .when_some(self.input_status.as_ref(), |row, s| {
+                row.text_color(if s.error { t.red } else { t.tx3 })
+                    .child(s.text.clone())
+            });
         Some(
             v_flex()
                 .px_2()
@@ -1267,7 +1270,7 @@ impl DevicePanel {
                             )
                         }),
                 )
-                .children(status)
+                .child(status)
                 .into_any_element(),
         )
     }
