@@ -144,6 +144,14 @@ pub enum Input {
     Home,
     /// Android Back (unsupported on iOS).
     Back,
+    /// Side/power button press: locks the screen on iOS, toggles the screen on Android.
+    Lock,
+    /// Volume up rocker.
+    VolumeUp,
+    /// Volume down rocker.
+    VolumeDown,
+    /// Android app switcher / recents (unsupported on iOS).
+    AppSwitch,
 }
 
 /// Latest-frame channel: receivers always see the most recent frame; slow consumers skip frames.

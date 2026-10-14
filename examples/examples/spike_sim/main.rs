@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
     let mut backend = Backend::Private;
     let mut udid: Option<String> = None;
     let mut bench: Option<u64> = None;
-    let mut one_input: Option<hangar_devices::Input> = None;
+    let mut one_input: Option<bench::Action> = None;
     let mut lifecycle: Vec<(String, String)> = Vec::new();
     let mut list = false;
     let mut out = std::env::temp_dir().join("hangar-spike-b");
@@ -40,12 +40,24 @@ fn main() -> anyhow::Result<()> {
             "--tap" => {
                 let v = args.next().context("--tap needs X,Y (points)")?;
                 let (x, y) = v.split_once(',').context("--tap needs X,Y")?;
-                one_input = Some(hangar_devices::Input::Tap {
+                one_input = Some(bench::Action::Input(hangar_devices::Input::Tap {
                     x: x.trim().parse()?,
                     y: y.trim().parse()?,
-                });
+                }));
             }
-            "--home" => one_input = Some(hangar_devices::Input::Home),
+            "--lock" => one_input = Some(bench::Action::Input(hangar_devices::Input::Lock)),
+            "--volume-up" => {
+                one_input = Some(bench::Action::Input(hangar_devices::Input::VolumeUp))
+            }
+            "--volume-down" => {
+                one_input = Some(bench::Action::Input(hangar_devices::Input::VolumeDown))
+            }
+            "--home" => one_input = Some(bench::Action::Input(hangar_devices::Input::Home)),
+            "--text" => {
+                one_input = Some(bench::Action::Text(
+                    args.next().context("--text needs a string")?,
+                ));
+            }
             "--list" => list = true,
             "--boot" | "--shutdown" | "--install" | "--launch" => {
                 let v = args.next().with_context(|| format!("{a} needs a value"))?;

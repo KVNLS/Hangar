@@ -2,6 +2,7 @@
 
 mod dispatch;
 mod introspect;
+mod keymap;
 mod private;
 mod runtime;
 mod sim_window;
