@@ -1,3 +1,4 @@
+use crate::mouse::MouseMode;
 use crate::palette::Rgb;
 
 /// Text attributes of a cell. Colours are already resolved (inverse/hidden applied).
@@ -18,6 +19,8 @@ impl CellFlags {
     pub const WIDE: Self = Self(1 << 7);
     /// Placeholder cell after (or before a wrapped) wide glyph; draw nothing.
     pub const WIDE_SPACER: Self = Self(1 << 8);
+    /// Part of the user's text selection.
+    pub const SELECTED: Self = Self(1 << 9);
 
     pub const fn empty() -> Self {
         Self(0)
@@ -69,6 +72,7 @@ pub struct TermModes {
     pub alt_screen: bool,
     pub alternate_scroll: bool,
     pub mouse_reporting: bool,
+    pub mouse: MouseMode,
     pub focus_reporting: bool,
 }
 

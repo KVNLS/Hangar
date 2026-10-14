@@ -1,5 +1,7 @@
 //! Custom element painting the terminal grid: background quads, one shaped line per style
-//! run (glyphs pinned to the cell grid with `force_width`) and the cursor.
+//! run (glyphs pinned to the cell grid with `force_width`), the selection and the cursor.
+//! It also owns the pointer hitbox and registers the window mouse listeners, so drags keep
+//! working outside its bounds.
 
 use gpui_kit::*;
 use hangar_terminal::{CellFlags, CursorShape, GridSize, Rgb, Snapshot, SnapshotCell};
@@ -26,6 +28,7 @@ impl IntoElement for TerminalElement {
 
 pub(super) struct Frame {
     focus_handle: FocusHandle,
+    hitbox: Option<Hitbox>,
     background: Hsla,
     quads: Vec<PaintQuad>,
     lines: Vec<(Point<Pixels>, ShapedLine)>,
@@ -68,8 +71,11 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        self.view
-            .update(cx, |view, cx| view.prepare_frame(bounds, window, cx))
+        let mut frame = self
+            .view
+            .update(cx, |view, cx| view.prepare_frame(bounds, window, cx));
+        frame.hitbox = Some(window.insert_hitbox(bounds, HitboxBehavior::Normal));
+        frame
     }
 
     fn paint(
@@ -87,6 +93,9 @@ impl Element for TerminalElement {
             ElementInputHandler::new(bounds, self.view.clone()),
             cx,
         );
+        if let Some(hitbox) = frame.hitbox.take() {
+            self.register_mouse_listeners(&hitbox, window, cx);
+        }
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.paint_quad(fill(bounds, frame.background));
             for quad in frame.quads.drain(..) {
@@ -112,6 +121,40 @@ impl Element for TerminalElement {
         self.view.update(cx, |view, _| {
             if let Some(stats) = view.stats.as_mut() {
                 stats.frame_painted(bytes);
+            }
+        });
+    }
+}
+
+impl TerminalElement {
+    fn register_mouse_listeners(&self, hitbox: &Hitbox, window: &mut Window, cx: &mut App) {
+        let reports = self.view.read(cx).pointer_reports(window);
+        let style = if reports {
+            CursorStyle::Arrow
+        } else {
+            CursorStyle::IBeam
+        };
+        window.set_cursor_style(style, hitbox);
+
+        let view = self.view.clone();
+        let down_hitbox = hitbox.clone();
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble && down_hitbox.is_hovered(window) {
+                view.update(cx, |view, cx| view.mouse_down(event, window, cx));
+            }
+        });
+        let view = self.view.clone();
+        let move_hitbox = hitbox.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble {
+                let hovered = move_hitbox.is_hovered(window);
+                view.update(cx, |view, cx| view.mouse_move(event, hovered, cx));
+            }
+        });
+        let view = self.view.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+            if phase == DispatchPhase::Bubble {
+                view.update(cx, |view, cx| view.mouse_up(event, cx));
             }
         });
     }
@@ -183,6 +226,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Frame {
         let cell = self.cell_size(window);
+        self.grid_origin = bounds.origin;
         let cols = (f32::from(bounds.size.width) / f32::from(cell.width))
             .floor()
             .max(2.0);
@@ -218,6 +262,10 @@ impl TerminalView {
         }
 
         let focused = self.focus_handle.is_focused(window);
+        self.sync_focus(
+            focused && window.is_window_active(),
+            snapshot.modes.focus_reporting,
+        );
         let mut overlays = Vec::new();
         self.cursor_bounds = None;
         if let Some(cursor) = snapshot.cursor
@@ -257,6 +305,8 @@ impl TerminalView {
             }
         }
 
+        let mut selection = hsla(snapshot.foreground);
+        selection.a = 0.3;
         let mut quads = Vec::new();
         let mut lines = Vec::new();
         for row in 0..snapshot.rows {
@@ -270,6 +320,7 @@ impl TerminalView {
                 cell,
                 &mut quads,
             );
+            push_selection(cells, bounds.origin.x, y, cell, selection, &mut quads);
             for run in text_runs(cells) {
                 if run.blank && !run.style.decorated() {
                     continue;
@@ -333,6 +384,7 @@ impl TerminalView {
 
         Frame {
             focus_handle: self.focus_handle.clone(),
+            hitbox: None,
             background: hsla(snapshot.background),
             quads,
             lines,
@@ -406,6 +458,31 @@ fn push_backgrounds(
             let extent = size(cell.width * (col - start) as f32, cell.height);
             quads.push(fill(Bounds::new(origin, extent), hsla(bg)));
         }
+    }
+}
+
+/// Translucent highlight over selected cells, one quad per contiguous run.
+fn push_selection(
+    cells: &[SnapshotCell],
+    x0: Pixels,
+    y: Pixels,
+    cell: Size<Pixels>,
+    color: Hsla,
+    quads: &mut Vec<PaintQuad>,
+) {
+    let mut col = 0;
+    while col < cells.len() {
+        if !cells[col].flags.contains(CellFlags::SELECTED) {
+            col += 1;
+            continue;
+        }
+        let start = col;
+        while col < cells.len() && cells[col].flags.contains(CellFlags::SELECTED) {
+            col += 1;
+        }
+        let origin = point(x0 + cell.width * start as f32, y);
+        let extent = size(cell.width * (col - start) as f32, cell.height);
+        quads.push(fill(Bounds::new(origin, extent), color));
     }
 }
 

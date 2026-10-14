@@ -3,8 +3,12 @@
 //! Program output is parsed on `hangar-terminal`'s pump thread; this view only snapshots the
 //! grid when GPUI paints. The pump wakes the view through a [`tokio::sync::Notify`], which
 //! holds at most one pending permit, so bursts of output coalesce into one redraw.
+//!
+//! The pointer selects text unless the program enabled mouse tracking, in which case events
+//! are reported to it; holding Shift always selects.
 
 mod element;
+mod mouse;
 mod stats;
 
 use std::ops::Range;
@@ -15,6 +19,8 @@ use hangar_terminal::{
     ExitInfo, GridSize, Key, SpawnOptions, TerminalConfig, TerminalError, TerminalSession,
     encode_key, encode_paste,
 };
+
+actions!(terminal, [CopySelection, SelectAll]);
 
 use element::TerminalElement;
 use stats::FrameStats;
@@ -30,6 +36,8 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", NoAction {}, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-tab", NoAction {}, Some(KEY_CONTEXT)),
+        KeyBinding::new("cmd-c", CopySelection, Some(KEY_CONTEXT)),
+        KeyBinding::new("cmd-a", SelectAll, Some(KEY_CONTEXT)),
     ]);
 }
 
@@ -77,6 +85,11 @@ pub struct TerminalView {
     title: Option<String>,
     exit_message: Option<String>,
     scroll_remainder: Pixels,
+    /// Top-left of the cell grid in window coordinates, from the last prepaint.
+    grid_origin: Point<Pixels>,
+    mouse: mouse::MouseState,
+    /// Focus last seen at paint (view focused and window active), for DECSET 1004.
+    reported_focus: Option<bool>,
     stats: Option<FrameStats>,
     _tasks: Vec<Task<()>>,
 }
@@ -205,6 +218,9 @@ impl TerminalView {
             title: None,
             exit_message: None,
             scroll_remainder: px(0.),
+            grid_origin: Point::default(),
+            mouse: mouse::MouseState::default(),
+            reported_focus: None,
             stats,
             _tasks: tasks,
         }
@@ -232,12 +248,17 @@ impl TerminalView {
         }
     }
 
-    /// Sends input to the program, snapping the viewport back to the live screen.
+    /// Sends user input to the program, snapping the viewport back to the live screen and
+    /// dropping the selection, as typing does in other terminals.
     fn send(&mut self, bytes: Vec<u8>) {
         if bytes.is_empty() || self.exit_message.is_some() {
             return;
         }
-        self.session.terminal().scroll_to_bottom();
+        {
+            let mut terminal = self.session.terminal();
+            terminal.scroll_to_bottom();
+            terminal.clear_selection();
+        }
         if let Some(stats) = self.stats.as_mut() {
             stats.key_pressed();
         }
@@ -292,6 +313,29 @@ impl TerminalView {
         }
     }
 
+    /// Writes protocol bytes (mouse/focus reports) without touching viewport or selection.
+    fn send_report(&self, bytes: &[u8]) {
+        if bytes.is_empty() || self.exit_message.is_some() {
+            return;
+        }
+        if let Err(err) = self.session.write(bytes) {
+            tracing::warn!(%err, "failed to write to terminal");
+        }
+    }
+
+    fn copy_selection(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
+        let text = self.session.terminal().selection_text();
+        match text {
+            Some(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+            None => cx.propagate(),
+        }
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.session.terminal().select_all();
+        cx.notify();
+    }
+
     fn paste(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
@@ -310,7 +354,9 @@ impl TerminalView {
             return;
         }
         let modes = self.session.terminal().modes();
-        if modes.alt_screen && modes.alternate_scroll && !modes.mouse_reporting {
+        if modes.mouse.is_active() && !event.modifiers.shift {
+            self.report_wheel(event, lines);
+        } else if modes.alt_screen && modes.alternate_scroll && !modes.mouse_reporting {
             // Full-screen programs without mouse support get arrow keys, like xterm.
             let key = if lines > 0 { Key::Up } else { Key::Down };
             let mode = self.session.terminal().key_mode();
@@ -379,6 +425,8 @@ impl Render for TerminalView {
             .p(PADDING)
             .bg(rgb(background.to_hex()))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::select_all))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .on_mouse_down(
                 MouseButton::Left,
