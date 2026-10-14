@@ -312,7 +312,7 @@ fn not_found(e: io::Error) -> Error {
     }
 }
 
-fn read_in_background(
+pub(crate) fn read_in_background(
     pipe: Option<impl Read + Send + 'static>,
 ) -> std::thread::JoinHandle<io::Result<Vec<u8>>> {
     std::thread::spawn(move || {
@@ -325,7 +325,7 @@ fn read_in_background(
 }
 
 /// The exit status, or `None` once `deadline` passes.
-fn wait_until(child: &mut Child, deadline: Instant) -> Result<Option<ExitStatus>> {
+pub(crate) fn wait_until(child: &mut Child, deadline: Instant) -> Result<Option<ExitStatus>> {
     loop {
         if let Some(status) = child.try_wait().map_err(Error::Io)? {
             return Ok(Some(status));
@@ -337,8 +337,8 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Result<Option<ExitStatus>
     }
 }
 
-/// Kills git and everything in its process group (it leads one, see [`Git::command`]).
-fn kill_group(child: &mut Child) {
+/// Kills a child and everything in its process group (it must lead one, see [`Git::command`]).
+pub(crate) fn kill_group(child: &mut Child) {
     if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
         // SAFETY: plain syscall on a group this process created and has not reaped.
         unsafe { libc::killpg(pgid, libc::SIGKILL) };

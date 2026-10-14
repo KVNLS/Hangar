@@ -72,6 +72,8 @@ pub enum Error {
     },
     #[error("`git {}` did not finish within {secs} s (waiting for a password or network?)", .args.join(" "))]
     Timeout { args: Vec<String>, secs: u64 },
+    #[error("`gh` did not answer within {secs} s")]
+    GhTimeout { secs: u64 },
     #[error("unexpected git output: {0}")]
     Parse(String),
     #[error("I/O error running git: {0}")]

@@ -5,6 +5,7 @@ pub mod capacity;
 pub mod contract;
 pub mod geometry;
 pub mod logs;
+mod process;
 pub mod simctl;
 
 pub use logs::{LogEntry, LogFilter, LogStream};
@@ -20,6 +21,8 @@ pub enum Error {
     NotFound(String),
     #[error("command failed: {0}")]
     Command(String),
+    #[error("{0} did not answer in time")]
+    Timeout(String),
     #[error("private API: {0}")]
     PrivateApi(String),
     #[error("permission required: {0}")]

@@ -30,7 +30,9 @@ pub(crate) fn simulator_kit_candidates(developer_dir: &str) -> Vec<String> {
 
 /// The active developer directory (`xcode-select -p`). Runs a process: call it off the UI thread.
 pub fn developer_dir() -> Result<String, Error> {
-    let out = Command::new("xcode-select").arg("-p").output()?;
+    let mut command = Command::new("xcode-select");
+    command.arg("-p");
+    let out = crate::process::output_within(command, crate::process::QUERY_TIMEOUT)?;
     if !out.status.success() {
         return Err(Error::Command(format!(
             "xcode-select -p failed: {}",
@@ -43,10 +45,9 @@ pub fn developer_dir() -> Result<String, Error> {
 /// Whether Xcode's license is accepted and its first-launch packages are installed
 /// (`xcodebuild -checkFirstLaunchStatus`). Runs a process: call it off the UI thread.
 pub fn first_launch_done() -> bool {
-    Command::new("xcodebuild")
-        .arg("-checkFirstLaunchStatus")
-        .stdin(std::process::Stdio::null())
-        .output()
+    let mut command = Command::new("xcodebuild");
+    command.arg("-checkFirstLaunchStatus");
+    crate::process::output_within(command, crate::process::QUERY_TIMEOUT)
         .is_ok_and(|out| out.status.success())
 }
 

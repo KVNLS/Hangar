@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use super::sdk::AndroidSdk;
 use crate::{Error, Result, ScreenSpec};
@@ -175,11 +175,14 @@ pub fn load_dir(id: &str, dir: &Path) -> Avd {
 
 /// All AVDs known to the emulator (`emulator -list-avds`), with their config.
 pub fn list(sdk: &AndroidSdk) -> Result<Vec<Avd>> {
-    let out = Command::new(&sdk.emulator)
-        .arg("-list-avds")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| Error::Command(format!("{}: {e}", sdk.emulator.display())))?;
+    let mut command = Command::new(&sdk.emulator);
+    command.arg("-list-avds");
+    let out = crate::process::output_within(command, crate::process::QUERY_TIMEOUT).map_err(
+        |e| match e {
+            Error::Io(e) => Error::Command(format!("{}: {e}", sdk.emulator.display())),
+            e => e,
+        },
+    )?;
     if !out.status.success() {
         return Err(Error::Command(format!(
             "emulator -list-avds: {}",

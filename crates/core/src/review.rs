@@ -125,6 +125,8 @@ pub enum ReviewError {
     AlreadyMerged { branch: String, base: String },
     #[error("the GitHub CLI (`gh`) is not installed or not on PATH")]
     GhMissing,
+    #[error("the GitHub CLI (`gh`) did not answer in time (offline?)")]
+    GhNotAnswering,
     #[error("the pull request title is empty")]
     EmptyPrTitle,
     #[error("failed to push before opening the pull request")]

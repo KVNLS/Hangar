@@ -3,12 +3,24 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use hangar_core::review::{CreatePr, GhStatus, PrInfo};
 
 use crate::error::{Error, Result};
+
+/// How long `gh auth status` may take.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn missing(e: std::io::Error) -> Error {
+    match e.kind() {
+        ErrorKind::NotFound => Error::GhMissing,
+        _ => Error::Io(e),
+    }
+}
 
 /// How to run `gh`: the program and, optionally, the `PATH` it is looked up in and runs with
 /// (a GUI app's own PATH usually lacks Homebrew).
@@ -43,7 +55,40 @@ impl Gh {
         self
     }
 
+    /// As [`Self::exec`] with no directory, for a quick query: `gh` and what it started are
+    /// killed after `timeout` (an offline network can hold `gh auth status`).
+    fn exec_within(&self, args: &[&OsStr], timeout: Duration) -> Result<Output> {
+        let mut command = self.command(None, args);
+        command.process_group(0);
+        let mut child = command.spawn().map_err(missing)?;
+        let stdout = crate::git::read_in_background(child.stdout.take());
+        let stderr = crate::git::read_in_background(child.stderr.take());
+        let Some(status) = crate::git::wait_until(&mut child, Instant::now() + timeout)? else {
+            crate::git::kill_group(&mut child);
+            return Err(Error::GhTimeout {
+                secs: timeout.as_secs(),
+            });
+        };
+        let joined = |reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>| {
+            reader
+                .join()
+                .map_err(|_| Error::Io(std::io::Error::other("output reader panicked")))?
+                .map_err(Error::Io)
+        };
+        Ok(Output {
+            status,
+            stdout: joined(stdout)?,
+            stderr: joined(stderr)?,
+        })
+    }
+
     fn exec(&self, dir: Option<&Path>, args: &[&OsStr]) -> Result<Output> {
+        let output = self.command(dir, args).output().map_err(missing)?;
+        tracing::trace!(?args, status = %output.status, "gh");
+        Ok(output)
+    }
+
+    fn command(&self, dir: Option<&Path>, args: &[&OsStr]) -> Command {
         let mut command = Command::new(&self.program);
         command
             .args(args)
@@ -61,12 +106,7 @@ impl Gh {
         if let Some(dir) = dir {
             command.current_dir(dir);
         }
-        let output = command.output().map_err(|e| match e.kind() {
-            ErrorKind::NotFound => Error::GhMissing,
-            _ => Error::Io(e),
-        })?;
-        tracing::trace!(?args, status = %output.status, "gh");
-        Ok(output)
+        command
     }
 
     fn failure(args: &[&OsStr], out: &Output) -> Error {
@@ -82,7 +122,12 @@ impl Gh {
 
     /// Whether `gh` is installed and logged in (`gh auth status`, output never logged).
     pub fn status(&self) -> Result<GhStatus> {
-        let out = match self.exec(None, &[OsStr::new("auth"), OsStr::new("status")]) {
+        self.status_within(STATUS_TIMEOUT)
+    }
+
+    fn status_within(&self, timeout: Duration) -> Result<GhStatus> {
+        let args = [OsStr::new("auth"), OsStr::new("status")];
+        let out = match self.exec_within(&args, timeout) {
             Ok(out) => out,
             Err(Error::GhMissing) => return Ok(GhStatus::Missing),
             Err(err) => return Err(err),
@@ -197,6 +242,22 @@ pub(crate) fn parse_pr(json: &[u8]) -> Result<PrInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hung_gh_status_times_out() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("gh");
+        std::fs::write(&fake, "#!/bin/sh\nsleep 60\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = Instant::now();
+        let err = Gh::new()
+            .with_program(&fake)
+            .status_within(Duration::from_millis(300))
+            .unwrap_err();
+        assert!(matches!(err, Error::GhTimeout { .. }), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn parses_accounts() {

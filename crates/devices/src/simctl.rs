@@ -218,7 +218,16 @@ pub fn count_ios_runtimes(json: &str) -> Result<usize> {
 /// How many iOS simulator runtimes are installed.
 #[cfg(target_os = "macos")]
 pub fn ios_runtime_count() -> Result<usize> {
-    let json = run("xcrun", &["simctl", "list", "runtimes", "-j"])?;
+    let mut command = std::process::Command::new("xcrun");
+    command.args(["simctl", "list", "runtimes", "-j"]);
+    let out = crate::process::output_within(command, crate::process::QUERY_TIMEOUT)?;
+    if !out.status.success() {
+        return Err(Error::Command(format!(
+            "xcrun simctl list runtimes: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let json = out.stdout;
     count_ios_runtimes(&String::from_utf8_lossy(&json))
 }
 

@@ -169,6 +169,7 @@ impl From<Error> for ReviewError {
             },
             Error::AlreadyMerged { branch, base } => Self::AlreadyMerged { branch, base },
             Error::GhMissing => Self::GhMissing,
+            Error::GhTimeout { .. } => Self::GhNotAnswering,
             other => Self::Other(PortError::new(other)),
         }
     }

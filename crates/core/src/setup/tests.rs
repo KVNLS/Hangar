@@ -17,6 +17,7 @@ fn agent(id: &str, program: &str, found: bool, drives: Option<&str>) -> AgentFac
 fn ready() -> ToolFacts {
     ToolFacts {
         path_error: None,
+        not_answering: Vec::new(),
         homebrew: true,
         git: GitFact::Installed {
             version: "2.50.1".into(),
@@ -205,4 +206,20 @@ fn only_essentials_and_agents_are_required() {
         let core = matches!(c.group, SetupGroup::Essentials | SetupGroup::Agents);
         assert!(!c.required || core, "{} should be optional", c.id);
     }
+}
+
+#[test]
+fn tools_that_do_not_answer_say_so_instead_of_missing() {
+    let mut facts = ready();
+    facts.gh = GhStatus::Missing;
+    facts.xcode = XcodeFact::Missing;
+    facts.not_answering = vec!["gh".into(), "xcode-select".into()];
+    let checks = checklist(&facts);
+    for id in ["gh", "xcode"] {
+        let c = find(&checks, id).unwrap();
+        assert_eq!(c.state, CheckState::NeedsAction);
+        assert!(c.detail.contains("did not answer"), "{}", c.detail);
+        assert_eq!(c.fix, None);
+    }
+    assert!(find(&checks, "gh-auth").is_none());
 }
