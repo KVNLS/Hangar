@@ -26,9 +26,11 @@ use hangar_core::{
     Project, ProjectId, Session, SessionStatus, Store, Workspace, WorkspaceId, WorkspaceStatus,
 };
 use hangar_terminal::ExitInfo;
+use hangar_worktree::MergeStrategy;
 
 use crate::agents::{self, AgentChoice};
-use crate::changes::{ChangesEvent, ChangesPanel, WorkspaceDiff};
+use crate::changes::review::ReviewTarget;
+use crate::changes::{ChangesEvent, ChangesPanel, PanelSource, WorkspaceDiff};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
@@ -70,6 +72,12 @@ pub struct DevOptions {
     pub remove_project: Option<PathBuf>,
     /// `1`, or a worktree-relative path to select once it changes.
     pub changes: Option<String>,
+    /// Commit message: stage everything in the dev workspace, then commit.
+    pub commit: Option<String>,
+    pub push: bool,
+    /// PR title (`1` = the default title).
+    pub pr: Option<String>,
+    pub merge: Option<MergeStrategy>,
 }
 
 impl DevOptions {
@@ -88,6 +96,17 @@ impl DevOptions {
             delete_force: flag("HANGAR_DEV_DELETE_FORCE"),
             remove_project: var("HANGAR_DEV_REMOVE_PROJECT").map(PathBuf::from),
             changes: var("HANGAR_DEV_CHANGES"),
+            commit: var("HANGAR_DEV_COMMIT"),
+            push: flag("HANGAR_DEV_PUSH"),
+            pr: var("HANGAR_DEV_PR"),
+            merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
+                "noff" => Some(MergeStrategy::NoFf),
+                "squash" => Some(MergeStrategy::Squash),
+                other => {
+                    tracing::error!(value = other, "HANGAR_DEV_MERGE: expected noff or squash");
+                    None
+                }
+            }),
         }
     }
 }
@@ -370,7 +389,16 @@ impl HangarApp {
         let source = self.panes.slot(self.panes.focused()).and_then(|id| {
             let entry = self.diffs.get(&id)?;
             let ws = self.projects.workspace(id)?;
-            Some((id, SharedString::from(ws.name.clone()), entry.diff.clone()))
+            let project = self.projects.project(ws.project_id)?;
+            Some(PanelSource {
+                workspace: id,
+                name: SharedString::from(ws.name.clone()),
+                diff: entry.diff.clone(),
+                target: ReviewTarget {
+                    workspace: ws.clone(),
+                    repo: project.repo_path.clone(),
+                },
+            })
         });
         self.changes_panel
             .update(cx, |panel, cx| panel.set_source(source, cx));
@@ -508,6 +536,12 @@ impl HangarApp {
                 cx,
             );
         }
+        let mut gh = hangar_worktree::Gh::new().with_path_env(path.value.clone());
+        if let Some(program) = std::env::var_os("HANGAR_GH").filter(|p| !p.is_empty()) {
+            gh = gh.with_program(program);
+        }
+        self.changes_panel
+            .update(cx, |panel, cx| panel.set_gh(gh, cx));
         // find_program stats files; cheap enough for five presets but keep it off this thread.
         let value = path.value.clone();
         self.path = Some(path);
@@ -1484,6 +1518,7 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
             task.await;
         }
     }
+    run_review_hooks(&this, &dev, cx).await;
     let find = |this: &mut HangarApp, hook: &str, slug: &str| {
         let found = this.workspace_by_slug(slug);
         if found.is_none() {
@@ -1543,6 +1578,110 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
         });
         if let Ok(Some(task)) = task {
             task.await;
+        }
+    }
+}
+
+/// `HANGAR_DEV_COMMIT`, `_PUSH`, `_PR`, `_MERGE`, in that order, on the workspace shown in the
+/// changes panel (the `HANGAR_DEV_OPEN` one). Each goes through the panel's own operations and
+/// logs its outcome.
+async fn run_review_hooks(
+    this: &WeakEntity<HangarApp>,
+    dev: &DevOptions,
+    cx: &mut AsyncWindowContext,
+) {
+    if dev.commit.is_none() && !dev.push && dev.pr.is_none() && dev.merge.is_none() {
+        return;
+    }
+    let Ok(panel) = this.update(cx, |this, _| this.changes_panel.clone()) else {
+        return;
+    };
+    let worktree = this
+        .update(cx, |this, cx| {
+            let id = panel.read(cx).workspace()?;
+            this.projects
+                .workspace(id)
+                .map(|ws| ws.worktree_path.clone())
+        })
+        .ok()
+        .flatten();
+    let Some(worktree) = worktree else {
+        tracing::error!("review hooks: no workspace in the changes panel");
+        return;
+    };
+    let executor = cx.background_executor().clone();
+
+    if let Some(message) = dev.commit.clone() {
+        // The agent writes files asynchronously: stage until something is staged.
+        let mut staged = 0;
+        for _ in 0..50 {
+            let task = panel.update(cx, |panel, cx| panel.stage_all(cx));
+            if let Err(err) = task.await {
+                tracing::error!("HANGAR_DEV_COMMIT stage all: {err:#}");
+            }
+            let path = worktree.clone();
+            staged = executor
+                .spawn(async move { hangar_worktree::status(&path).map(|s| s.staged) })
+                .await
+                .unwrap_or(0);
+            if staged > 0 {
+                break;
+            }
+            executor.timer(Duration::from_millis(300)).await;
+        }
+        tracing::info!(staged, "HANGAR_DEV_COMMIT staged");
+        let task = panel.update(cx, |panel, cx| panel.commit(message, cx));
+        match task.await {
+            Ok(oid) => tracing::info!(%oid, "HANGAR_DEV_COMMIT committed"),
+            Err(err) => tracing::error!("HANGAR_DEV_COMMIT: {err:#}"),
+        }
+    }
+    if dev.push {
+        let task = panel.update(cx, |panel, cx| panel.push(cx));
+        match task.await {
+            Ok(out) => tracing::info!(?out, "HANGAR_DEV_PUSH pushed"),
+            Err(err) => tracing::error!("HANGAR_DEV_PUSH: {err:#}"),
+        }
+    }
+    if let Some(title) = dev.pr.clone() {
+        // The default title comes from the review info, loaded once gh is known.
+        let mut defaults = None;
+        for _ in 0..50 {
+            defaults = panel.update(cx, |panel, _| {
+                panel.pr_defaults().filter(|_| panel.info_loaded())
+            });
+            if defaults.is_some() {
+                break;
+            }
+            executor.timer(Duration::from_millis(200)).await;
+        }
+        match defaults {
+            None => tracing::error!("HANGAR_DEV_PR: review info never loaded"),
+            Some((workspace, default_title)) => {
+                let request = crate::changes::review::PrRequest {
+                    title: if title == "1" { default_title } else { title },
+                    body: "Opened by HANGAR_DEV_PR.".to_owned(),
+                    draft: true,
+                };
+                let task = panel.update(cx, |panel, cx| panel.create_pr(workspace, request, cx));
+                match task.await {
+                    Ok(url) => tracing::info!(%url, "HANGAR_DEV_PR opened"),
+                    Err(err) => tracing::error!("HANGAR_DEV_PR: {err:#}"),
+                }
+            }
+        }
+    }
+    if let Some(strategy) = dev.merge {
+        let task = panel.update(cx, |panel, cx| {
+            let (workspace, message) = panel.merge_defaults(strategy)?;
+            Some(panel.merge(workspace, strategy, message, cx))
+        });
+        match task {
+            Some(task) => match task.await {
+                Ok(out) => tracing::info!(?strategy, ?out, "HANGAR_DEV_MERGE merged"),
+                Err(err) => tracing::error!(?strategy, "HANGAR_DEV_MERGE: {err:#}"),
+            },
+            None => tracing::error!("HANGAR_DEV_MERGE: no workspace in the changes panel"),
         }
     }
 }
