@@ -1,9 +1,11 @@
 //! Projects, workspaces, sessions, event bus and SQLite persistence.
 
+mod bus;
 mod model;
 mod slug;
 mod store;
 
+pub use bus::{DEFAULT_BUS_CAPACITY, Event, EventBus};
 pub use model::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
     WorkspaceId, WorkspaceStatus,
