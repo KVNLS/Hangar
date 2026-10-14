@@ -148,6 +148,20 @@ pub fn decode_png(png: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     Ok((w, h, bgra))
 }
 
+fn keycode(key: crate::Key) -> &'static str {
+    use crate::Key;
+    match key {
+        Key::Backspace => "KEYCODE_DEL",
+        Key::Enter => "KEYCODE_ENTER",
+        Key::Tab => "KEYCODE_TAB",
+        Key::Escape => "KEYCODE_ESCAPE",
+        Key::ArrowUp => "KEYCODE_DPAD_UP",
+        Key::ArrowDown => "KEYCODE_DPAD_DOWN",
+        Key::ArrowLeft => "KEYCODE_DPAD_LEFT",
+        Key::ArrowRight => "KEYCODE_DPAD_RIGHT",
+    }
+}
+
 /// `input` command for one [`Input`], coordinates already in device pixels.
 pub fn input_command(input: Input, px: impl Fn(f64, f64) -> (i32, i32)) -> String {
     match input {
@@ -173,6 +187,7 @@ pub fn input_command(input: Input, px: impl Fn(f64, f64) -> (i32, i32)) -> Strin
         Input::VolumeUp => "input keyevent KEYCODE_VOLUME_UP".to_owned(),
         Input::VolumeDown => "input keyevent KEYCODE_VOLUME_DOWN".to_owned(),
         Input::AppSwitch => "input keyevent KEYCODE_APP_SWITCH".to_owned(),
+        Input::Key(key) => format!("input keyevent {}", keycode(key)),
     }
 }
 
@@ -292,6 +307,14 @@ mod tests {
         assert_eq!(
             input_command(Input::Back, px),
             "input keyevent KEYCODE_BACK"
+        );
+        assert_eq!(
+            input_command(Input::Key(crate::Key::Backspace), px),
+            "input keyevent KEYCODE_DEL"
+        );
+        assert_eq!(
+            input_command(Input::Key(crate::Key::ArrowLeft), px),
+            "input keyevent KEYCODE_DPAD_LEFT"
         );
     }
 }

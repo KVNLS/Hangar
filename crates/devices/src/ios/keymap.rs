@@ -6,6 +6,21 @@ pub(crate) const USAGE_LEFT_SHIFT: u32 = 0xe1;
 pub(crate) const USAGE_RETURN: u32 = 0x28;
 pub(crate) const USAGE_TAB: u32 = 0x2b;
 
+/// HID keyboard usage of a non-text key.
+pub(crate) fn usage_for_key(key: crate::Key) -> u32 {
+    use crate::Key;
+    match key {
+        Key::Backspace => 0x2a,
+        Key::Enter => USAGE_RETURN,
+        Key::Tab => USAGE_TAB,
+        Key::Escape => 0x29,
+        Key::ArrowRight => 0x4f,
+        Key::ArrowLeft => 0x50,
+        Key::ArrowDown => 0x51,
+        Key::ArrowUp => 0x52,
+    }
+}
+
 /// Returns `(usage, needs_shift)` for a character on a US keyboard, or `None` if the character
 /// has no key (non-ASCII, control characters other than newline and tab).
 pub(crate) fn usage_for(c: char) -> Option<(u32, bool)> {
@@ -68,6 +83,15 @@ mod tests {
         assert_eq!(usage_for('!'), Some((0x1e, true)));
         assert_eq!(usage_for('?'), Some((0x38, true)));
         assert_eq!(usage_for('\n'), Some((USAGE_RETURN, false)));
+    }
+
+    #[test]
+    fn named_keys() {
+        use crate::Key;
+        assert_eq!(usage_for_key(Key::Backspace), 0x2a);
+        assert_eq!(usage_for_key(Key::Escape), 0x29);
+        assert_eq!(usage_for_key(Key::ArrowUp), 0x52);
+        assert_eq!(usage_for_key(Key::Enter), USAGE_RETURN);
     }
 
     #[test]

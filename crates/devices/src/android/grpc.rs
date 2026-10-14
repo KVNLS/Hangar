@@ -106,6 +106,21 @@ pub mod keys {
     pub const VOLUME_UP: &str = "AudioVolumeUp";
     pub const VOLUME_DOWN: &str = "AudioVolumeDown";
     pub const APP_SWITCH: &str = "AppSwitch";
+
+    /// W3C `key` name of a keyboard key.
+    pub fn named(key: crate::Key) -> &'static str {
+        use crate::Key;
+        match key {
+            Key::Backspace => "Backspace",
+            Key::Enter => "Enter",
+            Key::Tab => "Tab",
+            Key::Escape => "Escape",
+            Key::ArrowUp => "ArrowUp",
+            Key::ArrowDown => "ArrowDown",
+            Key::ArrowLeft => "ArrowLeft",
+            Key::ArrowRight => "ArrowRight",
+        }
+    }
 }
 
 pub(crate) fn key_press(key: &str) -> proto::KeyboardEvent {
@@ -170,6 +185,7 @@ mod tests {
         assert_eq!(t.touches[0].pressure, PRESSURE);
         assert_eq!(touch(10, 20, false).touches[0].pressure, 0);
         assert_eq!(key_press(keys::BACK).key, "GoBack");
+        assert_eq!(key_press(keys::named(crate::Key::Backspace)).key, "Backspace");
         assert_eq!(text_event("hi").text, "hi");
     }
 }

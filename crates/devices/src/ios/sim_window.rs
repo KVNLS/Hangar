@@ -86,6 +86,9 @@ pub(crate) fn click(info: &DeviceInfo, input: Input) -> Result<()> {
             ))
         }
         Input::Back => Err(Error::Unsupported("Back button on iOS")),
+        Input::Key(_) => Err(Error::Unsupported(
+            "keyboard keys through the simctl backend (use the private backend)",
+        )),
     }
 }
 
