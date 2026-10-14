@@ -26,9 +26,9 @@ use super::language::language_for_path;
 use super::live::WorkspaceDiff;
 use super::model::{
     DiffRow, DisplayLine, ListEntry, SplitRow, file_list, file_title, flatten, hunk_header,
-    list_paths, reselect, short_sha, split_rows, status_letter, widest_row,
+    list_paths, reselect, split_rows, status_letter, widest_row,
 };
-use super::review::{ReviewInfo, ReviewTarget, StageState};
+use super::review::{self, ReviewInfo, ReviewTarget, StageState};
 pub use actions::Busy;
 
 use crate::ui::components::{Chip, Delta, EmptyState, Segmented, UiButton, section_label};
@@ -100,6 +100,9 @@ pub struct ChangesPanel {
     wide: bool,
     /// Side-by-side diff on the review screen.
     split_view: bool,
+    /// Base branch name per workspace (`None`: the base is a commit), once resolved.
+    base_names: HashMap<WorkspaceId, Option<String>>,
+    base_tasks: HashMap<WorkspaceId, Task<()>>,
     /// Files marked viewed on the review screen, per workspace (not persisted).
     viewed: HashMap<WorkspaceId, HashSet<PathBuf>>,
     /// Focused on the review screen so Escape reaches its key context.
@@ -156,6 +159,8 @@ impl ChangesPanel {
             commit_boxes: HashMap::new(),
             wide: false,
             split_view: true,
+            base_names: HashMap::new(),
+            base_tasks: HashMap::new(),
             viewed: HashMap::new(),
             focus: cx.focus_handle(),
             _theme: theme,
@@ -247,6 +252,39 @@ impl ChangesPanel {
         });
         self.sync(cx);
         self.reload_info(cx);
+        self.resolve_base(cx);
+    }
+
+    fn resolve_base(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = &self.source else { return };
+        let workspace = source.workspace;
+        if self.base_names.contains_key(&workspace) || self.base_tasks.contains_key(&workspace) {
+            return;
+        }
+        let ws = &source.target.workspace;
+        let (worktree, base) = (ws.worktree_path.clone(), ws.base.clone());
+        let task = cx.spawn(async move |this, cx| {
+            let name = cx
+                .background_executor()
+                .spawn(async move { review::resolve_base_name(&worktree, &base) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.base_names.insert(workspace, name);
+                this.base_tasks.remove(&workspace);
+                cx.notify();
+            });
+        });
+        self.base_tasks.insert(workspace, task);
+    }
+
+    /// `main`, or the merge-base's short sha while the name is unknown or there is none.
+    fn base_label(&self, merge_base: &str) -> String {
+        let name = self
+            .source
+            .as_ref()
+            .and_then(|s| self.base_names.get(&s.workspace))
+            .and_then(|n| n.as_deref());
+        review::base_label(name, merge_base)
     }
 
     fn clear(&mut self) {
@@ -441,7 +479,7 @@ impl ChangesPanel {
                         div()
                             .flex_none()
                             .text_color(t.tx3)
-                            .child(format!("→ {}", short_sha(&summary.merge_base))),
+                            .child(format!("→ {}", self.base_label(&summary.merge_base))),
                     ),
             })
             .child(div().flex_1())
@@ -749,8 +787,11 @@ impl ChangesPanel {
                     .unwrap_or_else(|| "detached".into());
                 let n = |v: u64| usize::try_from(v).unwrap_or(usize::MAX);
                 this.child(
-                    Chip::new(format!("{branch} → {}", short_sha(&summary.merge_base)))
-                        .icon(Lucide::GitBranch),
+                    Chip::new(format!(
+                        "{branch} → {}",
+                        self.base_label(&summary.merge_base)
+                    ))
+                    .icon(Lucide::GitBranch),
                 )
                 .child(
                     div()

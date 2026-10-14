@@ -48,6 +48,22 @@ pub fn stage_paths(change: &ChangedPath) -> Vec<PathBuf> {
     paths
 }
 
+/// What the diff is compared against: the base branch's name, else the merge-base commit.
+pub fn base_label(branch: Option<&str>, merge_base: &str) -> String {
+    match branch.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(branch) => branch.to_owned(),
+        None => crate::changes::model::short_sha(merge_base).to_owned(),
+    }
+}
+
+/// The branch the workspace base names (`origin/main` → `main`); `None` for a commit. Blocks.
+pub fn resolve_base_name(worktree: &Path, base: &str) -> Option<String> {
+    hangar_worktree::base_branch_name(worktree, base)
+        .inspect_err(|err| tracing::warn!(%err, base, "could not resolve the base branch"))
+        .ok()
+        .flatten()
+}
+
 /// Why Commit is disabled, if it is.
 pub fn commit_blocker(message: &str, staged: usize) -> Option<&'static str> {
     if staged == 0 {
@@ -229,6 +245,7 @@ pub fn run_merge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::changes::model::short_sha;
     use hangar_core::changes::ChangeKind;
 
     fn change(staged: bool, unstaged: bool) -> ChangedPath {
@@ -261,6 +278,14 @@ mod tests {
             stage_paths(&change(true, false)),
             [PathBuf::from("new.rs"), PathBuf::from("old.rs")]
         );
+    }
+
+    #[test]
+    fn base_labels() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(base_label(Some("main"), sha), "main");
+        assert_eq!(base_label(Some(" "), sha), short_sha(sha));
+        assert_eq!(base_label(None, sha), short_sha(sha));
     }
 
     #[test]
