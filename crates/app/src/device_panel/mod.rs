@@ -1,11 +1,12 @@
-//! The device panel: picker of available devices, the live screen of the selected one, the
-//! active backend and the platform's hardware controls. One panel per window; the device is
-//! shared by every workspace.
+//! The device panel: the live screen of the focused workspace's device (from the device pool),
+//! the active backend and the platform's hardware controls. The picker sets the workspace's
+//! base device. With no workspace focused the panel opens any listed device directly.
 
 mod logs;
 mod picker;
 mod platform;
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -15,10 +16,12 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use hangar_core::WorkspaceId;
 use hangar_devices::Input;
 
 use logs::{LogsEvent, LogsPane};
 
+use crate::device_pool::{DevicePool, DeviceStatus};
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent, InputResult};
 use crate::ui::components::{EmptyState, UiButton};
 use crate::ui::{ActiveTokens as _, FONT_MONO};
@@ -57,11 +60,14 @@ impl SelectItem for DeviceOption {
 
 type DeviceSelect = SelectState<Vec<DeviceOption>>;
 
-/// Where ⌘R builds and runs: the device open in the panel.
-pub struct RunTarget {
-    pub target: hangar_runner::Target,
-    pub name: SharedString,
-    pub handle: crate::device_view::DeviceHandle,
+/// The focused workspace's device, open in the pool and shown here.
+struct Attached {
+    ws: WorkspaceId,
+    view: Entity<DeviceView>,
+    reason: Option<BackendReason>,
+    logs: Entity<LogsPane>,
+    _events: Subscription,
+    _logs_events: Subscription,
 }
 
 enum Connection {
@@ -118,6 +124,15 @@ struct InputStatus {
 }
 
 pub struct DevicePanel {
+    pool: Entity<DevicePool>,
+    /// The focused workspace: its pool device is shown instead of the picker's.
+    workspace: Option<WorkspaceId>,
+    attached: Option<Attached>,
+    /// Workspaces whose device the panel already started once (not again after a shutdown).
+    started: HashSet<WorkspaceId>,
+    /// The workspace's base device as last shown in the select.
+    synced_base: Option<DeviceKey>,
+    visible: bool,
     picker: Picker,
     select: Entity<DeviceSelect>,
     connection: Connection,
@@ -130,13 +145,14 @@ pub struct DevicePanel {
     logs_settings: LogsSettings,
     /// `HANGAR_DEVICE_BACKEND` (`private`, `simctl`, `grpc` or `adb`): no automatic fallback.
     forced_backend: Option<String>,
+    _tick: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<DevicePanelEvent> for DevicePanel {}
 
 impl DevicePanel {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(pool: Entity<DevicePool>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let select = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
         let select_sub = cx.subscribe_in(
             &select,
@@ -148,13 +164,45 @@ impl DevicePanel {
                 let Some(key) = this.picker.entry_by_value(value).map(|e| e.key.clone()) else {
                     return;
                 };
-                this.select_device(key, window, cx);
+                match this.workspace {
+                    Some(ws) => this.pool.update(cx, |pool, cx| {
+                        pool.assign(ws, key.platform, key.id, cx);
+                    }),
+                    None => this.select_device(key, window, cx),
+                }
             },
         );
+        let pool_sub = cx.observe_in(&pool, window, |this, _, window, cx| {
+            this.sync_attached(window, cx);
+        });
+        // Redraws boot progress (stage and elapsed time) of the workspace's device.
+        let tick = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BOOT_TICK).await;
+                let alive = this.update(cx, |this, cx| {
+                    let opening = this.workspace.is_some_and(|ws| {
+                        matches!(this.pool.read(cx).status(ws), DeviceStatus::Opening { .. })
+                    });
+                    if opening && this.visible {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        });
         let forced_backend = std::env::var("HANGAR_DEVICE_BACKEND")
             .ok()
             .filter(|v| !v.is_empty());
         Self {
+            pool,
+            workspace: None,
+            attached: None,
+            started: HashSet::new(),
+            synced_base: None,
+            visible: false,
+            _tick: tick,
             picker: Picker::default(),
             select,
             connection: Connection::None,
@@ -166,8 +214,108 @@ impl DevicePanel {
             stats: stats_forced(),
             logs_settings: LogsSettings::default(),
             forced_backend,
-            _subscriptions: vec![select_sub],
+            _subscriptions: vec![select_sub, pool_sub],
         }
+    }
+
+    /// Shows `ws`'s pool device (or, with `None`, the picker's device).
+    pub fn set_workspace(
+        &mut self,
+        ws: Option<WorkspaceId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace == ws {
+            return;
+        }
+        self.workspace = ws;
+        self.input_status = None;
+        let effect = self.picker.set_visible(self.visible && ws.is_none());
+        self.apply(effect, window, cx);
+        self.sync_select(window, cx);
+        self.sync_attached(window, cx);
+    }
+
+    pub fn workspace(&self) -> Option<WorkspaceId> {
+        self.workspace
+    }
+
+    /// Follows the pool: attaches a view to the workspace's open device, drops it when the
+    /// device closes, and starts the device the first time the panel shows it.
+    fn sync_attached(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let base = self.workspace.and_then(|ws| {
+            self.pool.read(cx).assignment(ws).map(|a| DeviceKey {
+                platform: a.platform,
+                id: a.base.clone(),
+            })
+        });
+        if base != self.synced_base {
+            self.synced_base = base;
+            self.sync_select(window, cx);
+        }
+        let ws = self.workspace.filter(|_| self.visible);
+        let (session, reason, closed) = match ws {
+            Some(ws) => match self.pool.read(cx).status(ws) {
+                DeviceStatus::Open { session, reason } => {
+                    (Some(session.clone()), reason.cloned(), false)
+                }
+                DeviceStatus::Closed { error: None, .. } => (None, None, true),
+                _ => (None, None, false),
+            },
+            None => (None, None, false),
+        };
+        match (ws, session) {
+            (Some(ws), Some(session)) => {
+                let same = self
+                    .attached
+                    .as_ref()
+                    .is_some_and(|a| a.ws == ws && a.view.read(cx).session().same(&session));
+                if !same {
+                    tracing::info!(workspace = %ws, device = %session.info().udid, "panel attached to the workspace device");
+                    let stats = self.stats;
+                    let view = cx.new(|cx| DeviceView::new(session, stats, cx));
+                    let events = self.subscribe_view(&view, window, cx);
+                    let platform = self
+                        .pool
+                        .read(cx)
+                        .assignment(ws)
+                        .map_or(Platform::Ios, |a| a.platform);
+                    let (logs, logs_events) = self.new_logs(platform, &view, window, cx);
+                    self.attached = Some(Attached {
+                        ws,
+                        view,
+                        reason,
+                        logs,
+                        _events: events,
+                        _logs_events: logs_events,
+                    });
+                    self.shutting_down = false;
+                }
+            }
+            (ws, None) => {
+                self.attached = None;
+                if let Some(ws) = ws
+                    && closed
+                    && self.started.insert(ws)
+                {
+                    self.start_workspace_device(ws, cx);
+                }
+            }
+            (None, Some(_)) => self.attached = None,
+        }
+        cx.notify();
+    }
+
+    /// Starts (boots if needed, then opens) the focused workspace's device.
+    pub fn start_workspace_device(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) {
+        self.started.insert(ws);
+        let task = self.pool.update(cx, |pool, cx| pool.ensure(ws, cx));
+        cx.spawn(async move |_, _| {
+            if let Err(err) = task.await {
+                tracing::warn!(workspace = %ws, "workspace device not started: {err:#}");
+            }
+        })
+        .detach();
     }
 
     /// Applies saved settings; call before the panel is first shown.
@@ -180,40 +328,34 @@ impl DevicePanel {
         &self.picker
     }
 
-    /// The open device's view, once it is open.
+    /// The shown device's view, once it is open.
     pub fn view(&self) -> Option<&Entity<DeviceView>> {
+        if self.workspace.is_some() {
+            return self.attached.as_ref().map(|a| &a.view);
+        }
         match &self.connection {
             Connection::Open { view, .. } => Some(view),
             _ => None,
         }
     }
 
-    /// The open device as a run target, once frames flow.
-    pub fn run_target(&self, cx: &App) -> Option<RunTarget> {
-        let Connection::Open { key, view, .. } = &self.connection else {
-            return None;
-        };
-        let view = view.read(cx);
-        let info = view.info();
-        let (platform, avd) = match key.platform {
-            Platform::Ios => (hangar_devices::Platform::Ios, None),
-            Platform::Android => (hangar_devices::Platform::Android, Some(key.id.clone())),
-        };
-        Some(RunTarget {
-            target: hangar_runner::Target {
-                platform,
-                id: info.udid.clone(),
-                avd,
-            },
-            name: info.name.clone().into(),
-            handle: view.handle(),
-        })
+    fn logs(&self) -> Option<&Entity<LogsPane>> {
+        if self.workspace.is_some() {
+            return self.attached.as_ref().map(|a| &a.logs);
+        }
+        match &self.connection {
+            Connection::Open { logs, .. } => Some(logs),
+            _ => None,
+        }
     }
 
-    /// Shown → list devices and open the selected one; hidden → close it (stops capture).
+    /// Shown → list devices and open the shown one; hidden → close the panel's views (pool
+    /// devices stay open in the pool; a picker device stops capturing).
     pub fn set_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let effect = self.picker.set_visible(visible);
+        self.visible = visible;
+        let effect = self.picker.set_visible(visible && self.workspace.is_none());
         self.apply(effect, window, cx);
+        self.sync_attached(window, cx);
         if visible && self.listing.is_none() {
             self.refresh(window, cx);
         }
@@ -251,16 +393,34 @@ impl DevicePanel {
     }
 
     fn sync_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut seen = HashSet::new();
         let options: Vec<DeviceOption> = self
             .picker
             .entries()
             .iter()
+            // The pool's own devices are not bases; several instances of one AVD are one choice.
+            .filter(|e| {
+                !e.info
+                    .name
+                    .starts_with(crate::device_pool::backend::CLONE_PREFIX)
+            })
+            .filter(|e| seen.insert(e.key.value()))
             .map(|e| DeviceOption {
                 value: e.key.value().into(),
                 title: entry_title(e).into(),
             })
             .collect();
-        let selected: Option<SharedString> = self.picker.selected().map(|k| k.value().into());
+        let selected: Option<SharedString> = match self.workspace {
+            Some(ws) => self.pool.read(cx).assignment(ws).map(|a| {
+                DeviceKey {
+                    platform: a.platform,
+                    id: a.base.clone(),
+                }
+                .value()
+                .into()
+            }),
+            None => self.picker.selected().map(|k| k.value().into()),
+        };
         self.select.update(cx, |select, cx| {
             select.set_items(options, window, cx);
             match selected {
@@ -353,6 +513,33 @@ impl DevicePanel {
 
     /// Shuts the open emulator down in the background; the panel closes it once it is off.
     pub fn shutdown_device(&mut self, cx: &mut Context<Self>) {
+        if let Some(ws) = self.workspace {
+            if self.shutting_down {
+                return;
+            }
+            let Some(key) = self.pool.read(cx).key_for(ws) else {
+                return;
+            };
+            self.shutting_down = true;
+            self.input_status = None;
+            let task = self.pool.update(cx, |pool, cx| pool.shutdown(&key, cx));
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.shutting_down = false;
+                    if let Err(err) = result {
+                        this.input_status = Some(InputStatus {
+                            text: format!("Shutdown failed: {err:#}").into(),
+                            error: true,
+                        });
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
         let Connection::Open { key, view, .. } = &self.connection else {
             return;
         };
@@ -459,43 +646,8 @@ impl DevicePanel {
                 );
                 let stats = self.stats;
                 let view = cx.new(|cx| DeviceView::new(session, stats, cx));
-                let events = cx.subscribe_in(
-                    &view,
-                    window,
-                    |this, _, event: &DeviceViewEvent, window, cx| {
-                        match event {
-                            DeviceViewEvent::Input(result) => {
-                                this.input_status = Some(input_status(result));
-                            }
-                            DeviceViewEvent::Text(result) => {
-                                this.input_status = Some(InputStatus {
-                                    text: format!(
-                                        "Typing {} failed: {}",
-                                        plural_chars(result.chars),
-                                        result.error
-                                    )
-                                    .into(),
-                                    error: true,
-                                });
-                            }
-                            DeviceViewEvent::Shutdown(result) => {
-                                this.on_shutdown(result, window, cx);
-                            }
-                            DeviceViewEvent::Rotate(orientation, result) => {
-                                this.input_status = Some(InputStatus {
-                                    text: match result {
-                                        Ok(()) => format!("Rotated to {orientation:?}"),
-                                        Err(e) => format!("Rotate failed: {e}"),
-                                    }
-                                    .into(),
-                                    error: result.is_err(),
-                                });
-                            }
-                        }
-                        cx.notify();
-                    },
-                );
-                let (logs, logs_events) = self.new_logs(&key, &view, window, cx);
+                let events = self.subscribe_view(&view, window, cx);
+                let (logs, logs_events) = self.new_logs(key.platform, &view, window, cx);
                 self.connection = Connection::Open {
                     key,
                     view,
@@ -517,6 +669,60 @@ impl DevicePanel {
         cx.notify();
     }
 
+    fn subscribe_view(
+        &mut self,
+        view: &Entity<DeviceView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(
+            view,
+            window,
+            |this, _, event: &DeviceViewEvent, window, cx| {
+                match event {
+                    DeviceViewEvent::Input(result) => {
+                        this.input_status = Some(input_status(result));
+                    }
+                    DeviceViewEvent::Text(result) => {
+                        this.input_status = Some(InputStatus {
+                            text: format!(
+                                "Typing {} failed: {}",
+                                plural_chars(result.chars),
+                                result.error
+                            )
+                            .into(),
+                            error: true,
+                        });
+                    }
+                    // The pool owns workspace devices and reports their shutdown itself.
+                    DeviceViewEvent::Shutdown(result) if this.workspace.is_some() => {
+                        this.shutting_down = false;
+                        if let Err(err) = result {
+                            this.input_status = Some(InputStatus {
+                                text: format!("Shutdown failed: {err}").into(),
+                                error: true,
+                            });
+                        }
+                    }
+                    DeviceViewEvent::Shutdown(result) => {
+                        this.on_shutdown(result, window, cx);
+                    }
+                    DeviceViewEvent::Rotate(orientation, result) => {
+                        this.input_status = Some(InputStatus {
+                            text: match result {
+                                Ok(()) => format!("Rotated to {orientation:?}"),
+                                Err(e) => format!("Rotate failed: {e}"),
+                            }
+                            .into(),
+                            error: result.is_err(),
+                        });
+                    }
+                }
+                cx.notify();
+            },
+        )
+    }
+
     /// Applies saved logs pane settings; call before the panel is first shown.
     pub fn restore_logs(&mut self, settings: LogsSettings) {
         self.logs_settings = settings;
@@ -525,20 +731,20 @@ impl DevicePanel {
     /// Opens or closes the logs pane (now, or when the device opens).
     pub fn set_logs_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.logs_settings.open = open;
-        if let Connection::Open { logs, .. } = &self.connection {
+        if let Some(logs) = self.logs().cloned() {
             logs.update(cx, |logs, cx| logs.set_open(open, cx));
         }
     }
 
     fn new_logs(
         &self,
-        key: &DeviceKey,
+        platform: Platform,
         view: &Entity<DeviceView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (Entity<LogsPane>, Subscription) {
         let source = view.read(cx).handle();
-        let history = key.platform == Platform::Android;
+        let history = platform == Platform::Android;
         let settings = self.logs_settings;
         let logs = cx.new(|cx| LogsPane::new(source, history, settings, window, cx));
         let sub = cx.subscribe(&logs, |this, _, event: &LogsEvent, cx| {
@@ -685,10 +891,27 @@ impl DevicePanel {
         })
     }
 
+    /// The device on screen: platform, view and why its backend is not the default.
+    fn shown(&self, cx: &App) -> Option<(Platform, &Entity<DeviceView>, Option<&BackendReason>)> {
+        if let Some(ws) = self.workspace {
+            let a = self.attached.as_ref()?;
+            let platform = self
+                .pool
+                .read(cx)
+                .assignment(ws)
+                .map_or(Platform::Ios, |a| a.platform);
+            return Some((platform, &a.view, a.reason.as_ref()));
+        }
+        match &self.connection {
+            Connection::Open {
+                key, view, reason, ..
+            } => Some((key.platform, view, reason.as_ref())),
+            _ => None,
+        }
+    }
+
     fn render_backend(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let Connection::Open { view, reason, .. } = &self.connection else {
-            return None;
-        };
+        let (_, view, reason) = self.shown(cx)?;
         let backend = view.read(cx).backend();
         let t = cx.tokens();
         let (label, color, why) = match reason {
@@ -795,7 +1018,87 @@ impl DevicePanel {
         )
     }
 
+    /// The focused workspace's device: its screen, boot progress, or what keeps it from running.
+    fn render_workspace_body(&self, ws: WorkspaceId, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.tokens();
+        let centered = || {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .p_4()
+                .gap_2()
+                .items_center()
+                .justify_center()
+                .text_size(px(11.))
+                .text_color(t.tx2)
+        };
+        if let Some(a) = &self.attached {
+            return div()
+                .flex_1()
+                .min_h_0()
+                .p_2()
+                .child(a.view.clone())
+                .into_any_element();
+        }
+        let pool = self.pool.read(cx);
+        let waiting = pool.is_waiting(ws);
+        let single = pool
+            .assignment(ws)
+            .is_some_and(|a| pool.single_device(a.platform));
+        match pool.status(ws) {
+            DeviceStatus::Unknown => centered().child("Finding this workspace's device…"),
+            DeviceStatus::Opening { name, status } => centered()
+                .gap_3()
+                .child(Spinner::new().color(t.tx3).with_size(px(18.)))
+                .child(format!("{name}: {status}"))
+                .when(waiting, |this| {
+                    this.child(
+                        div()
+                            .text_color(t.amb)
+                            .child("Waiting for the device: every device slot is in use."),
+                    )
+                }),
+            DeviceStatus::ShuttingDown { name } => centered()
+                .gap_3()
+                .child(Spinner::new().color(t.tx3).with_size(px(18.)))
+                .child(format!("{name}: shutting down…")),
+            // Open but the view is not attached yet (attached on the next pool notification).
+            DeviceStatus::Open { .. } => centered().child("Opening…"),
+            DeviceStatus::Closed { name, error } => {
+                let name = name.to_owned();
+                let error = error.map(str::to_owned);
+                centered()
+                    .child(
+                        EmptyState::new(Lucide::Smartphone, format!("{name} is not running"))
+                            .hint(if single {
+                                "Workspaces share one device on this Mac and take turns (see \
+                                 Settings › Devices)."
+                            } else {
+                                "This workspace's own device. Start it to see the screen; ⌘R \
+                                 starts it too."
+                            })
+                            .action(
+                                UiButton::new("device-start")
+                                    .label("Start device")
+                                    .primary()
+                                    .large()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.start_workspace_device(ws, cx);
+                                    })),
+                            ),
+                    )
+                    .when_some(error, |this, error| {
+                        this.child(div().max_w(px(360.)).text_color(t.red).child(error))
+                    })
+            }
+        }
+        .into_any_element()
+    }
+
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(ws) = self.workspace {
+            return self.render_workspace_body(ws, cx);
+        }
         if matches!(self.connection, Connection::None)
             && let Some(body) = self.render_boot_body(cx)
         {
@@ -862,14 +1165,12 @@ impl DevicePanel {
     }
 
     fn render_controls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let Connection::Open { key, view, .. } = &self.connection else {
-            return None;
-        };
-        let can_shutdown = key.platform.can_shutdown(view.read(cx).info());
-        let can_rotate = key.platform.can_rotate();
+        let (platform, view, _) = self.shown(cx)?;
+        let can_shutdown = platform.can_shutdown(view.read(cx).info());
+        let can_rotate = platform.can_rotate();
         let rotate_view = view.clone();
         let t = cx.tokens();
-        let buttons = key.platform.controls().iter().map(|control| {
+        let buttons = platform.controls().iter().map(|control| {
             let input = control.input;
             UiButton::new(SharedString::from(format!("device-control-{}", control.id)))
                 .ghost()
@@ -956,14 +1257,26 @@ impl Render for DevicePanel {
         let backend = self.render_backend(cx);
         let body = self.render_body(cx);
         let controls = self.render_controls(cx);
-        let logs = match &self.connection {
-            Connection::Open { logs, .. } => Some(logs.clone()),
-            _ => None,
-        };
+        let logs = self.logs().cloned();
+        let t = cx.tokens();
+        let waiting = self
+            .workspace
+            .filter(|ws| self.attached.is_some() && self.pool.read(cx).is_waiting(*ws))
+            .map(|_| {
+                div()
+                    .px_3()
+                    .py_1()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .text_color(t.amb)
+                    .bg(t.ambbg)
+                    .child("Waiting for the device: another workspace is using it.")
+            });
         v_flex()
             .size_full()
-            .bg(cx.tokens().app)
+            .bg(t.app)
             .child(header)
+            .children(waiting)
             .children(picker)
             .children(backend)
             .child(body)

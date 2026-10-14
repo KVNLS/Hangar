@@ -3,13 +3,15 @@
 use super::*;
 
 impl HangarApp {
-    /// Creates the worktree and workspace off the main thread, shows it in the focused pane and
-    /// starts `agent_id` in it. Resolves once the agent has started (or failed).
+    /// Creates the worktree and workspace off the main thread, assigns it `target` as its base
+    /// device (else the default on first use), shows it in the focused pane and starts
+    /// `agent_id` in it. Resolves once the agent has started (or failed).
     pub(super) fn create_workspace(
         &mut self,
         project_id: ProjectId,
         name: String,
         agent_id: String,
+        target: Option<crate::device_panel::DeviceKey>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Option<WorkspaceId>> {
@@ -56,6 +58,12 @@ impl HangarApp {
                             );
                             let id = workspace.id;
                             this.projects.upsert_workspace(workspace);
+                            this.track_workspace(id, cx);
+                            if let Some(target) = target {
+                                this.device_pool.update(cx, |pool, cx| {
+                                    pool.assign(id, target.platform, target.id, cx)
+                                });
+                            }
                             this.panes.show(id);
                             this.panes_changed(window, cx);
                             Some((id, this.start_session(id, agent_id, window, cx)))
@@ -256,12 +264,22 @@ impl HangarApp {
         }
         self.busy.insert(workspace_id);
         self.sync_diffs(cx);
+        self.sync_device_focus(window, cx);
+        let device = self
+            .device_pool
+            .update(cx, |pool, cx| pool.archive(workspace_id, cx));
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { ops::archive_workspace(&store, workspace_id, session) })
                 .await;
+            match device.await {
+                Ok(()) => tracing::info!(workspace = %workspace_id, "workspace device shut down"),
+                Err(err) => {
+                    tracing::warn!(workspace = %workspace_id, "workspace device not shut down: {err:#}")
+                }
+            }
             let _ = this.update_in(cx, |this, window, cx| {
                 this.busy.remove(&workspace_id);
                 match result {
@@ -422,6 +440,14 @@ impl HangarApp {
                         );
                         this.projects.remove_workspace(workspace_id);
                         this.forget_run_config(workspace_id);
+                        let device = this
+                            .device_pool
+                            .update(cx, |pool, cx| pool.delete(workspace_id, cx));
+                        cx.spawn(async move |_, _| match device.await {
+                            Ok(()) => tracing::info!(workspace = %workspace_id, "workspace device deleted"),
+                            Err(err) => tracing::warn!(workspace = %workspace_id, "workspace device not deleted: {err:#}"),
+                        })
+                        .detach();
                         if this.panes.clear(workspace_id) {
                             this.panes_changed(window, cx);
                         }

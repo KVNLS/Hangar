@@ -12,6 +12,7 @@ impl HangarApp {
     pub(super) fn panes_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_layout(window, cx);
         self.sync_diffs(cx);
+        self.sync_device_focus(window, cx);
     }
 
     /// Starts a live diff for every active workspace on screen, stops those of workspaces

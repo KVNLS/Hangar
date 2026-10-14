@@ -210,7 +210,7 @@ impl HangarApp {
                 )
             })
             .collect();
-        let has_device = self.device_panel.read(cx).view().is_some();
+        let waiting = workspace_id.is_some_and(|id| self.device_pool.read(cx).is_waiting(id));
         let run_button = workspace.map(|ws| {
             let ws_id = ws.id;
             UiButton::new(("run", pane))
@@ -219,12 +219,8 @@ impl HangarApp {
                 .kbd("⌘R")
                 .ghost()
                 .small()
-                .disabled(!has_device || self.busy.contains(&ws_id))
-                .tooltip(if has_device {
-                    "Build and run on the open device"
-                } else {
-                    "Open a device in the Device tab (⌘1) to run on it"
-                })
+                .disabled(self.busy.contains(&ws_id))
+                .tooltip("Build and run on this workspace's device")
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.panes.show(ws_id);
                     this.panes_changed(window, cx);
@@ -262,6 +258,16 @@ impl HangarApp {
             .border_color(t.line)
             .child(tab)
             .children(run_tabs)
+            .when(waiting, |this| {
+                this.child(
+                    div()
+                        .px_2()
+                        .font_family(FONT_MONO)
+                        .text_size(px(11.))
+                        .text_color(t.amb)
+                        .child("Waiting for the device"),
+                )
+            })
             .child(div().flex_1())
             .when_some(status, |this, status| {
                 this.child(
