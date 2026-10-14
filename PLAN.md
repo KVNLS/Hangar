@@ -9,11 +9,13 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 - macOS first; Linux kept possible. iOS-specific code is `#[cfg(target_os = "macos")]`.
 - Private Apple frameworks only inside `devices` (or its helper), behind the `Device` trait, with a public
   fallback (`simctl`) always available.
+- Hexagonal: dependencies point inwards to `core`; see docs/ARCHITECTURE.md for the dependency rule
+  (checked by `crates/app/tests/architecture.rs`) and the migration roadmap.
 
 ## Crates
 | crate    | owns                                                                             | depends on     |
 |----------|----------------------------------------------------------------------------------|----------------|
-| core     | Project / Workspace / Session models, EventBus, SQLite Store                     | —              |
+| core     | Project / Workspace / Session models, AgentState, SQLite Store                   | —              |
 | worktree | git CLI wrapper: worktree add/remove/list, status, diff                          | —              |
 | agents   | AgentAdapter trait, PtyAdapter; ACP client (`acp`: protocol, stdio, AcpAdapter)  | terminal       |
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |

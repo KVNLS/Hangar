@@ -30,6 +30,9 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 
 ## Rules
 - Only `app` (and `examples`) may depend on GPUI. Library crates are headless.
+- Architecture: docs/ARCHITECTURE.md (dependency rule, ports, roadmap). `crates/app/tests/architecture.rs`
+  enforces it; a new crate gets a layer there. Settings keys go in `app::setting_keys`; a new agent preset
+  gets a row in `agents::PROFILES`.
 - Errors: `thiserror` in libraries, `anyhow` in binaries/examples and inside `app` (the binary's crate). No `unwrap`/`expect` outside tests.
 - Async on tokio. Never block the GPUI main thread: PTY reads, git, simctl and frame capture run on background
   threads/tasks and push results through channels.
