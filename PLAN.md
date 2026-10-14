@@ -191,8 +191,10 @@ Git access is the `git` CLI with porcelain output, not a library.
   received and dropped), mode switching, images or @-context in the composer; `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
   stopping a turn is esc or the Stop button; no transcript virtualization (long sessions render every item).
-- Not verified live yet: a real `claude-agent-acp` session (needs the adapter installed and the owner's
-  account).
+- Live (2026-10-05, scratch repo, spikes/m7-acp-notes.md): streaming, tool cards, three permission prompts
+  (Approval in the sidebar, ⏎ approves), `device_info` over the MCP bridge, an edit → Review `+1 −0`, esc
+  stops a streaming turn, quitting leaves no agent process. `claude-agent-acp` puts the MCP session secret in
+  its `claude` child's argv (visible to the same user in `ps`).
 
 ## UI v0.1 (design/Hangar.dc.html)
 - Design system in `crates/app/src/ui`: tokens (dark/light, `cx.tokens()`), gpui-component theme mapping,
@@ -225,7 +227,5 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Live run of Claude Code (structured) in a scratch repo: streaming, tool cards, a permission prompt (Approval
-  in the sidebar), Stop, an edit reaching the Changes panel, and a device tool call over MCP.
-- Then: `session/load` resume, slash commands, more ACP agents (Gemini `--experimental-acp`, `opencode acp`,
+- Owner reviews `m7-acp`. Then: `session/load` resume, slash commands, more ACP agents (Gemini `--experimental-acp`, `opencode acp`,
   `codex-acp`).

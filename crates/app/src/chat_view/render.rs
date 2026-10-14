@@ -233,7 +233,7 @@ impl ChatView {
             ToolStatus::Completed => (diff_stat(&call.content).unwrap_or_default().into(), t.tx2),
             ToolStatus::Failed => ("failed".into(), t.red),
         };
-        let body = tool_body(&call.content, cx);
+        let body = tool_body(&call.content, &self.root, cx);
         let locations: Vec<AnyElement> = call
             .locations
             .iter()
@@ -287,7 +287,7 @@ impl ChatView {
                             .text_ellipsis()
                             .whitespace_nowrap()
                             .text_color(t.tx2)
-                            .child(call.title.clone()),
+                            .child(without_verb(&call.title, verb).to_owned()),
                     )
                     .when(call.status == ToolStatus::InProgress, |d| {
                         d.child(Spinner::new().with_size(px(10.)).color(t.acc))
@@ -346,7 +346,7 @@ impl ChatView {
             .tool_call
             .content
             .as_ref()
-            .and_then(|content| tool_body(content, cx));
+            .and_then(|content| tool_body(content, &self.root, cx));
 
         div()
             .flex()
@@ -512,6 +512,16 @@ fn tool_kind(kind: &str) -> (Lucide, &'static str) {
     }
 }
 
+/// `title` without a leading `verb` the card header already shows ("Read main.rs" → "main.rs").
+fn without_verb<'a>(title: &'a str, verb: &str) -> &'a str {
+    match title.get(..verb.len()) {
+        Some(head) if head.eq_ignore_ascii_case(verb) && title[verb.len()..].starts_with(' ') => {
+            title[verb.len()..].trim_start()
+        }
+        _ => title,
+    }
+}
+
 /// `+a −r` over the diffs of a tool call, if it has any.
 fn diff_stat(content: &[ToolContent]) -> Option<String> {
     let mut added = 0;
@@ -555,7 +565,7 @@ fn diff_lines<'a>(old: &'a str, new: &'a str) -> Vec<(char, &'a str)> {
 }
 
 /// The content area of a tool card: output text, diffs, or nothing.
-fn tool_body(content: &[ToolContent], cx: &App) -> Option<AnyElement> {
+fn tool_body(content: &[ToolContent], root: &std::path::Path, cx: &App) -> Option<AnyElement> {
     let t = cx.tokens();
     let mut lines: Vec<AnyElement> = Vec::new();
     let mut hidden = 0usize;
@@ -569,7 +579,8 @@ fn tool_body(content: &[ToolContent], cx: &App) -> Option<AnyElement> {
     for item in content {
         match item {
             ToolContent::Text(text) => {
-                for line in text.lines() {
+                // Agents wrap command output in Markdown fences; the card is already code.
+                for line in text.lines().filter(|l| !l.trim_start().starts_with("```")) {
                     push(
                         div()
                             .px(px(10.))
@@ -590,7 +601,13 @@ fn tool_body(content: &[ToolContent], cx: &App) -> Option<AnyElement> {
                     div()
                         .px(px(10.))
                         .text_color(t.tx3)
-                        .child(path.clone())
+                        .child(
+                            std::path::Path::new(path)
+                                .strip_prefix(root)
+                                .unwrap_or(std::path::Path::new(path))
+                                .display()
+                                .to_string(),
+                        )
                         .into_any_element(),
                     &mut lines,
                 );
@@ -650,7 +667,15 @@ fn tool_body(content: &[ToolContent], cx: &App) -> Option<AnyElement> {
 
 #[cfg(test)]
 mod tests {
-    use super::diff_lines;
+    use super::{diff_lines, without_verb};
+
+    #[test]
+    fn verb_is_not_repeated() {
+        assert_eq!(without_verb("Read main.rs", "Read"), "main.rs");
+        assert_eq!(without_verb("edit a.rs", "Edit"), "a.rs");
+        assert_eq!(without_verb("Readme", "Read"), "Readme");
+        assert_eq!(without_verb("git status", "Run"), "git status");
+    }
 
     #[test]
     fn diff_drops_common_lines() {

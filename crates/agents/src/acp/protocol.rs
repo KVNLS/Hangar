@@ -88,6 +88,35 @@ pub fn parse_initialize(result: &Value) -> AgentInfo {
     }
 }
 
+/// A session mode the agent offers (for Claude Code: its permission modes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionMode {
+    pub id: String,
+    pub name: String,
+}
+
+/// The `modes` of a `session/new` result: the current mode id and the available modes.
+pub fn parse_modes(result: &Value) -> (Option<String>, Vec<SessionMode>) {
+    let modes = &result["modes"];
+    let available = modes["availableModes"]
+        .as_array()
+        .map(|modes| {
+            modes
+                .iter()
+                .filter_map(|m| {
+                    let id = m["id"].as_str()?.to_owned();
+                    let name = m["name"].as_str().unwrap_or(&id).to_owned();
+                    Some(SessionMode { id, name })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (
+        modes["currentModeId"].as_str().map(str::to_owned),
+        available,
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
     EndTurn,
@@ -525,6 +554,17 @@ mod tests {
             permission_result(None),
             json!({"outcome": {"outcome": "cancelled"}})
         );
+    }
+
+    #[test]
+    fn modes_from_session_new() {
+        let result = json!({"sessionId": "s", "modes": {"currentModeId": "default", "availableModes": [
+            {"id": "default", "name": "Manual"}, {"id": "plan", "name": "Plan"}
+        ]}});
+        let (current, modes) = parse_modes(&result);
+        assert_eq!(current.as_deref(), Some("default"));
+        assert_eq!(modes[0].name, "Manual");
+        assert_eq!(parse_modes(&json!({"sessionId": "s"})), (None, Vec::new()));
     }
 
     #[test]

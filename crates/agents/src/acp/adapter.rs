@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use super::client::{AcpConnection, AcpEvent, RequestId};
-use super::protocol::{self, AgentInfo, McpServer, PROTOCOL_VERSION};
+use super::protocol::{self, AgentInfo, McpServer, PROTOCOL_VERSION, SessionMode};
 use crate::SpawnContext;
 use crate::error::{Error, Result};
 use crate::path::{find_program, resolve_program};
@@ -125,6 +125,8 @@ impl AcpAdapter {
             pid,
             session_id: String::new(),
             info: AgentInfo::default(),
+            current_mode: None,
+            modes: Vec::new(),
             conn,
             exited,
             tail,
@@ -146,6 +148,8 @@ pub struct AcpSession {
     pid: u32,
     session_id: String,
     info: AgentInfo,
+    current_mode: Option<String>,
+    modes: Vec<SessionMode>,
     conn: AcpConnection<ChildStdin>,
     exited: Arc<AtomicBool>,
     tail: Arc<Mutex<VecDeque<u8>>>,
@@ -177,6 +181,7 @@ impl AcpSession {
             .as_str()
             .ok_or_else(|| Error::Protocol("session/new returned no sessionId".to_owned()))?
             .to_owned();
+        (self.current_mode, self.modes) = protocol::parse_modes(&result);
         Ok(())
     }
 
@@ -210,6 +215,15 @@ impl AcpSession {
 
     pub fn info(&self) -> &AgentInfo {
         &self.info
+    }
+
+    /// The mode the session started in; later changes arrive as `CurrentMode` updates.
+    pub fn initial_mode(&self) -> Option<&str> {
+        self.current_mode.as_deref()
+    }
+
+    pub fn modes(&self) -> &[SessionMode] {
+        &self.modes
     }
 
     /// Starts a prompt turn. The agent streams [`AcpEvent::Update`]s and ends the turn with

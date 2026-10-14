@@ -89,6 +89,7 @@ pub struct ChatView {
     running: bool,
     failed: bool,
     exited: bool,
+    /// Display name of the session mode (Claude Code: Manual, Accept edits, Plan, …).
     mode: Option<SharedString>,
     composer: Entity<TextareaState>,
     scroll: ScrollHandle,
@@ -134,7 +135,7 @@ impl ChatView {
                 cx.background_executor().timer(REDRAW_INTERVAL).await;
             }
         });
-        Self {
+        let mut view = Self {
             session,
             events,
             agent_name,
@@ -151,7 +152,10 @@ impl ChatView {
             follow: true,
             _tasks: vec![pump],
             _subscriptions: subscriptions,
-        }
+        };
+        let mode = view.session.initial_mode().map(str::to_owned);
+        view.set_mode(mode);
+        view
     }
 
     pub fn turn(&self) -> AcpTurn {
@@ -464,10 +468,17 @@ impl ChatView {
                     self.items.push(Item::Plan(entries));
                 }
             },
-            SessionUpdate::CurrentMode(mode) => self.mode = Some(mode.into()),
+            SessionUpdate::CurrentMode(mode) => self.set_mode(Some(mode)),
             // Slash commands are not offered in the composer yet.
             SessionUpdate::AvailableCommands(_) | SessionUpdate::Other { .. } => {}
         }
+    }
+
+    fn set_mode(&mut self, id: Option<String>) {
+        self.mode = id.map(|id| {
+            let name = self.session.modes().iter().find(|m| m.id == id);
+            SharedString::from(name.map_or(id.clone(), |m| m.name.clone()))
+        });
     }
 
     fn open_location(&mut self, path: &str, cx: &mut Context<Self>) {
