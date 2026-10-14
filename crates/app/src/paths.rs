@@ -138,26 +138,50 @@ pub fn ensure_private_dir(dir: &Path, uid: u32) -> anyhow::Result<()> {
     }
 }
 
-/// The app's MCP socket path, its private directory created and checked.
-pub fn socket_path() -> anyhow::Result<PathBuf> {
+/// Starts `serve` on the first MCP socket candidate whose private directory checks out and
+/// where it succeeds, so a refused directory or a socket in use falls through to the next one.
+/// The error lists why each candidate failed.
+pub fn serve_on_socket<T>(serve: impl FnMut(&Path) -> anyhow::Result<T>) -> anyhow::Result<T> {
     // SAFETY: geteuid has no preconditions and cannot fail.
     let uid = unsafe { libc::geteuid() };
     let tmpdir = std::env::var_os("TMPDIR").map(PathBuf::from);
-    let path = socket_candidates(data_dir().as_deref(), tmpdir.as_deref(), uid)
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("no MCP socket path fits in {MAX_SOCKET_PATH} bytes"))?;
-    let dir = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("socket path {} has no parent", path.display()))?;
-    ensure_private_dir(dir, uid)?;
-    Ok(path)
+    first_socket(
+        socket_candidates(data_dir().as_deref(), tmpdir.as_deref(), uid),
+        uid,
+        serve,
+    )
+}
+
+fn first_socket<T>(
+    candidates: Vec<PathBuf>,
+    uid: u32,
+    mut serve: impl FnMut(&Path) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let mut failures = Vec::new();
+    for path in candidates {
+        let started = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("socket path {} has no parent", path.display()))
+            .and_then(|dir| ensure_private_dir(dir, uid))
+            .and_then(|()| serve(&path));
+        match started {
+            Ok(started) => return Ok(started),
+            Err(err) => {
+                tracing::warn!("mcp: cannot use {}: {err:#}", path.display());
+                failures.push(format!("{err:#}"));
+            }
+        }
+    }
+    if failures.is_empty() {
+        anyhow::bail!("no MCP socket path fits in {MAX_SOCKET_PATH} bytes");
+    }
+    anyhow::bail!("{}", failures.join("; "))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SOCKET_PATH, ensure_private_dir, private_dir_problem, socket_candidates,
+        MAX_SOCKET_PATH, ensure_private_dir, first_socket, private_dir_problem, socket_candidates,
         worktrees_root_for,
     };
     use std::path::{Path, PathBuf};
@@ -249,5 +273,28 @@ mod tests {
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&dir, &link).unwrap();
         assert!(ensure_private_dir(&link, uid).is_err());
+    }
+
+    #[test]
+    fn first_socket_skips_unsafe_dirs_and_failed_starts() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let root = tempfile::tempdir().unwrap();
+        let uid = std::fs::metadata(root.path()).unwrap().uid();
+        let open = root.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let busy = root.path().join("busy/hangar.sock");
+        let good = root.path().join("good/hangar.sock");
+        let candidates = vec![open.join("hangar.sock"), busy.clone(), good.clone()];
+
+        let started = first_socket(candidates.clone(), uid, |path| {
+            anyhow::ensure!(path != busy, "in use");
+            Ok(path.to_owned())
+        });
+        assert_eq!(started.unwrap(), good);
+
+        let err = first_socket::<()>(candidates, uid, |_| anyhow::bail!("in use")).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("mode 755") && err.contains("in use"), "{err}");
     }
 }
