@@ -25,8 +25,15 @@ pub enum ScreenshotError {
 }
 
 /// Encodes `frame` (BGRA) as an opaque RGB PNG whose longest side is at most `max_side`,
-/// keeping the aspect ratio. Alpha is dropped: device frames are opaque.
+/// keeping the aspect ratio. Alpha is dropped: device frames are opaque. A live surface is
+/// snapshotted first.
 pub fn encode_screenshot(frame: &Frame, max_side: u32) -> Result<Screenshot, ScreenshotError> {
+    let frame = frame
+        .snapshot()
+        .ok_or_else(|| ScreenshotError::InvalidFrame("device surface could not be read".into()))?;
+    let (stride, bgra) = frame
+        .bytes()
+        .ok_or_else(|| ScreenshotError::InvalidFrame("no captured bytes".into()))?;
     let (w, h) = (frame.width, frame.height);
     if w == 0 || h == 0 || max_side == 0 {
         return Err(ScreenshotError::InvalidFrame(format!(
@@ -34,24 +41,22 @@ pub fn encode_screenshot(frame: &Frame, max_side: u32) -> Result<Screenshot, Scr
         )));
     }
     let row_bytes = w as usize * 4;
-    if frame.stride < row_bytes {
+    if stride < row_bytes {
         return Err(ScreenshotError::InvalidFrame(format!(
-            "stride {} shorter than a {w} px row",
-            frame.stride
+            "stride {stride} shorter than a {w} px row"
         )));
     }
-    let needed = frame.stride * (h as usize - 1) + row_bytes;
-    if frame.bgra.len() < needed {
+    let needed = stride * (h as usize - 1) + row_bytes;
+    if bgra.len() < needed {
         return Err(ScreenshotError::InvalidFrame(format!(
-            "{} bytes for {w}x{h} with stride {} (need {needed})",
-            frame.bgra.len(),
-            frame.stride
+            "{} bytes for {w}x{h} with stride {stride} (need {needed})",
+            bgra.len()
         )));
     }
 
     let mut rgb = Vec::with_capacity(w as usize * h as usize * 3);
     for y in 0..h as usize {
-        let row = &frame.bgra[y * frame.stride..y * frame.stride + row_bytes];
+        let row = &bgra[y * stride..y * stride + row_bytes];
         for px in row.as_chunks::<4>().0 {
             rgb.extend_from_slice(&[px[2], px[1], px[0]]);
         }
@@ -90,8 +95,8 @@ fn fit(w: u32, h: u32, max_side: u32) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hangar_core::device::Pixels;
     use std::sync::Arc;
-    use std::time::Instant;
 
     fn frame(width: u32, height: u32, stride: usize) -> Frame {
         let mut bgra = vec![0u8; stride * height as usize];
@@ -101,14 +106,7 @@ mod tests {
                 bgra[y * stride + x * 4..y * stride + x * 4 + 4].copy_from_slice(&[255, 0, 0, 255]);
             }
         }
-        Frame {
-            width,
-            height,
-            stride,
-            bgra: Arc::from(bgra),
-            captured_at: Instant::now(),
-            seq: 1,
-        }
+        Frame::bgra(width, height, stride, Arc::from(bgra), 1)
     }
 
     fn decode(png: &[u8]) -> image::DynamicImage {
@@ -140,13 +138,18 @@ mod tests {
     #[test]
     fn rejects_bad_frames() {
         let mut f = frame(10, 10, 40);
-        f.bgra = Arc::from(vec![0u8; 100]);
+        f.pixels = Pixels::Bgra {
+            stride: 40,
+            data: Arc::from(vec![0u8; 100]),
+        };
         assert!(matches!(
             encode_screenshot(&f, 1024),
             Err(ScreenshotError::InvalidFrame(_))
         ));
         let mut f = frame(10, 10, 40);
-        f.stride = 20;
+        if let Pixels::Bgra { stride, .. } = &mut f.pixels {
+            *stride = 20;
+        }
         assert!(encode_screenshot(&f, 1024).is_err());
         assert!(encode_screenshot(&frame(0, 10, 0), 1024).is_err());
     }

@@ -282,11 +282,14 @@ pub(super) async fn dev_device(
     } else {
         let _ = panel.update_in(cx, |panel, window, cx| panel.select_device(key, window, cx));
     }
+    // Frozen copies: a live surface keeps changing under a baseline.
     let painted = |cx: &mut AsyncWindowContext| {
         panel.update(cx, |panel, cx| {
-            panel
-                .view()
-                .and_then(|view| view.read(cx).painted_frame().cloned())
+            panel.view().and_then(|view| {
+                view.read(cx)
+                    .painted_frame()
+                    .and_then(hangar_devices::Frame::snapshot)
+            })
         })
     };
     let baseline = loop {

@@ -364,13 +364,16 @@ impl Focusable for DeviceView {
     }
 }
 
-/// Copies a BGRA frame into a GPUI image (which keeps BGRA bytes in an `RgbaImage` container).
+/// Copies a BGRA frame (snapshotting a live surface) into a GPUI image (which keeps BGRA bytes
+/// in an `RgbaImage` container).
 fn to_render_image(frame: &Frame) -> Option<Arc<RenderImage>> {
+    let frame = frame.snapshot()?;
+    let (stride, bgra) = frame.bytes()?;
     let row = frame.width as usize * 4;
     let mut data = Vec::with_capacity(row * frame.height as usize);
     for y in 0..frame.height as usize {
-        let start = y * frame.stride;
-        data.extend_from_slice(frame.bgra.get(start..start + row)?);
+        let start = y * stride;
+        data.extend_from_slice(bgra.get(start..start + row)?);
     }
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, data)?;
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))

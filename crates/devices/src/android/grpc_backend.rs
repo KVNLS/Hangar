@@ -12,8 +12,8 @@ use super::grpc::{self, Client, keys, proto};
 use super::sdk::AndroidSdk;
 use crate::geometry::{device_to_pixels, panel_pixels};
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Orientation, Platform,
-    Result, ScreenSpec,
+    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Orientation, Pixels,
+    Platform, Result, ScreenSpec,
 };
 
 /// Requested frame size; the emulator keeps the aspect ratio and never upscales.
@@ -242,8 +242,10 @@ async fn stream_frames(
                     tx.send_replace(Some(Frame {
                         width: w,
                         height: h,
-                        stride: w as usize * 4,
-                        bgra: Arc::from(bgra),
+                        pixels: Pixels::Bgra {
+                            stride: w as usize * 4,
+                            data: Arc::from(bgra),
+                        },
                         captured_at,
                         seq,
                     }));

@@ -14,14 +14,18 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::{msg_send, sel};
 use objc2_core_foundation::{CGPoint, CGSize};
 use objc2_foundation::{NSArray, NSError, NSUUID};
-use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
+use objc2_io_surface::IOSurfaceRef;
 
 use super::dispatch;
 use super::keymap;
 use super::runtime::{self, raw, responds};
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Result, geometry,
+    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Pixels, Result, geometry,
 };
+
+mod surface;
+
+pub use surface::LiveFramebuffer;
 
 const FRAMEBUFFER_PORT: &str = "com.apple.framebuffer.display";
 const HID_CLIENT: &std::ffi::CStr = c"_TtC12SimulatorKit24SimDeviceLegacyHIDClient";
@@ -254,7 +258,7 @@ struct Framebuffer {
     // Blocks and queue must outlive the registrations.
     _blocks: Vec<RcBlock<dyn Fn()>>,
     _queue: Retained<AnyObject>,
-    surface: Option<Retained<AnyObject>>,
+    surface: Option<Arc<LiveFramebuffer>>,
     last_seed: Option<u32>,
     seq: u64,
     warned_format: bool,
@@ -407,7 +411,7 @@ fn framebuffer_descriptors(io: &AnyObject) -> Result<Vec<Retained<AnyObject>>> {
 }
 
 impl Framebuffer {
-    /// Picks the largest display surface (the main screen; others are auxiliary planes).
+    /// Picks the largest BGRA display surface (the main screen; others are auxiliary planes).
     fn refresh_surface(&mut self) {
         let mut best: Option<(usize, Retained<AnyObject>)> = None;
         for desc in &self.descriptors {
@@ -416,56 +420,40 @@ impl Framebuffer {
                 continue;
             };
             let s = as_iosurface(&surface);
+            if s.pixel_format() != PIXEL_FORMAT_BGRA {
+                if !self.warned_format {
+                    tracing::warn!(
+                        "unexpected framebuffer pixel format {:#x}",
+                        s.pixel_format()
+                    );
+                    self.warned_format = true;
+                }
+                continue;
+            }
             let area = s.width() * s.height();
             if area > 0 && best.as_ref().is_none_or(|(a, _)| area > *a) {
                 best = Some((area, surface));
             }
         }
-        self.surface = best.map(|(_, s)| s);
+        self.surface = best.map(|(_, s)| Arc::new(LiveFramebuffer::new(as_iosurface(&s))));
         self.last_seed = None;
     }
 
+    /// Publishes the surface itself when its content changed: no lock, no copy.
     fn capture(&mut self) -> Option<Frame> {
         let surface = self.surface.as_ref()?;
-        let s = as_iosurface(surface);
-        if self.last_seed == Some(s.seed()) {
+        let s = surface.io_surface();
+        let seed = s.seed();
+        if self.last_seed == Some(seed) {
             return None;
         }
-        if s.pixel_format() != PIXEL_FORMAT_BGRA {
-            if !self.warned_format {
-                tracing::warn!(
-                    "unexpected framebuffer pixel format {:#x}",
-                    s.pixel_format()
-                );
-                self.warned_format = true;
-            }
-            return None;
-        }
-        let mut seed = 0u32;
-        // SAFETY: read-only lock of a live IOSurface; `seed` is a valid out-pointer.
-        if unsafe { s.lock(IOSurfaceLockOptions::ReadOnly, &mut seed) } != 0 {
-            return None;
-        }
-        let captured_at = Instant::now();
-        let (width, height, stride) = (s.width(), s.height(), s.bytes_per_row());
-        let row = width * 4;
-        let mut bgra = Vec::with_capacity(row * height);
-        let base = s.base_address().as_ptr().cast::<u8>().cast_const();
-        for y in 0..height {
-            // SAFETY: the surface is locked and spans `stride * height` bytes from `base`.
-            let src = unsafe { std::slice::from_raw_parts(base.add(y * stride), row) };
-            bgra.extend_from_slice(src);
-        }
-        // SAFETY: matching unlock for the lock above.
-        unsafe { s.unlock(IOSurfaceLockOptions::ReadOnly, &mut seed) };
         self.last_seed = Some(seed);
         self.seq += 1;
         Some(Frame {
-            width: u32::try_from(width).ok()?,
-            height: u32::try_from(height).ok()?,
-            stride: row,
-            bgra: Arc::from(bgra),
-            captured_at,
+            width: u32::try_from(s.width()).ok()?,
+            height: u32::try_from(s.height()).ok()?,
+            pixels: Pixels::Live(surface.clone()),
+            captured_at: Instant::now(),
             seq: self.seq,
         })
     }

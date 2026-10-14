@@ -33,7 +33,8 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub use hangar_core::device::{
-    Capabilities, DeviceInfo, Frame, Input, Key, LogLevel, Orientation, Platform, ScreenSpec,
+    Capabilities, DeviceInfo, Frame, Input, Key, LiveSurface, LogLevel, Orientation, Pixels,
+    Platform, ScreenSpec,
 };
 
 /// PNG export of a [`Frame`], kept here because it needs the `image` encoder.
@@ -44,9 +45,18 @@ pub trait SavePng {
 
 impl SavePng for Frame {
     fn save_png(&self, path: &std::path::Path) -> Result<()> {
-        let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
+        let frame = self
+            .snapshot()
+            .ok_or_else(|| Error::Parse("device surface could not be read".into()))?;
+        let (stride, bgra) = frame
+            .bytes()
+            .ok_or_else(|| Error::Parse("frame has no captured bytes".into()))?;
+        let row_bytes = self.width as usize * 4;
+        let mut rgba = Vec::with_capacity(row_bytes * self.height as usize);
         for y in 0..self.height as usize {
-            let row = &self.bgra[y * self.stride..y * self.stride + self.width as usize * 4];
+            let row = bgra
+                .get(y * stride..y * stride + row_bytes)
+                .ok_or_else(|| Error::Parse("frame shorter than its size".into()))?;
             for px in row.as_chunks::<4>().0 {
                 rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
             }

@@ -41,14 +41,8 @@ fn short() -> Timeouts {
 }
 
 fn frame(width: u32, height: u32) -> Frame {
-    Frame {
-        width,
-        height,
-        stride: width as usize * 4,
-        bgra: Arc::from(vec![200u8; width as usize * height as usize * 4]),
-        captured_at: Instant::now(),
-        seq: 1,
-    }
+    let bgra = Arc::from(vec![200u8; width as usize * height as usize * 4]);
+    Frame::bgra(width, height, width as usize * 4, bgra, 1)
 }
 
 /// Answers like a device would, recording each request.

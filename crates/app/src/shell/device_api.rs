@@ -32,7 +32,8 @@ pub struct DeviceStatusInfo {
     pub orientation: Option<Orientation>,
 }
 
-/// One frame and the point size of the screen it shows (as oriented).
+/// One frame (captured bytes, never a live surface) and the point size of the screen it shows
+/// (as oriented).
 #[derive(Clone, Debug)]
 pub struct DeviceFrame {
     pub frame: Frame,
@@ -152,6 +153,11 @@ impl HangarApp {
                     .timer(Duration::from_millis(100))
                     .await;
             };
+            let frame = cx
+                .background_executor()
+                .spawn(async move { frame.snapshot() })
+                .await
+                .ok_or_else(|| anyhow!("the device surface could not be read"))?;
             let (width_pt, height_pt) = crate::device_view::geometry::screen_points(
                 acquired.session.info().screen,
                 Some((frame.width, frame.height)),
@@ -434,14 +440,7 @@ mod tests {
     #[test]
     fn screenshots_are_saved_as_png_per_workspace() {
         let ws = hangar_core::WorkspaceId::new();
-        let frame = Frame {
-            width: 4,
-            height: 2,
-            stride: 16,
-            bgra: vec![200u8; 32].into(),
-            captured_at: std::time::Instant::now(),
-            seq: 1,
-        };
+        let frame = Frame::bgra(4, 2, 16, vec![200u8; 32].into(), 1);
         let path = save_screenshot(ws, &frame).unwrap();
         assert!(path.starts_with(std::env::temp_dir().join("Hangar")));
         assert!(path.to_string_lossy().contains(&ws.to_string()));
