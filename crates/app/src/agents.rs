@@ -128,37 +128,69 @@ pub struct AgentProfile {
     pub mcp: McpWiring,
     /// Can run on Ollama models through [`apply_ollama`].
     pub ollama: bool,
+    /// Tells Hangar when it waits for the user (hooks or ACP), so other agents may prompt it
+    /// without answering its prompts (see `usecases::orchestration::check_prompt`).
+    pub reports_waits: bool,
 }
 
-const fn profile(id: &'static str, kind: AgentKind, mcp: McpWiring, ollama: bool) -> AgentProfile {
+const fn profile(
+    id: &'static str,
+    kind: AgentKind,
+    mcp: McpWiring,
+    ollama: bool,
+    reports_waits: bool,
+) -> AgentProfile {
     AgentProfile {
         id,
         kind,
         mcp,
         ollama,
+        reports_waits,
     }
 }
 
 pub const PROFILES: &[AgentProfile] = &[
-    profile("claude", AgentKind::Claude, McpWiring::ClaudeFlag, false),
+    // Terminal Claude Code reports waits through the hooks Hangar injects.
+    profile(
+        "claude",
+        AgentKind::Claude,
+        McpWiring::ClaudeFlag,
+        false,
+        true,
+    ),
     profile(
         "claude-acp",
         AgentKind::Claude,
         McpWiring::AcpSession,
         false,
+        true,
     ),
-    profile("codex", AgentKind::Codex, McpWiring::CodexOverride, false),
-    profile("codex-acp", AgentKind::Codex, McpWiring::AcpSession, false),
+    profile(
+        "codex",
+        AgentKind::Codex,
+        McpWiring::CodexOverride,
+        false,
+        false,
+    ),
+    profile(
+        "codex-acp",
+        AgentKind::Codex,
+        McpWiring::AcpSession,
+        false,
+        true,
+    ),
     profile(
         "opencode",
         AgentKind::OpenCode,
         McpWiring::OpenCodeEnv,
         true,
+        false,
     ),
     profile(
         "opencode-acp",
         AgentKind::OpenCode,
         McpWiring::AcpSession,
+        true,
         true,
     ),
     profile(
@@ -166,14 +198,16 @@ pub const PROFILES: &[AgentProfile] = &[
         AgentKind::Gemini,
         McpWiring::GeminiDefaults,
         false,
+        false,
     ),
     profile(
         "gemini-acp",
         AgentKind::Gemini,
         McpWiring::AcpSession,
         false,
+        true,
     ),
-    profile("shell", AgentKind::Shell, McpWiring::EnvOnly, false),
+    profile("shell", AgentKind::Shell, McpWiring::EnvOnly, false, false),
 ];
 
 /// The profile of a built-in agent; `None` for custom commands.

@@ -38,6 +38,11 @@ pub enum Refusal {
     Ambiguous(String),
     #[error("“{name}” is waiting for the user to answer {what}; prompt it once they have")]
     WaitingForUser { name: String, what: &'static str },
+    #[error(
+        "“{0}” runs an agent that does not tell Hangar when it waits for the user, so text sent \
+         to it could answer its prompts; only the user can type into it"
+    )]
+    WaitsUnknown(String),
 }
 
 /// How many workspaces created `id`, walking up the parent links. A link to a deleted parent
@@ -135,8 +140,13 @@ pub fn find_child<'a>(
 }
 
 /// Refuses to prompt a child that waits for the user: text typed into it could answer its
-/// permission prompt or question in the user's place.
-pub fn check_prompt(name: &str, state: AgentState) -> Result<(), Refusal> {
+/// permission prompt or question in the user's place. A child whose agent does not report its
+/// waits (`reports_waits` false: a terminal agent without hooks, a shell) is always refused,
+/// since its state is only guessed.
+pub fn check_prompt(name: &str, state: AgentState, reports_waits: bool) -> Result<(), Refusal> {
+    if !reports_waits {
+        return Err(Refusal::WaitsUnknown(name.to_owned()));
+    }
     let what = match state {
         AgentState::Approval => "a permission request",
         AgentState::Input => "a question",
