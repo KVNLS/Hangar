@@ -15,6 +15,7 @@ use hangar_terminal::ExitInfo;
 use crate::agents;
 use crate::paths::{BRANCH_PREFIX, branch_name, unique_slug, worktree_path};
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
+use crate::ui::theme::Appearance;
 
 pub fn open_store(path: &Path) -> anyhow::Result<Arc<Store>> {
     let store =
@@ -30,6 +31,8 @@ pub const AGENT_SETTING: &str = "agent";
 pub const CHANGES_SETTING: &str = "changes_panel";
 /// Setting key of the saved [`DeviceLayout`].
 pub const DEVICE_SETTING: &str = "device_panel";
+/// Setting key of the saved [`Appearance`].
+pub const APPEARANCE_SETTING: &str = "appearance";
 
 /// Everything the window needs at startup.
 pub struct Loaded {
@@ -38,6 +41,7 @@ pub struct Loaded {
     pub agent: Option<String>,
     pub changes: Option<ChangesLayout>,
     pub device: Option<DeviceLayout>,
+    pub appearance: Option<Appearance>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -88,12 +92,23 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let appearance = match store
+        .get_setting::<Appearance>(APPEARANCE_SETTING)
+        .context("failed to read the appearance setting")
+    {
+        Ok(appearance) => appearance,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
+    };
     Ok(Loaded {
         entries,
         layout,
         agent,
         changes,
         device,
+        appearance,
         settings_error,
     })
 }
@@ -114,6 +129,12 @@ pub fn save_device(store: &Store, device: &DeviceLayout) -> anyhow::Result<()> {
     store
         .set_setting(DEVICE_SETTING, device)
         .context("failed to save the device panel settings")
+}
+
+pub fn save_appearance(store: &Store, appearance: Appearance) -> anyhow::Result<()> {
+    store
+        .set_setting(APPEARANCE_SETTING, &appearance)
+        .context("failed to save the appearance")
 }
 
 pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {

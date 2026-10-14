@@ -113,6 +113,21 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Device logs: `Device::logs` stream (adb logcat, simctl log stream) and a logs pane in the device panel
   (spikes/device-logs-notes.md).
 
+## UI v0.1 (design/Hangar.dc.html)
+- Design system in `crates/app/src/ui`: tokens (dark/light, `cx.tokens()`), gpui-component theme mapping,
+  Geist/Geist Mono, metrics, type scale, components; `ui_gallery` example. `AgentState` in `core`.
+- Views: 38px title bar, status bar, sidebar, pane tab bars, right panel with Device/Changes tabs, review
+  screen (⌘⇧R, split/inline), New workspace sheet (⌘N), command palette (⌘K), Overview (⌘⇧O), first-run
+  welcome, Settings (⌘,) with saved appearance, Files tab (⌘3, tree + read-only viewer, no highlighting),
+  Next needing you (⌘J).
+- PTY agents only report running/exited: Working = terminal output in the last 3 s; Review = exited 0 with
+  changes; Failed = exited non-zero.
+- Deferred until backed (not rendered, no placeholders): chat stream, tool-call cards, permission prompts and
+  the Approval/Input states (M7); build progress, crash and "in use" device overlays, Run/Reload (M6); status bar
+  build/RAM; per-workspace target device; Clone
+  repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
+- Not checked visually by Claude (no screen capture): every view needs the owner's manual pass.
+
 ## Remaining gaps
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.
 - Terminal: no block selection, right-click menu, middle-click paste.

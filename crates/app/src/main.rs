@@ -19,6 +19,18 @@
 //! - `HANGAR_DEV_REMOVE_PROJECT=<repo>` — forget the project (refused while it has active
 //!   workspaces). Never touches the repository.
 //!
+//! `HANGAR_DEV_FILES=<path>` opens the Files tab on the dev workspace, opens that file and logs the
+//! listed files, tree rows and viewer lines.
+//!
+//! `HANGAR_DEV_APPEARANCE=dark|light|system` renders every settings page, then sets and saves
+//! the appearance.
+//!
+//! `HANGAR_DEV_OVERVIEW=1` (after the review hook) opens the overview, logs the per-state
+//! counts, then goes back.
+//!
+//! `HANGAR_DEV_REVIEW=1` opens the full-width review screen once files are listed (after the
+//! review hooks below), logs its row counts, renders the inline mode, then goes back.
+//!
 //! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run; a
 //! worktree-relative path instead of `1` also selects that file once it shows up.
 //!
@@ -73,6 +85,9 @@ fn main() {
         .with_assets(hangar_app::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            if let Err(err) = hangar_app::ui::init(component::ThemeMode::Dark, cx) {
+                tracing::error!("design system init failed, using the default theme: {err:#}");
+            }
             hangar_app::terminal_view::init(cx);
             hangar_app::device_view::init(cx);
             hangar_app::shell::init(cx);
@@ -80,10 +95,9 @@ fn main() {
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Hangar".into()),
-                    ..Default::default()
-                }),
+                titlebar: Some(hangar_app::shell::titlebar_options()),
+                // The custom title bar moves the window itself (see gpui-component TitleBar).
+                app_owns_titlebar_drag: true,
                 ..Default::default()
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {

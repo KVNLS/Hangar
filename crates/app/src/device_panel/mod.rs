@@ -9,12 +9,10 @@ mod platform;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::Disableable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
-use gpui_kit::component::{
-    ActiveTheme as _, IconName, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_devices::Input;
@@ -22,6 +20,8 @@ use hangar_devices::Input;
 use logs::{LogsEvent, LogsPane};
 
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent, InputResult};
+use crate::ui::components::{EmptyState, UiButton};
+use crate::ui::{ActiveTokens as _, FONT_MONO};
 pub use logs::LogsSettings;
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
 pub use platform::{
@@ -29,7 +29,6 @@ pub use platform::{
 };
 
 pub enum DevicePanelEvent {
-    Close,
     /// The user picked another device (save it).
     Selected(Option<DeviceKey>),
     /// The stats overlay was toggled (save it).
@@ -570,105 +569,109 @@ impl DevicePanel {
             .map(|s| s.text.clone())
     }
 
+    /// 40px toolbar: device select, stats overlay toggle, refresh.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
+        let t = cx.tokens();
         h_flex()
-            .h_8()
+            .h(px(40.))
             .px_2()
             .gap_1()
             .flex_shrink_0()
             .items_center()
             .border_b_1()
-            .border_color(theme.border)
-            .text_xs()
-            .child(div().font_semibold().child("Device"))
-            .child(div().flex_1())
+            .border_color(t.line)
             .child(
-                Button::new("device-stats")
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Select::new(&self.select).small().placeholder(
+                        if self.picker.listed() {
+                            "Select a device"
+                        } else {
+                            "Listing devices…"
+                        },
+                    )),
+            )
+            .child(
+                UiButton::new("device-stats")
+                    .icon(Lucide::Activity)
                     .ghost()
-                    .xsmall()
-                    .label("Stats")
                     .selected(self.stats)
-                    .tooltip("Debug overlay: fps and capture → paint latency (⌘⌥⇧P)")
+                    .tooltip("Debug overlay: fps and capture → paint latency ⌘⌥⇧P")
                     .on_click(cx.listener(|this, _, _, cx| {
                         let stats = !this.stats;
                         this.set_stats(stats, cx);
                     })),
             )
             .child(
-                Button::new("device-refresh")
+                UiButton::new("device-refresh")
+                    .icon(Lucide::RefreshCw)
                     .ghost()
-                    .xsmall()
-                    .icon(IconName::RefreshCw)
-                    .loading(self.picker.is_listing())
+                    .disabled(self.picker.is_listing())
                     .tooltip("Refresh the device list")
                     .on_click(cx.listener(|this, _, window, cx| this.refresh(window, cx))),
             )
-            .child(
-                Button::new("device-close")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::PanelRightClose)
-                    .tooltip("Hide device (⌘⇧P)")
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(DevicePanelEvent::Close))),
-            )
     }
 
-    fn render_picker(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        let errors = self.picker.errors().iter().map(|(platform, err)| {
-            div()
-                .text_xs()
-                .text_color(theme.danger)
-                .child(format!("{}: {err}", platform.label()))
-        });
-        let empty = self.picker.listed() && !self.picker.entries().iter().any(|e| e.ready);
-        let hints = empty.then(|| {
-            Platform::ALL.map(|p| {
+    /// Listing errors and "nothing ready" hints under the toolbar.
+    fn render_picker(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = cx.tokens();
+        let errors: Vec<Div> = self
+            .picker
+            .errors()
+            .iter()
+            .map(|(platform, err)| {
                 div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(format!(
+                    .text_size(px(11.))
+                    .text_color(t.red)
+                    .child(format!("{}: {err}", platform.label()))
+            })
+            .collect();
+        let empty = self.picker.listed() && !self.picker.entries().iter().any(|e| e.ready);
+        let hints: Vec<Div> = if empty {
+            Platform::ALL
+                .map(|p| {
+                    div().text_size(px(11.)).text_color(t.tx3).child(format!(
                         "No {} device ready. {}",
                         p.label(),
                         p.not_ready_hint()
                     ))
-            })
-        });
-        v_flex()
-            .px_2()
-            .py_1()
-            .gap_1()
-            .flex_shrink_0()
-            .child(
-                Select::new(&self.select)
-                    .small()
-                    .placeholder(if self.picker.listed() {
-                        "Select a device"
-                    } else {
-                        "Listing devices…"
-                    }),
-            )
-            .children(errors)
-            .children(hints.into_iter().flatten())
+                })
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (!errors.is_empty() || !hints.is_empty()).then(|| {
+            v_flex()
+                .px_3()
+                .py_1p5()
+                .gap_1()
+                .flex_shrink_0()
+                .border_b_1()
+                .border_color(t.line)
+                .children(errors)
+                .children(hints)
+                .into_any_element()
+        })
     }
 
     fn render_backend(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = cx.theme();
         let Connection::Open { view, reason, .. } = &self.connection else {
             return None;
         };
         let backend = view.read(cx).backend();
+        let t = cx.tokens();
         let (label, color, why) = match reason {
-            None => (format!("backend: {backend}"), theme.success, None),
+            None => (format!("backend: {backend}"), t.grn, None),
             Some(BackendReason::Fallback(why)) => (
                 format!("backend: {backend} (fallback)"),
-                theme.warning,
+                t.amb,
                 Some(why.clone()),
             ),
             Some(BackendReason::Forced(why)) => (
                 format!("backend: {backend} (forced)"),
-                theme.muted_foreground,
+                t.tx3,
                 Some(why.clone()),
             ),
         };
@@ -676,22 +679,24 @@ impl DevicePanel {
             .then_some("simctl captures ~2 fps screenshots; input may be unavailable.");
         Some(
             v_flex()
-                .px_2()
+                .px_3()
+                .py_1()
                 .gap_0p5()
                 .flex_shrink_0()
-                .text_xs()
+                .font_family(FONT_MONO)
+                .text_size(px(11.))
                 .child(
                     h_flex()
-                        .gap_1()
+                        .gap(px(5.))
                         .items_center()
-                        .child(div().size_2().rounded_full().bg(color))
+                        .child(div().size(px(6.)).rounded_full().bg(color))
                         .child(div().text_color(color).child(label)),
                 )
                 .when_some(why, |this, why| {
-                    this.child(div().text_color(theme.muted_foreground).child(why))
+                    this.child(div().text_color(t.tx3).child(why))
                 })
                 .when_some(note, |this, note| {
-                    this.child(div().text_color(theme.muted_foreground).child(note))
+                    this.child(div().text_color(t.tx3).child(note))
                 })
                 .into_any_element(),
         )
@@ -699,7 +704,7 @@ impl DevicePanel {
 
     fn render_boot_body(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let entry = self.picker.selected_entry()?;
-        let theme = cx.theme();
+        let t = cx.tokens();
         let centered = || {
             v_flex()
                 .flex_1()
@@ -713,7 +718,10 @@ impl DevicePanel {
         if let Some(booting) = self.booting.as_ref().filter(|b| b.key == entry.key) {
             return Some(
                 centered()
-                    .text_color(theme.muted_foreground)
+                    .gap_3()
+                    .text_size(px(11.))
+                    .text_color(t.tx2)
+                    .child(Spinner::new().color(t.tx3).with_size(px(18.)))
                     .child(booting.status())
                     .into_any_element(),
             );
@@ -730,25 +738,27 @@ impl DevicePanel {
         Some(
             centered()
                 .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{} is not running.", entry.info.name)),
-                )
-                .child(
-                    Button::new("device-boot")
-                        .small()
-                        .primary()
-                        .label("Boot")
-                        .disabled(self.booting.is_some())
-                        .tooltip("Start this virtual device")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.boot_device(key.clone(), window, cx);
-                        })),
+                    EmptyState::new(
+                        Lucide::Smartphone,
+                        format!("{} is not running", entry.info.name),
+                    )
+                    .hint("Boot it to build and run this branch on it.")
+                    .action(
+                        UiButton::new("device-boot")
+                            .label(format!("Boot {}", entry.info.name))
+                            .primary()
+                            .large()
+                            .disabled(self.booting.is_some())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.boot_device(key.clone(), window, cx);
+                            })),
+                    ),
                 )
                 .when_some(error, |this, error| {
                     this.child(
                         div()
-                            .text_color(theme.danger)
+                            .text_size(px(11.))
+                            .text_color(t.red)
                             .child(format!("Boot failed: {error}")),
                     )
                 })
@@ -762,7 +772,7 @@ impl DevicePanel {
         {
             return body;
         }
-        let theme = cx.theme();
+        let t = cx.tokens();
         let message = |text: SharedString, color: Hsla| {
             div()
                 .flex_1()
@@ -771,7 +781,7 @@ impl DevicePanel {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_xs()
+                .text_size(px(12.))
                 .text_color(color)
                 .child(text)
                 .into_any_element()
@@ -783,13 +793,10 @@ impl DevicePanel {
                 .p_2()
                 .child(view.clone())
                 .into_any_element(),
-            Connection::Opening { name, .. } => {
-                message(format!("Opening {name}…").into(), theme.muted_foreground)
+            Connection::Opening { name, .. } => message(format!("Opening {name}…").into(), t.tx2),
+            Connection::Failed { name, error } => {
+                message(format!("Could not open {name}: {error}").into(), t.red)
             }
-            Connection::Failed { name, error } => message(
-                format!("Could not open {name}: {error}").into(),
-                theme.danger,
-            ),
             Connection::None => {
                 let text = match self.picker.selected() {
                     _ if !self.picker.listed() => "Listing devices…".into(),
@@ -806,9 +813,21 @@ impl DevicePanel {
                         .into(),
                         _ => SharedString::from(""),
                     },
-                    None => "Select a device.".into(),
+                    None => {
+                        return div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                EmptyState::new(Lucide::Smartphone, "No device selected")
+                                    .hint("Pick a simulator or emulator above to run this branch."),
+                            )
+                            .into_any_element();
+                    }
                 };
-                message(text, theme.muted_foreground)
+                message(text, t.tx2)
             }
         }
     }
@@ -820,12 +839,12 @@ impl DevicePanel {
         let can_shutdown = key.platform.can_shutdown(view.read(cx).info());
         let can_rotate = key.platform.can_rotate();
         let rotate_view = view.clone();
-        let theme = cx.theme();
+        let t = cx.tokens();
         let buttons = key.platform.controls().iter().map(|control| {
             let input = control.input;
-            Button::new(SharedString::from(format!("device-control-{}", control.id)))
-                .xsmall()
+            UiButton::new(SharedString::from(format!("device-control-{}", control.id)))
                 .ghost()
+                .small()
                 .icon(control.icon)
                 .tooltip(control.tooltip)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -836,12 +855,9 @@ impl DevicePanel {
             div()
                 .min_w_0()
                 .truncate()
-                .text_xs()
-                .text_color(if s.error {
-                    theme.danger
-                } else {
-                    theme.muted_foreground
-                })
+                .font_family(FONT_MONO)
+                .text_size(px(11.))
+                .text_color(if s.error { t.red } else { t.tx3 })
                 .child(s.text.clone())
         });
         Some(
@@ -851,7 +867,7 @@ impl DevicePanel {
                 .gap_1()
                 .flex_shrink_0()
                 .border_t_1()
-                .border_color(theme.border)
+                .border_color(t.line)
                 .child(
                     h_flex()
                         .flex_wrap()
@@ -862,27 +878,35 @@ impl DevicePanel {
                             this.children([(true, "Rotate left"), (false, "Rotate right")].map(
                                 |(left, label)| {
                                     let view = rotate_view.clone();
-                                    Button::new(SharedString::from(format!("device-rotate-{left}")))
-                                        .xsmall()
-                                        .ghost()
-                                        .icon(if left {
-                                            gpui_kit::assets::IconName::RotateCcw
-                                        } else {
-                                            gpui_kit::assets::IconName::RotateCw
-                                        })
-                                        .tooltip(label)
-                                        .on_click(move |_, _, cx| {
+                                    UiButton::new(SharedString::from(format!(
+                                        "device-rotate-{left}"
+                                    )))
+                                    .ghost()
+                                    .small()
+                                    .icon(if left {
+                                        gpui_kit::assets::IconName::RotateCcw
+                                    } else {
+                                        gpui_kit::assets::IconName::RotateCw
+                                    })
+                                    .tooltip(label)
+                                    .on_click(
+                                        move |_, _, cx| {
                                             view.update(cx, |view, _| view.rotate(left));
-                                        })
+                                        },
+                                    )
                                 },
                             ))
                         })
                         .when(can_shutdown, |this| {
                             this.child(
-                                Button::new("device-shutdown")
-                                    .xsmall()
-                                    .label("Shutdown")
-                                    .loading(self.shutting_down)
+                                UiButton::new("device-shutdown")
+                                    .label(if self.shutting_down {
+                                        "Shutting down…"
+                                    } else {
+                                        "Shut down"
+                                    })
+                                    .small()
+                                    .disabled(self.shutting_down)
                                     .tooltip("Shut the device down")
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.shutdown_device(cx)),
@@ -909,9 +933,9 @@ impl Render for DevicePanel {
         };
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(cx.tokens().app)
             .child(header)
-            .child(picker)
+            .children(picker)
             .children(backend)
             .child(body)
             .children(logs)

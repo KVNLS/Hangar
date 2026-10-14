@@ -9,4 +9,4 @@ pub mod review;
 mod view;
 
 pub use live::WorkspaceDiff;
-pub use view::{Busy, ChangesEvent, ChangesPanel, PanelSource};
+pub use view::{Busy, ChangesEvent, ChangesPanel, ExitReview, PanelSource, ReviewStats};

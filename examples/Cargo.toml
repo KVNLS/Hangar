@@ -10,6 +10,7 @@ publish.workspace = true
 anyhow.workspace = true
 gpui-kit.workspace = true
 hangar-app.workspace = true
+hangar-core.workspace = true
 hangar-terminal.workspace = true
 hangar-devices.workspace = true
 image.workspace = true

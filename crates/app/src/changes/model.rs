@@ -191,6 +191,67 @@ pub fn flatten(file: &FileDiff) -> Vec<DiffRow> {
     rows
 }
 
+/// A row of the side-by-side diff, as indices into the unified rows (so highlighting computed
+/// for the unified view is reused).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitRow {
+    /// Spans both sides: hunk headers, notices, `\ No newline at end of file`.
+    Full(usize),
+    /// Old side and new side; `None` leaves that side blank.
+    Pair {
+        left: Option<usize>,
+        right: Option<usize>,
+    },
+}
+
+/// Pairs each run of removed lines with the added lines that follow it, row by row; context
+/// lines appear on both sides.
+pub fn split_rows(rows: &[DiffRow], file: &FileDiff) -> Vec<SplitRow> {
+    fn flush(out: &mut Vec<SplitRow>, removed: &mut Vec<usize>, added: &mut Vec<usize>) {
+        let n = removed.len().max(added.len());
+        out.extend((0..n).map(|i| SplitRow::Pair {
+            left: removed.get(i).copied(),
+            right: added.get(i).copied(),
+        }));
+        removed.clear();
+        added.clear();
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    let (mut removed, mut added) = (Vec::new(), Vec::new());
+    for (ix, row) in rows.iter().enumerate() {
+        let kind = match *row {
+            DiffRow::Line { hunk, line } => file
+                .hunks
+                .get(hunk)
+                .and_then(|h| h.lines.get(line))
+                .map(|l| l.kind),
+            _ => None,
+        };
+        match kind {
+            Some(LineKind::Removed) => {
+                if !added.is_empty() {
+                    flush(&mut out, &mut removed, &mut added);
+                }
+                removed.push(ix);
+            }
+            Some(LineKind::Added) => added.push(ix),
+            Some(LineKind::Context) => {
+                flush(&mut out, &mut removed, &mut added);
+                out.push(SplitRow::Pair {
+                    left: Some(ix),
+                    right: Some(ix),
+                });
+            }
+            Some(LineKind::NoNewlineAtEof) | None => {
+                flush(&mut out, &mut removed, &mut added);
+                out.push(SplitRow::Full(ix));
+            }
+        }
+    }
+    flush(&mut out, &mut removed, &mut added);
+    out
+}
+
 pub fn hunk_header(hunk: &Hunk) -> String {
     let mut text = format!(
         "@@ -{},{} +{},{} @@",
@@ -643,5 +704,42 @@ mod tests {
             [(0..4, 's'), (4..5, 'v')]
         );
         assert!(split_runs(&runs, &(6..6), &DisplayLine::new("")).is_empty());
+    }
+
+    #[test]
+    fn split_rows_pair_removed_with_added() {
+        use LineKind::*;
+        let f = file(
+            "a",
+            FileStatus::Modified,
+            vec![hunk(vec![
+                line(Context, "a"),
+                line(Removed, "b"),
+                line(Removed, "c"),
+                line(Added, "B"),
+                line(Context, "d"),
+                line(Added, "e"),
+                line(Added, "f"),
+                line(Removed, "g"),
+                line(NoNewlineAtEof, ""),
+            ])],
+        );
+        let rows = flatten(&f);
+        let pair = |l: Option<usize>, r: Option<usize>| SplitRow::Pair { left: l, right: r };
+        // Row 0 is the hunk header; lines start at 1.
+        assert_eq!(
+            split_rows(&rows, &f),
+            [
+                SplitRow::Full(0),
+                pair(Some(1), Some(1)),
+                pair(Some(2), Some(4)),
+                pair(Some(3), None),
+                pair(Some(5), Some(5)),
+                pair(None, Some(6)),
+                pair(None, Some(7)),
+                pair(Some(8), None),
+                SplitRow::Full(9),
+            ]
+        );
     }
 }

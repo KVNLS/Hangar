@@ -8,7 +8,7 @@ use std::process::Command;
 
 use hangar_worktree::{
     DiffOptions, FileDiff, FileStatus, LineKind, check_ignored, diff_file, diff_files,
-    diff_files_with, diff_paths, git_dirs, merge_base,
+    diff_files_with, diff_paths, git_dirs, list_files, merge_base,
 };
 use tempfile::TempDir;
 
@@ -168,6 +168,20 @@ fn detects_renames() {
     assert_eq!(moved.path, Path::new("moved/long text.txt"));
     assert_eq!(moved.old_path.as_deref(), Some(Path::new("long.txt")));
     assert_eq!((moved.insertions, moved.deletions), (1, 1));
+}
+
+#[test]
+fn list_files_tracked_and_untracked_not_ignored_or_deleted() {
+    let repo = Repo::new();
+    repo.write("src/new.rs", "fn n() {}\n");
+    repo.write("debug.log", "ignored\n");
+    repo.write("ignored/inside.txt", "ignored\n");
+    fs::remove_file(repo.path.join("long.txt")).unwrap();
+    let files = list_files(&repo.path).unwrap();
+    assert_eq!(
+        files,
+        [".gitignore", "README.md", "lib.rs", "src/new.rs"].map(PathBuf::from)
+    );
 }
 
 #[test]
