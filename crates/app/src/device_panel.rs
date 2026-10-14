@@ -9,7 +9,6 @@ mod picker;
 mod platform;
 mod render;
 
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -206,8 +205,6 @@ pub struct DevicePanel {
     /// The focused workspace: its pool device is shown instead of the picker's.
     workspace: Option<WorkspaceId>,
     attached: Option<Attached>,
-    /// Workspaces whose device the panel already started once (not again after a shutdown).
-    started: HashSet<WorkspaceId>,
     /// The workspace's base device as last shown in the select.
     synced_base: Option<DeviceKey>,
     visible: bool,
@@ -277,7 +274,6 @@ impl DevicePanel {
             pool,
             workspace: None,
             attached: None,
-            started: HashSet::new(),
             synced_base: None,
             visible: false,
             _tick: tick,
@@ -318,8 +314,8 @@ impl DevicePanel {
         self.workspace
     }
 
-    /// Follows the pool: attaches a view to the workspace's open device, drops it when the
-    /// device closes, and starts the device the first time the panel shows it.
+    /// Follows the pool: attaches a view to the workspace's open device and drops it when the
+    /// device closes. Never boots: the agent, ⌘R or the Start button do, on demand.
     fn sync_attached(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let base = self.workspace.and_then(|ws| {
             self.pool.read(cx).assignment(ws).map(|a| DeviceKey {
@@ -332,15 +328,12 @@ impl DevicePanel {
             self.sync_select(window, cx);
         }
         let ws = self.workspace.filter(|_| self.visible);
-        let (session, reason, closed) = match ws {
+        let (session, reason) = match ws {
             Some(ws) => match self.pool.read(cx).status(ws) {
-                DeviceStatus::Open { session, reason } => {
-                    (Some(session.clone()), reason.cloned(), false)
-                }
-                DeviceStatus::Closed { error: None, .. } => (None, None, true),
-                _ => (None, None, false),
+                DeviceStatus::Open { session, reason } => (Some(session.clone()), reason.cloned()),
+                _ => (None, None),
             },
-            None => (None, None, false),
+            None => (None, None),
         };
         match (ws, session) {
             (Some(ws), Some(session)) => {
@@ -370,23 +363,13 @@ impl DevicePanel {
                     self.shutting_down = false;
                 }
             }
-            (ws, None) => {
-                self.attached = None;
-                if let Some(ws) = ws
-                    && closed
-                    && self.started.insert(ws)
-                {
-                    self.start_workspace_device(ws, cx);
-                }
-            }
-            (None, Some(_)) => self.attached = None,
+            (_, None) | (None, Some(_)) => self.attached = None,
         }
         cx.notify();
     }
 
     /// Starts (boots if needed, then opens) the focused workspace's device.
     pub fn start_workspace_device(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) {
-        self.started.insert(ws);
         let task = self.pool.update(cx, |pool, cx| pool.ensure(ws, cx));
         cx.spawn(async move |_, _| {
             if let Err(err) = task.await {

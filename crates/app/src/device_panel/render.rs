@@ -372,8 +372,8 @@ impl DevicePanel {
                                 "Workspaces share one device on this Mac and take turns (see \
                                  Settings › Devices)."
                             } else {
-                                "This workspace's own device. Start it to see the screen; ⌘R \
-                                 starts it too."
+                                "This workspace's own device. It starts when the agent or ⌘R \
+                                 needs it, or start it now to see the screen."
                             })
                             .action(
                                 UiButton::new("device-start")
