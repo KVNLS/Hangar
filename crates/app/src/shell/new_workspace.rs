@@ -99,7 +99,7 @@ impl HangarApp {
                         let auto = if slug.is_empty() {
                             "hangar/<name>".to_owned()
                         } else {
-                            paths::branch_name(&slug)
+                            hangar_core::branch_name(&slug)
                         };
                         sheet
                             .branch
@@ -328,11 +328,17 @@ impl HangarApp {
             "Name the workspace to create its branch and worktree.".to_owned()
         } else {
             let path = paths::worktrees_root()
-                .map(|root| tilde(&paths::worktree_path(&root, &slugify(&project.name), &slug)))
+                .map(|root| {
+                    tilde(&hangar_core::worktree_path(
+                        &root,
+                        &slugify(&project.name),
+                        &slug,
+                    ))
+                })
                 .unwrap_or_default();
             let typed = sheet.branch.read(cx).value().trim().to_owned();
             let branch = if typed.is_empty() {
-                paths::branch_name(&slug)
+                hangar_core::branch_name(&slug)
             } else {
                 typed
             };

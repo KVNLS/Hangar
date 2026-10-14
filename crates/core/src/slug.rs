@@ -1,3 +1,10 @@
+//! How workspaces are named: slugs, Hangar's branch names and worktree locations.
+
+use std::path::{Path, PathBuf};
+
+/// Prefix of every branch Hangar creates.
+pub const BRANCH_PREFIX: &str = "hangar/";
+
 const MAX_LEN: usize = 48;
 const FALLBACK: &str = "workspace";
 
@@ -27,6 +34,26 @@ pub fn slugify(name: &str) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+pub fn branch_name(slug: &str) -> String {
+    format!("{BRANCH_PREFIX}{slug}")
+}
+
+/// `<root>/<project slug>/<slug>`.
+pub fn worktree_path(root: &Path, project_slug: &str, slug: &str) -> PathBuf {
+    root.join(project_slug).join(slug)
+}
+
+/// `base`, else `base-2`, `base-3`, … — the first candidate `is_taken` rejects.
+pub fn unique_slug(base: &str, mut is_taken: impl FnMut(&str) -> bool) -> String {
+    if !is_taken(base) {
+        return base.to_owned();
+    }
+    (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|candidate| !is_taken(candidate))
+        .unwrap_or_else(|| base.to_owned())
 }
 
 #[cfg(test)]
@@ -67,5 +94,25 @@ mod tests {
         assert_eq!(slugify(""), "workspace");
         assert_eq!(slugify("!!! ---"), "workspace");
         assert_eq!(slugify("日本語"), "workspace");
+    }
+
+    #[test]
+    fn branch_is_prefixed() {
+        assert_eq!(branch_name("fix-login"), "hangar/fix-login");
+    }
+
+    #[test]
+    fn worktree_path_nests_project_and_slug() {
+        assert_eq!(
+            worktree_path(Path::new("/root"), "my-app", "fix-login"),
+            PathBuf::from("/root/my-app/fix-login")
+        );
+    }
+
+    #[test]
+    fn unique_slug_appends_counter() {
+        assert_eq!(unique_slug("a", |_| false), "a");
+        let taken = ["a", "a-2"];
+        assert_eq!(unique_slug("a", |s| taken.contains(&s)), "a-3");
     }
 }

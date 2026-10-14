@@ -13,4 +13,4 @@ pub use model::{
     WorkspaceId, WorkspaceStatus,
 };
 pub use setting::Setting;
-pub use slug::slugify;
+pub use slug::{BRANCH_PREFIX, branch_name, slugify, unique_slug, worktree_path};

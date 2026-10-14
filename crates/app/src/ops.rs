@@ -10,14 +10,13 @@ use anyhow::{Context as _, anyhow};
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, AgentHandle, PtyAdapter, SpawnContext, UpdateHook};
 use hangar_core::{
-    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
-    WorkspaceStatus, slugify,
+    BRANCH_PREFIX, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
+    WorkspaceId, WorkspaceStatus, branch_name, slugify, unique_slug, worktree_path,
 };
 use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
 
 use crate::agents::{self, AgentExtras};
-use crate::paths::{BRANCH_PREFIX, branch_name, unique_slug, worktree_path};
 use crate::setting_keys;
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
 use crate::ui::theme::Appearance;
