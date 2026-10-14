@@ -148,3 +148,7 @@ priority = -1
 [lints.rust.unexpected_cfgs]
 level = "allow"
 priority = 0
+
+# Hangar: upstream code predates the cocoa deprecations; keep builds quiet.
+[lints.rust]
+deprecated = "allow"

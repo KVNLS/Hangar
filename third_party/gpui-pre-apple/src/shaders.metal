@@ -1277,3 +1277,14 @@ float4 fill_color(Background background,
 
   return color;
 }
+
+// Single-plane BGRA surfaces (an IOSurface another process or renderer draws into). The texture is
+// BGRA8Unorm, so sampling already yields RGBA-ordered floats, and the pipeline's blend state
+// (source_rgb = SourceAlpha) expects straight alpha. Linear, like the YCbCr path: surfaces are
+// often drawn scaled (Hangar fits a device screen into its panel), where nearest aliases text.
+fragment float4 surface_fragment_bgra(SurfaceFragmentInput input [[stage_in]],
+                                      texture2d<float> bgra_texture
+                                      [[texture(SurfaceInputIndex_YTexture)]]) {
+  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear);
+  return bgra_texture.sample(texture_sampler, input.texture_position);
+}
