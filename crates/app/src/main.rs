@@ -37,7 +37,11 @@
 //! - `HANGAR_DEV_DEVICE_TAP=<x>,<y>` — then tap at those device points and log whether a later
 //!   painted frame differs (`HANGAR_DEV_DEVICE_TAP painted frame changed`).
 //! - `HANGAR_DEV_DEVICE_HOME=1` — press Home first (same check).
-//! - `HANGAR_DEVICE_BACKEND=private|simctl` — force an iOS backend (no automatic fallback).
+//! - `HANGAR_DEV_DEVICE_TEXT=<text>` — type that text (after tap/home) with the same check.
+//! - `HANGAR_DEV_DEVICE_BOOT=1` — with `HANGAR_DEV_DEVICE=<AVD id>` of a shut-down Android
+//!   virtual device: boot it from the panel first, then open it (waits up to 5 minutes).
+//! - `HANGAR_DEVICE_BACKEND=private|simctl|grpc|adb` — force an iOS (`private`, `simctl`) or
+//!   Android (`grpc`, `adb`) backend (no automatic fallback).
 //! - `HANGAR_DEVICE_STATS=1` — force the stats overlay on.
 //! - The stats overlay (⌘⌥⇧P or the panel's Stats button) also logs `[device-stats]` lines.
 //!

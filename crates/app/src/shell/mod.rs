@@ -90,6 +90,10 @@ pub struct DevOptions {
     /// Tap at these device points once the device shows frames, then log whether the painted
     /// frame changed.
     pub device_tap: Option<(f64, f64)>,
+    /// Type this text into the device once it shows frames (same check as the tap).
+    pub device_text: Option<String>,
+    /// Boot the device first when it is a shut-down virtual device (Android AVD id).
+    pub device_boot: bool,
 }
 
 impl DevOptions {
@@ -121,6 +125,8 @@ impl DevOptions {
             }),
             device: var("HANGAR_DEV_DEVICE"),
             device_home: flag("HANGAR_DEV_DEVICE_HOME"),
+            device_text: var("HANGAR_DEV_DEVICE_TEXT"),
+            device_boot: flag("HANGAR_DEV_DEVICE_BOOT"),
             device_tap: var("HANGAR_DEV_DEVICE_TAP").and_then(|v| {
                 let parsed = v
                     .split_once(',')
@@ -1672,14 +1678,24 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
     if let Some(id) = dev.device.clone() {
         let mut inputs = Vec::new();
         if dev.device_home {
-            inputs.push(("HANGAR_DEV_DEVICE_HOME", hangar_devices::Input::Home));
+            inputs.push((
+                "HANGAR_DEV_DEVICE_HOME",
+                DevAction::Input(hangar_devices::Input::Home),
+            ));
         }
         if let Some((x, y)) = dev.device_tap {
-            inputs.push(("HANGAR_DEV_DEVICE_TAP", hangar_devices::Input::Tap { x, y }));
+            inputs.push((
+                "HANGAR_DEV_DEVICE_TAP",
+                DevAction::Input(hangar_devices::Input::Tap { x, y }),
+            ));
         }
+        if let Some(text) = dev.device_text.clone() {
+            inputs.push(("HANGAR_DEV_DEVICE_TEXT", DevAction::Text(text)));
+        }
+        let boot = dev.device_boot;
         let this = this.clone();
         // Runs alongside the other hooks: waiting for frames must not hold them up.
-        cx.spawn(async move |cx| dev_device(this, id, inputs, cx).await)
+        cx.spawn(async move |cx| dev_device(this, id, boot, inputs, cx).await)
             .detach();
     }
     if let Some(repo) = dev.open.clone() {
@@ -1756,14 +1772,21 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
 
 /// How long the device hooks wait for the device list and for frames.
 const DEV_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEV_BOOT_TIMEOUT: Duration = Duration::from_secs(300);
 const DEV_POLL: Duration = Duration::from_millis(100);
 
-/// `HANGAR_DEV_DEVICE` (+ `_HOME`, `_TAP`): opens the device panel on the device, waits for a
+enum DevAction {
+    Input(hangar_devices::Input),
+    Text(String),
+}
+
+/// `HANGAR_DEV_DEVICE` (+ `_BOOT`, `_HOME`, `_TAP`, `_TEXT`): opens the device panel on the device, waits for a
 /// painted frame, then sends each input and logs whether a later painted frame differs.
 async fn dev_device(
     this: WeakEntity<HangarApp>,
     id: String,
-    inputs: Vec<(&'static str, hangar_devices::Input)>,
+    boot: bool,
+    inputs: Vec<(&'static str, DevAction)>,
     cx: &mut AsyncWindowContext,
 ) {
     tracing::info!(%id, "HANGAR_DEV_DEVICE");
@@ -1794,7 +1817,17 @@ async fn dev_device(
             }
         }
     };
-    let _ = panel.update_in(cx, |panel, window, cx| panel.select_device(key, window, cx));
+    let mut deadline = deadline;
+    if boot {
+        // Booting takes minutes; the panel selects and opens the device once it is up.
+        deadline = std::time::Instant::now() + DEV_BOOT_TIMEOUT;
+        let _ = panel.update_in(cx, |panel, window, cx| {
+            panel.select_device(key.clone(), window, cx);
+            panel.boot_device(key, window, cx);
+        });
+    } else {
+        let _ = panel.update_in(cx, |panel, window, cx| panel.select_device(key, window, cx));
+    }
     let painted = |cx: &mut AsyncWindowContext| {
         panel.update(cx, |panel, cx| {
             panel
@@ -1818,19 +1851,29 @@ async fn dev_device(
         height = baseline.height,
         "HANGAR_DEV_DEVICE frame painted"
     );
-    'inputs: for (hook, input) in inputs {
+    'inputs: for (hook, action) in inputs {
         // Let animations settle so the baseline is what the input acts on.
         cx.background_executor().timer(Duration::from_secs(2)).await;
         let Some(baseline) = painted(cx) else {
             return;
         };
         let sent_at = std::time::Instant::now();
-        let sent = panel.update(cx, |panel, cx| panel.send(input, cx));
+        let sent = match &action {
+            DevAction::Input(input) => panel.update(cx, |panel, cx| panel.send(*input, cx)),
+            DevAction::Text(text) => {
+                panel.update(cx, |panel, cx| panel.send_text(text.clone(), cx))
+            }
+        };
         if !sent {
             tracing::error!("{hook}: device closed");
             return;
         }
-        tracing::info!(?input, seq = baseline.seq, "{hook} sent");
+        match &action {
+            DevAction::Input(input) => tracing::info!(?input, seq = baseline.seq, "{hook} sent"),
+            DevAction::Text(text) => {
+                tracing::info!(%text, seq = baseline.seq, "{hook} sent");
+            }
+        }
         let deadline = sent_at + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
             wait(cx).await;

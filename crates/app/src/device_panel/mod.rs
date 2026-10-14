@@ -473,6 +473,17 @@ impl DevicePanel {
         true
     }
 
+    /// Types text into the open device. Returns `false` when no device is open.
+    pub fn send_text(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+        let Some(view) = self.view() else {
+            return false;
+        };
+        view.read(cx).send_text(text);
+        self.input_status = None;
+        cx.notify();
+        true
+    }
+
     /// The error of the last input, if it failed.
     pub fn input_error(&self) -> Option<SharedString> {
         self.input_status
