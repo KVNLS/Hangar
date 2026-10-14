@@ -8,8 +8,6 @@ pub enum Stack {
     Expo { dir: PathBuf },
     /// `package.json` depending on `react-native` (without Expo).
     ReactNative { dir: PathBuf },
-    /// `pubspec.yaml` depending on the Flutter SDK.
-    Flutter { dir: PathBuf },
     /// A native iOS app: `container` is the `.xcworkspace`, else the `.xcodeproj`.
     Xcode { container: PathBuf },
     /// A native Android app: `dir` holds `settings.gradle(.kts)`, `module` applies
@@ -22,7 +20,6 @@ impl Stack {
         match self {
             Self::Expo { .. } => "Expo",
             Self::ReactNative { .. } => "React Native",
-            Self::Flutter { .. } => "Flutter",
             Self::Xcode { .. } => "Xcode",
             Self::Gradle { .. } => "Gradle",
         }
@@ -30,13 +27,13 @@ impl Stack {
 }
 
 impl Stack {
-    /// Whether this stack builds for `platform` (React Native, Expo and Flutter build for both).
+    /// Whether this stack builds for `platform` (React Native and Expo build for both).
     pub fn targets(&self, platform: hangar_devices::Platform) -> bool {
         use hangar_devices::Platform;
         match self {
             Self::Xcode { .. } => platform == Platform::Ios,
             Self::Gradle { .. } => platform == Platform::Android,
-            Self::Expo { .. } | Self::ReactNative { .. } | Self::Flutter { .. } => true,
+            Self::Expo { .. } | Self::ReactNative { .. } => true,
         }
     }
 }
@@ -50,21 +47,13 @@ pub fn pick_stack(stacks: &[Stack], platform: hangar_devices::Platform) -> Optio
 /// Native subprojects that cross-platform stacks keep next to their sources.
 const NATIVE_DIRS: [&str; 2] = ["ios", "android"];
 
-/// Stacks found at `root` and in its `ios/` and `android/` directories. React Native, Expo and
-/// Flutter own those directories, so their native projects are not listed separately.
+/// Stacks found at `root` and in its `ios/` and `android/` directories. React Native and Expo
+/// own those directories, so their native projects are not listed separately.
 pub fn detect(root: &Path) -> Vec<Stack> {
-    let mut found = Vec::new();
     if let Some(stack) = js_stack(root) {
-        found.push(stack);
+        return vec![stack];
     }
-    if is_flutter(root) {
-        found.push(Stack::Flutter {
-            dir: PathBuf::new(),
-        });
-    }
-    if !found.is_empty() {
-        return found;
-    }
+    let mut found = Vec::new();
     for dir in std::iter::once("").chain(NATIVE_DIRS) {
         let rel = PathBuf::from(dir);
         let abs = root.join(&rel);
@@ -99,14 +88,6 @@ fn js_stack(dir: &Path) -> Option<Stack> {
     } else {
         None
     }
-}
-
-/// `pubspec.yaml` with `sdk: flutter` under a dependency. A line scan is enough for that.
-fn is_flutter(dir: &Path) -> bool {
-    fs::read_to_string(dir.join("pubspec.yaml")).is_ok_and(|text| {
-        text.lines()
-            .any(|line| line.trim().replace(' ', "") == "sdk:flutter")
-    })
 }
 
 fn xcode_container(dir: &Path) -> Option<PathBuf> {
@@ -217,33 +198,6 @@ mod tests {
     }
 
     #[test]
-    fn flutter_pubspec() {
-        let tmp = tempfile::tempdir().unwrap();
-        write(
-            tmp.path(),
-            "pubspec.yaml",
-            "name: demo\ndependencies:\n  flutter:\n    sdk: flutter\n",
-        );
-        assert_eq!(
-            detect(tmp.path()),
-            vec![Stack::Flutter {
-                dir: PathBuf::new()
-            }]
-        );
-    }
-
-    #[test]
-    fn dart_package_without_flutter_is_not_a_stack() {
-        let tmp = tempfile::tempdir().unwrap();
-        write(
-            tmp.path(),
-            "pubspec.yaml",
-            "name: cli\ndependencies:\n  args: ^2.0.0\n",
-        );
-        assert!(detect(tmp.path()).is_empty());
-    }
-
-    #[test]
     fn xcode_prefers_the_workspace() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("Demo.xcodeproj/project.xcworkspace")).unwrap();
@@ -324,10 +278,11 @@ mod tests {
         ];
         assert_eq!(pick_stack(&native, Platform::Android), native.get(1));
         assert_eq!(pick_stack(&native, Platform::Ios), native.first());
-        let flutter = vec![Stack::Flutter {
+        let expo = vec![Stack::Expo {
             dir: PathBuf::new(),
         }];
-        assert_eq!(pick_stack(&flutter, Platform::Ios), flutter.first());
+        assert_eq!(pick_stack(&expo, Platform::Ios), expo.first());
+        assert_eq!(pick_stack(&expo, Platform::Android), expo.first());
         assert_eq!(pick_stack(&native[..1], Platform::Android), None);
     }
 

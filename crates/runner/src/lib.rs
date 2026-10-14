@@ -1,4 +1,4 @@
-//! Build and run per stack (Xcode, Gradle, React Native, Flutter).
+//! Build and run per stack (Xcode, Gradle, React Native, Expo).
 //!
 //! Headless: detects what a worktree holds, allocates dev-server ports and turns a stack plus a
 //! target device into plain command lines. The app runs those commands in terminal tabs.
