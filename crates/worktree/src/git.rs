@@ -136,6 +136,16 @@ impl Git {
         Err(self.failure(out))
     }
 
+    /// Runs git and returns its exit status, stdout and stderr whatever the exit code, for
+    /// commands whose failures are parsed (push rejections, commit hooks, merge conflicts).
+    pub(crate) fn output<I, S>(&self, args: I, input: Option<&[u8]>) -> Result<RawOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.exec_with(args, input)
+    }
+
     fn exec<I, S>(&self, args: I) -> Result<RawOutput>
     where
         I: IntoIterator<Item = S>,
@@ -197,7 +207,7 @@ impl Git {
         })
     }
 
-    fn failure(&self, out: RawOutput) -> Error {
+    pub(crate) fn failure(&self, out: RawOutput) -> Error {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
         if stderr.contains("not a git repository") {
             return Error::NotARepo(self.dir.clone());
@@ -214,11 +224,21 @@ impl Git {
     }
 }
 
-struct RawOutput {
-    args: Vec<OsString>,
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+pub(crate) struct RawOutput {
+    pub args: Vec<OsString>,
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl RawOutput {
+    pub fn stdout_text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+
+    pub fn stderr_text(&self) -> String {
+        String::from_utf8_lossy(&self.stderr).trim().to_owned()
+    }
 }
 
 /// Converts a path emitted by git (`-z` output, unquoted) to a `PathBuf`.
