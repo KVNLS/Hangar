@@ -127,12 +127,10 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
   aside).
 - [x] No `hangar_devices::` paths in `app/src` outside the adapters (tests aside). Shared types come
   from `core::device`; the rest (`Device`, `LogStream`, `android`, `simctl`, `ios`, ...) is
-  re-exported by `adapters::devices` (git helpers by `adapters::vcs`). `architecture.rs` enforces it;
-  the only exceptions are `shell.rs` and `shell/run*`, allow-listed until the shell split merges.
-- [x] `HangarApp` has at most 15 fields.
-- [ ] No source file over about 800 lines (today, all in `app` unless noted: `shell.rs` 1,065,
-  `shell/lifecycle.rs` 1,025, `chat_view.rs` 1,003, `chat_view/render.rs` 984, `shell/overview.rs`
-  890, `ops/tests.rs` 870, `mcp/src/tools.rs` 862, `shell/run.rs` 842).
+  re-exported by `adapters::devices` (git helpers by `adapters::vcs`), so `app` still uses those
+  types, only through one module. `architecture.rs` enforces it.
+- [ ] `HangarApp` has at most 15 fields (18 again as of M10).
+- [x] No source file over about 800 lines (M10 split).
 - [x] Every port is tested against its real adapter.
 
 ## References

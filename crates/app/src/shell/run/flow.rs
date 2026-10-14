@@ -154,7 +154,7 @@ impl HangarApp {
                         .background_executor()
                         .spawn(async move {
                             let adb = adb.ok_or_else(|| anyhow!("adb not found (Android SDK)"))?;
-                            hangar_devices::android::adb::Adb::new(adb)
+                            crate::adapters::devices::android::adb::Adb::new(adb)
                                 .reverse(&serial, port)
                                 .map_err(anyhow::Error::from)
                         })

@@ -150,10 +150,6 @@ fn core_stays_free_of_runtime_and_io_crates() {
     }
 }
 
-/// Files still allowed to name adapter crates until the shell split lands.
-// TODO(m10): remove after the shell split merge
-const ADAPTER_PATH_ALLOWLIST: &[&str] = &["shell.rs", "shell/run.rs", "shell/run/"];
-
 fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -180,11 +176,7 @@ fn app_names_adapter_crates_only_in_adapters() {
             .to_string_lossy()
             .into_owned();
         let is_test_file = rel.ends_with("tests.rs") || rel.contains("/tests/");
-        if rel == "adapters.rs"
-            || rel.starts_with("adapters/")
-            || is_test_file
-            || ADAPTER_PATH_ALLOWLIST.iter().any(|a| rel.starts_with(a))
-        {
+        if rel == "adapters.rs" || rel.starts_with("adapters/") || is_test_file {
             continue;
         }
         let text = std::fs::read_to_string(&file).unwrap();

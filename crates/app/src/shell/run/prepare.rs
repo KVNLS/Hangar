@@ -62,7 +62,7 @@ pub(super) fn prepare(
     // The serial of a running emulator changes per boot: look it up by AVD when not known.
     if let Some(avd) = &target.avd
         && !target.id.starts_with("emulator-")
-        && let Some(found) = hangar_devices::android::discovery::scan()
+        && let Some(found) = crate::adapters::devices::android::discovery::scan()
             .into_iter()
             .find(|d| &d.avd_id == avd)
     {
@@ -76,7 +76,7 @@ pub(super) fn prepare(
         build_dir,
     })?;
     let setup = hangar_runner::setup(stack, root);
-    let sdk = hangar_devices::android::AndroidSdk::locate().ok();
+    let sdk = crate::adapters::devices::android::AndroidSdk::locate().ok();
     let mut path_dirs: Vec<String> = Vec::new();
     let mut env = Vec::new();
     if let Some(sdk) = &sdk {
