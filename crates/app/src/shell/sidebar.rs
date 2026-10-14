@@ -12,9 +12,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use super::status::DiffCounts;
 use super::*;
 use crate::ui::components::{AgentMark, Delta, StateGlyph, UiButton, section_label, state_colors};
-use crate::ui::{
-    ActiveTokens as _, RADIUS_CONTROL, ROW_HEIGHT, ROW_HEIGHT_DENSE, SIDEBAR_WIDTH, TypeScale as _,
-};
+use crate::ui::{ActiveTokens as _, RADIUS_CONTROL, ROW_HEIGHT, ROW_HEIGHT_DENSE, TypeScale as _};
 
 #[derive(Clone)]
 pub(super) struct WorkspaceRow {
@@ -409,7 +407,7 @@ impl HangarApp {
         };
 
         v_flex()
-            .w(SIDEBAR_WIDTH)
+            .w(px(self.layout.sidebar_width))
             .flex_none()
             .h_full()
             .bg(t.panel)

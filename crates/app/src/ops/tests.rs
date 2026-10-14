@@ -554,8 +554,12 @@ fn settings_are_loaded_and_bad_ones_reported() {
     let layout = PaneLayout {
         panes: vec![Some(WorkspaceId::new()), None],
         focused: 1,
+        columns: vec![1, 1],
         sizes: vec![0.4, 0.6],
+        rows: vec![Vec::new(), Vec::new()],
         split: None,
+        panel_width: Some(480.0),
+        sidebar_width: Some(300.0),
     };
     save_layout(&f.store, &layout).unwrap();
     save_agent(&f.store, "codex").unwrap();
@@ -564,10 +568,7 @@ fn settings_are_loaded_and_bad_ones_reported() {
     assert_eq!(loaded.agent.as_deref(), Some("codex"));
     assert!(loaded.changes.is_none());
 
-    let changes = ChangesLayout {
-        open: true,
-        width: 640.0,
-    };
+    let changes = ChangesLayout { open: true };
     save_changes(&f.store, &changes).unwrap();
     assert_eq!(load(&f.store).unwrap().changes, Some(changes));
 
@@ -586,7 +587,6 @@ fn device_settings_round_trip() {
     assert!(load(&f.store).unwrap().device.is_none());
     let device = DeviceLayout {
         open: true,
-        width: 380.0,
         selected: Some(DeviceKey {
             platform: Platform::Ios,
             id: "E33FE595-67AD-470C-AD94-A38EAC9D0F38".into(),
@@ -662,10 +662,7 @@ fn device_settings_round_trip() {
         )
         .unwrap();
     let old = load(&f.store).unwrap().device.unwrap();
-    assert_eq!(
-        (old.open, old.width, old.selected, old.stats),
-        (false, 300.0, None, false)
-    );
+    assert_eq!((old.open, old.selected, old.stats), (false, None, false));
     assert!(!old.logs && old.log_level.is_none());
 
     // A broken device setting is reported but leaves the other settings alone.

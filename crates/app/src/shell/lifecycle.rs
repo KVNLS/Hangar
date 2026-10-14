@@ -404,8 +404,8 @@ impl HangarApp {
             return;
         }
         let terminal = Arc::clone(handle.session());
-        let view =
-            cx.new(|cx| TerminalView::attach(terminal, waker, TerminalViewOptions::default(), cx));
+        let options = TerminalViewOptions::for_program(handle.program());
+        let view = cx.new(|cx| TerminalView::attach(terminal, waker, options, cx));
         let exit = cx.subscribe_in(
             &view,
             window,

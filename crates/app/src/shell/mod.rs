@@ -61,9 +61,9 @@ use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
 use crate::setting_keys;
 use crate::state::{
-    CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, MAX_PANES, PaneLayout,
-    Panes, ProjectEntry, ProjectList, changes_width, device_width, pane_shares, sanitize_shares,
-    status_label,
+    ChangesLayout, DeviceLayout, MAX_PANES, PANEL_DEFAULT_WIDTH, PANEL_WIDTH_RANGE, PaneLayout,
+    Panes, ProjectEntry, ProjectList, SIDEBAR_DEFAULT_WIDTH, pane_shares, panel_width,
+    sidebar_width, status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
 pub use chrome::titlebar_options;
@@ -74,11 +74,9 @@ use dialogs::DeleteWorkspaceDialog;
 pub use run::RunConfig;
 use view::agent_options;
 
-/// Width of the sidebar; the panes share the rest.
-const SIDEBAR_WIDTH: f32 = 256.;
 /// How long a killed agent gets to exit before its worktree is removed.
 const KILL_GRACE: Duration = Duration::from_secs(3);
-/// The panes keep at least this much width when the changes panel is dragged wider.
+/// The panes keep at least this much width when the right panel is dragged wider.
 const MIN_PANES_WIDTH: f32 = 320.;
 /// Quiet time after a panel resize before the width is saved.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -103,12 +101,18 @@ actions!(
         ToggleTheme,
         ToggleOverview,
         OpenSettings,
+        CloseScreen,
         NextNeedingYou,
         Run,
         StopRun,
         RestartServer,
         SplitPane,
+        SplitPaneDown,
         ClosePane,
+        FocusPane1,
+        FocusPane2,
+        FocusPane3,
+        FocusPane4,
         Quit
     ]
 );
@@ -135,10 +139,19 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-r", Run, None),
         KeyBinding::new("cmd-.", StopRun, None),
         KeyBinding::new("cmd-d", SplitPane, None),
+        KeyBinding::new("cmd-\\", SplitPane, None),
+        // macOS reports ⌘⇧\ as ⌘| (shift folded into the character).
+        KeyBinding::new("cmd-|", SplitPaneDown, None),
+        KeyBinding::new("cmd-alt-1", FocusPane1, None),
+        KeyBinding::new("cmd-alt-2", FocusPane2, None),
+        KeyBinding::new("cmd-alt-3", FocusPane3, None),
+        KeyBinding::new("cmd-alt-4", FocusPane4, None),
         KeyBinding::new("cmd-w", ClosePane, None),
         KeyBinding::new("cmd-s", DeviceScreenshot, Some(DEVICE_PANEL)),
         KeyBinding::new("cmd-shift-h", DeviceHome, Some(DEVICE_PANEL)),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
+        KeyBinding::new("escape", CloseScreen, Some("OverviewScreen")),
+        KeyBinding::new("escape", CloseScreen, Some("SettingsScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
     ]);
@@ -273,19 +286,19 @@ struct DiffEntry {
     _observe: Subscription,
 }
 
-/// Drag payload of the changes panel's resize handle.
-struct ChangesResize;
+/// Drag payload of the sidebar's resize handle.
+struct SidebarResize;
 
-impl Render for ChangesResize {
+impl Render for SidebarResize {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Empty
     }
 }
 
-/// Drag payload of the device panel's resize handle.
-struct DeviceResize;
+/// Drag payload of the right panel's resize handle.
+struct PanelResize;
 
-impl Render for DeviceResize {
+impl Render for PanelResize {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Empty
     }
@@ -307,13 +320,10 @@ enum Screen {
 /// What the window shows and how it is laid out, with its debounced saves.
 struct Layout {
     panes: Panes,
-    pane_sizes: Entity<ResizableState>,
-    /// Each pane's share of the width, once the user has resized (or it was restored); empty
-    /// means equal shares.
-    pane_shares: Vec<f32>,
-    /// Pending resize of the pane group to `pane_shares`; replacing it cancels the previous one.
+    pane_groups: layout::PaneGroups,
+    /// Pending resize of the pane groups to the panes' shares; replacing it cancels the
+    /// previous one.
     apply_shares: Option<Task<()>>,
-    _pane_sizes_sub: Subscription,
     palette: Option<palette::Palette>,
     overview_by_project: bool,
     settings_tab: settings::SettingsTab,
@@ -321,14 +331,19 @@ struct Layout {
     _appearance_observer: Subscription,
     changes: ChangesLayout,
     files_open: bool,
-    save_changes: Option<Task<()>>,
     /// The window's device panel; it shows the focused workspace's device.
     device: DeviceLayout,
-    save_device: Option<Task<()>>,
+    /// The right panel's width, shared by its tabs.
+    panel_width: f32,
+    /// The tab the right panel shows when reopened.
+    panel_tab: layout::PanelTab,
     /// The pending (debounced) pane layout save.
     save_panes: Option<Task<()>>,
     sidebar_open: bool,
+    sidebar_width: f32,
     screen: Screen,
+    /// Focused while the overview or settings fill the window, so esc returns to the workspace.
+    screen_focus: FocusHandle,
     sidebar_filter: Entity<InputState>,
     collapsed_projects: HashSet<ProjectId>,
     /// Projects whose archived group is expanded.
@@ -428,7 +443,7 @@ impl HangarApp {
                 cx.notify();
             },
         );
-        let (pane_sizes, pane_sizes_sub) = Self::new_pane_sizes(window, cx);
+        let pane_groups = Self::new_pane_groups(1, window, cx);
 
         let changes_panel = cx.new(ChangesPanel::new);
         let shell = cx.entity().downgrade();
@@ -542,10 +557,8 @@ impl HangarApp {
             focus,
             layout: Layout {
                 panes: Panes::default(),
-                pane_sizes,
-                pane_shares: Vec::new(),
+                pane_groups,
                 apply_shares: None,
-                _pane_sizes_sub: pane_sizes_sub,
                 palette: None,
                 overview_by_project: false,
                 settings_tab: Default::default(),
@@ -553,12 +566,14 @@ impl HangarApp {
                 _appearance_observer: appearance_observer,
                 changes: ChangesLayout::default(),
                 files_open: false,
-                save_changes: None,
                 device: DeviceLayout::default(),
-                save_device: None,
+                panel_width: PANEL_DEFAULT_WIDTH,
+                panel_tab: Default::default(),
                 save_panes: None,
                 sidebar_open: true,
+                sidebar_width: SIDEBAR_DEFAULT_WIDTH,
                 screen: Screen::Workspace,
+                screen_focus: cx.focus_handle(),
                 sidebar_filter,
                 collapsed_projects: HashSet::new(),
                 show_archived: HashSet::new(),
@@ -717,10 +732,10 @@ impl HangarApp {
                     self.restore_layout(&layout, window, cx);
                 }
                 if let Some(changes) = loaded.changes {
-                    self.layout.changes = changes.sanitized();
+                    self.layout.changes = changes;
                 }
                 if let Some(device) = loaded.device {
-                    self.layout.device = device.sanitized();
+                    self.layout.device = device;
                     let (selected, stats) = (
                         self.layout.device.selected.clone(),
                         self.layout.device.stats,
@@ -745,6 +760,9 @@ impl HangarApp {
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
                     self.layout.changes.open = false;
+                }
+                if self.layout.changes.open {
+                    self.layout.panel_tab = layout::PanelTab::Changes;
                 }
                 self.sync_diffs(cx);
                 self.sync_device_focus(window, cx);

@@ -18,6 +18,14 @@ pub fn titlebar_options() -> TitlebarOptions {
     }
 }
 
+/// The title of a screen that replaces the workspace (settings, overview, review).
+fn screen_crumb(title: &'static str, color: Hsla) -> Div {
+    div()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color)
+        .child(title)
+}
+
 impl HangarApp {
     /// The focused pane's workspace and its project.
     pub(super) fn focused_workspace(&self) -> Option<(&Project, &Workspace)> {
@@ -48,9 +56,16 @@ impl HangarApp {
             .items_center()
             .text_size(px(13.))
             .child(img(crate::assets::MARK_PATH).flex_none().size(px(16.)))
-            .map(|this| match crumb {
-                None => this.child(div().text_color(t.tx2).child("Hangar")),
-                Some((project, ws)) => this
+            .map(|this| match (self.layout.screen, crumb) {
+                (Screen::Settings, _) => this.child(screen_crumb("Settings", t.tx)),
+                (Screen::Overview, _) => this.child(screen_crumb("Overview", t.tx)),
+                (Screen::Review, Some((project, _))) => this
+                    .child(div().text_color(t.tx2).child(project.name.clone()))
+                    .child(div().text_color(t.tx3).child("/"))
+                    .child(screen_crumb("Review", t.tx)),
+                (Screen::Review, None) => this.child(screen_crumb("Review", t.tx)),
+                (Screen::Workspace, None) => this.child(div().text_color(t.tx2).child("Hangar")),
+                (Screen::Workspace, Some((project, ws))) => this
                     .child(div().text_color(t.tx2).child(project.name.clone()))
                     .child(div().text_color(t.tx3).child("/"))
                     .child(

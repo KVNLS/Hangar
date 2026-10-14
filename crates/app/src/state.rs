@@ -1,5 +1,7 @@
 //! UI-independent state: the project tree and which workspace each pane shows.
 
+use std::ops::Range;
+
 use hangar_core::{Project, ProjectId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 
@@ -128,54 +130,107 @@ impl ProjectList {
     }
 }
 
-/// What the window restores at startup: which workspace each pane shows, the focused pane and
-/// each pane's share of the width.
+/// What the window restores at startup: which workspace each pane shows, how the panes are
+/// arranged in columns, the focused pane and the panes' shares of the space.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PaneLayout {
+    /// In column order: top to bottom in each column, columns left to right.
     pub panes: Vec<Option<WorkspaceId>>,
     pub focused: usize,
-    /// Each pane's share of the width; empty means equal shares.
+    /// How many panes each column stacks; empty (layouts saved before panes could be split
+    /// down) means one pane per column.
+    #[serde(default)]
+    pub columns: Vec<usize>,
+    /// Each column's share of the width; empty means equal shares.
     #[serde(default)]
     pub sizes: Vec<f32>,
+    /// Each column's panes' shares of its height; empty means equal shares.
+    #[serde(default)]
+    pub rows: Vec<Vec<f32>>,
     /// Layouts saved with two fixed panes: the first pane's share.
     #[serde(default, skip_serializing)]
     pub split: Option<f32>,
+    /// Width of the right panel (device, changes and files share it); missing in layouts saved
+    /// when each tab had its own width.
+    #[serde(default)]
+    pub panel_width: Option<f32>,
+    /// Width of the sidebar; missing in layouts saved before it could be resized.
+    #[serde(default)]
+    pub sidebar_width: Option<f32>,
 }
 
 impl PaneLayout {
+    /// The saved right panel width, clamped; the default when missing or unusable.
+    pub fn panel_width(&self) -> f32 {
+        self.panel_width
+            .and_then(panel_width)
+            .unwrap_or(PANEL_DEFAULT_WIDTH)
+    }
+
+    /// The saved sidebar width, clamped; the default when missing or unusable.
+    pub fn sidebar_width(&self) -> f32 {
+        self.sidebar_width
+            .and_then(sidebar_width)
+            .unwrap_or(SIDEBAR_DEFAULT_WIDTH)
+    }
+
     /// Rebuilds panes from the layout, keeping only workspaces `keep` accepts, never showing one
-    /// twice and dropping empty panes (at least one pane remains). Returns the panes and their
-    /// sanitised width shares.
-    pub fn restore(&self, keep: impl Fn(WorkspaceId) -> bool) -> (Panes, Vec<f32>) {
+    /// twice and dropping empty panes and columns (at least one pane remains). Shares that no
+    /// longer fit are sanitised.
+    pub fn restore(&self, keep: impl Fn(WorkspaceId) -> bool) -> Panes {
         let saved_sizes = match self.split {
             Some(split) if self.sizes.is_empty() && self.panes.len() == 2 => {
                 vec![split, 1. - split]
             }
             _ => self.sizes.clone(),
         };
+        let saved_columns = if !self.columns.is_empty()
+            && self.columns.iter().all(|n| *n > 0)
+            && self.columns.iter().sum::<usize>() == self.panes.len()
+        {
+            self.columns.clone()
+        } else {
+            vec![1; self.panes.len()]
+        };
         let mut panes = Panes {
             slots: Vec::new(),
+            columns: Vec::new(),
             focused: 0,
+            shares: PaneShares::default(),
         };
-        let mut sizes = Vec::new();
+        let mut column_sizes = Vec::new();
         let mut focused = None;
-        for (pane, id) in self.panes.iter().enumerate() {
-            let Some(id) = *id else { continue };
-            if !keep(id) || panes.is_shown(id) || panes.count() == MAX_PANES {
-                continue;
+        let mut start = 0;
+        for (column, len) in saved_columns.into_iter().enumerate() {
+            let mut row_sizes = Vec::new();
+            for pane in start..start + len {
+                let Some(id) = self.panes[pane] else { continue };
+                if !keep(id) || panes.is_shown(id) || panes.count() == MAX_PANES {
+                    continue;
+                }
+                if pane == self.focused {
+                    focused = Some(panes.count());
+                }
+                panes.slots.push(Some(id));
+                let saved = self.rows.get(column).and_then(|r| r.get(pane - start));
+                row_sizes.push(saved.copied().unwrap_or(f32::NAN));
             }
-            if pane == self.focused {
-                focused = Some(panes.count());
+            start += len;
+            if !row_sizes.is_empty() {
+                panes.columns.push(row_sizes.len());
+                panes
+                    .shares
+                    .rows
+                    .push(sanitize_shares(&row_sizes, row_sizes.len()));
+                column_sizes.push(saved_sizes.get(column).copied().unwrap_or(f32::NAN));
             }
-            panes.slots.push(Some(id));
-            sizes.push(saved_sizes.get(pane).copied().unwrap_or(f32::NAN));
         }
         if panes.slots.is_empty() {
-            panes.slots.push(None);
+            return Panes::default();
         }
         panes.focused = focused.unwrap_or(0);
-        let sizes = sanitize_shares(&sizes, panes.count());
-        (panes, sizes)
+        panes.shares.columns = sanitize_shares(&column_sizes, panes.columns.len());
+        panes
     }
 }
 
@@ -202,18 +257,46 @@ pub fn sanitize_shares(shares: &[f32], count: usize) -> Vec<f32> {
     normalise(shares.into_iter().map(|s| s.max(MIN_PANE_SHARE)).collect())
 }
 
-/// Which workspace each tiled pane shows, and which pane has focus. Always at least one pane.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `shares` if there are `count` of them, else equal shares.
+fn or_equal(shares: &[f32], count: usize) -> Vec<f32> {
+    if shares.len() == count {
+        shares.to_vec()
+    } else {
+        vec![1. / count as f32; count]
+    }
+}
+
+/// The columns' shares of the width and each column's panes' shares of its height, once the
+/// user has resized them (or they were restored); empty means equal shares.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaneShares {
+    pub columns: Vec<f32>,
+    /// One entry per column.
+    pub rows: Vec<Vec<f32>>,
+}
+
+/// Which workspace each tiled pane shows, how the panes stack in columns, which pane has focus
+/// and how they share the space. Always at least one pane. Panes are numbered in column order:
+/// top to bottom in each column, columns left to right.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Panes {
     slots: Vec<Option<WorkspaceId>>,
+    /// How many panes each column stacks, left to right.
+    columns: Vec<usize>,
     focused: usize,
+    shares: PaneShares,
 }
 
 impl Default for Panes {
     fn default() -> Self {
         Self {
             slots: vec![None],
+            columns: vec![1],
             focused: 0,
+            shares: PaneShares {
+                columns: Vec::new(),
+                rows: vec![Vec::new()],
+            },
         }
     }
 }
@@ -237,6 +320,66 @@ impl Panes {
         }
     }
 
+    /// The panes of each column, left to right.
+    pub fn columns(&self) -> Vec<Range<usize>> {
+        let mut start = 0;
+        self.columns
+            .iter()
+            .map(|len| {
+                start += len;
+                start - len..start
+            })
+            .collect()
+    }
+
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// The column holding the pane (the last one for an unknown pane).
+    pub fn column_of(&self, pane: usize) -> usize {
+        self.columns()
+            .iter()
+            .position(|range| range.contains(&pane))
+            .unwrap_or(self.columns.len() - 1)
+    }
+
+    pub fn shares(&self) -> &PaneShares {
+        &self.shares
+    }
+
+    /// The columns' shares of the width (equal unless resized).
+    pub fn column_shares(&self) -> Vec<f32> {
+        or_equal(&self.shares.columns, self.column_count())
+    }
+
+    /// The column's panes' shares of its height (equal unless resized).
+    pub fn row_shares(&self, column: usize) -> Vec<f32> {
+        let len = self.columns.get(column).copied().unwrap_or(1);
+        or_equal(
+            self.shares.rows.get(column).map_or(&[][..], Vec::as_slice),
+            len,
+        )
+    }
+
+    /// Takes the columns' shares as resized by the user. Returns whether they fit.
+    pub fn set_column_shares(&mut self, shares: Vec<f32>) -> bool {
+        let fits = shares.len() == self.column_count() && shares.len() > 1;
+        if fits {
+            self.shares.columns = shares;
+        }
+        fits
+    }
+
+    /// Takes a column's panes' shares as resized by the user. Returns whether they fit.
+    pub fn set_row_shares(&mut self, column: usize, shares: Vec<f32>) -> bool {
+        let fits = self.columns.get(column) == Some(&shares.len()) && shares.len() > 1;
+        if fits {
+            self.shares.rows[column] = shares;
+        }
+        fits
+    }
+
     /// The pane showing the workspace.
     pub fn pane_of(&self, workspace: WorkspaceId) -> Option<usize> {
         self.slots.iter().position(|s| *s == Some(workspace))
@@ -257,22 +400,64 @@ impl Panes {
         self.slots.contains(&Some(workspace))
     }
 
-    /// Adds an empty pane right of the focused one and focuses it. Returns the new pane, or
-    /// `None` when the window already has [`MAX_PANES`].
+    /// Adds a column with one empty pane right of the focused pane's column, gives it half that
+    /// column's width and focuses it. Returns the new pane, or `None` when the window already
+    /// has [`MAX_PANES`].
     pub fn split(&mut self) -> Option<usize> {
         if self.count() >= MAX_PANES {
             return None;
         }
-        self.focused += 1;
-        self.slots.insert(self.focused, None);
-        Some(self.focused)
+        let column = self.column_of(self.focused);
+        let mut shares = self.column_shares();
+        shares[column] /= 2.;
+        shares.insert(column + 1, shares[column]);
+        let pane = self.columns()[column].end;
+        self.slots.insert(pane, None);
+        self.columns.insert(column + 1, 1);
+        self.shares.columns = sanitize_shares(&shares, self.column_count());
+        self.shares.rows.insert(column + 1, Vec::new());
+        self.focused = pane;
+        Some(pane)
     }
 
-    /// Removes a pane (its workspace keeps running, just hidden). Closing the focused pane
-    /// focuses its left neighbour. The last pane is never closed. Returns whether it was.
+    /// Adds an empty pane below the focused one, gives it half its height and focuses it.
+    /// Returns the new pane, or `None` when the window already has [`MAX_PANES`].
+    pub fn split_down(&mut self) -> Option<usize> {
+        if self.count() >= MAX_PANES {
+            return None;
+        }
+        let column = self.column_of(self.focused);
+        let row = self.focused - self.columns()[column].start;
+        let mut shares = self.row_shares(column);
+        shares[row] /= 2.;
+        shares.insert(row + 1, shares[row]);
+        let pane = self.focused + 1;
+        self.slots.insert(pane, None);
+        self.columns[column] += 1;
+        self.shares.rows[column] = sanitize_shares(&shares, self.columns[column]);
+        self.focused = pane;
+        Some(pane)
+    }
+
+    /// Removes a pane (its workspace keeps running, just hidden); its space goes to the rest of
+    /// its column, or to the other columns if it was alone. Closing the focused pane focuses the
+    /// pane before it. The last pane is never closed. Returns whether it was.
     pub fn close(&mut self, pane: usize) -> bool {
         if self.count() < 2 || pane >= self.count() {
             return false;
+        }
+        let column = self.column_of(pane);
+        if self.columns[column] == 1 {
+            let mut shares = self.column_shares();
+            shares.remove(column);
+            self.columns.remove(column);
+            self.shares.rows.remove(column);
+            self.shares.columns = sanitize_shares(&shares, self.column_count());
+        } else {
+            let mut shares = self.row_shares(column);
+            shares.remove(pane - self.columns()[column].start);
+            self.columns[column] -= 1;
+            self.shares.rows[column] = sanitize_shares(&shares, self.columns[column]);
         }
         self.slots.remove(pane);
         if self.focused > pane || (self.focused == pane && pane > 0) {
@@ -293,64 +478,53 @@ impl Panes {
         cleared
     }
 
-    pub fn layout(&self, sizes: &[f32]) -> PaneLayout {
+    pub fn layout(&self) -> PaneLayout {
         PaneLayout {
             panes: self.slots.clone(),
             focused: self.focused,
-            sizes: sanitize_shares(sizes, self.count()),
+            columns: self.columns.clone(),
+            sizes: self.shares.columns.clone(),
+            rows: self.shares.rows.clone(),
             split: None,
+            panel_width: None,
+            sidebar_width: None,
         }
     }
 }
 
-/// Width range of the changes panel, in pixels.
-pub const CHANGES_WIDTH_RANGE: (f32, f32) = (260.0, 1600.0);
-const CHANGES_DEFAULT_WIDTH: f32 = 520.0;
+/// Width range of the right panel (device, changes, files), in pixels.
+pub const PANEL_WIDTH_RANGE: (f32, f32) = (360.0, 1600.0);
+pub const PANEL_DEFAULT_WIDTH: f32 = 440.0;
 
-/// The changes panel's visibility and width, saved across launches.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ChangesLayout {
-    pub open: bool,
-    pub width: f32,
-}
-
-impl Default for ChangesLayout {
-    fn default() -> Self {
-        Self {
-            open: false,
-            width: CHANGES_DEFAULT_WIDTH,
-        }
-    }
-}
-
-impl ChangesLayout {
-    /// Clamps the width; anything unusable means the default.
-    pub fn sanitized(self) -> Self {
-        Self {
-            open: self.open,
-            width: changes_width(self.width).unwrap_or(CHANGES_DEFAULT_WIDTH),
-        }
-    }
-}
-
-/// A usable panel width, clamped to [`CHANGES_WIDTH_RANGE`].
-pub fn changes_width(width: f32) -> Option<f32> {
+/// A usable right panel width, clamped to [`PANEL_WIDTH_RANGE`].
+pub fn panel_width(width: f32) -> Option<f32> {
     width
         .is_finite()
-        .then(|| width.clamp(CHANGES_WIDTH_RANGE.0, CHANGES_WIDTH_RANGE.1))
+        .then(|| width.clamp(PANEL_WIDTH_RANGE.0, PANEL_WIDTH_RANGE.1))
 }
 
-/// Width range of the device panel, in pixels.
-pub const DEVICE_WIDTH_RANGE: (f32, f32) = (240.0, 1200.0);
-/// Roughly a phone at 1:1 points (402 pt wide) plus the panel's padding.
-const DEVICE_DEFAULT_WIDTH: f32 = 420.0;
+/// Width range of the sidebar, in pixels.
+pub const SIDEBAR_WIDTH_RANGE: (f32, f32) = (200.0, 480.0);
+pub const SIDEBAR_DEFAULT_WIDTH: f32 = 256.0;
 
-/// The device panel's visibility, width, selected device and stats overlay, saved across
+/// A usable sidebar width, clamped to [`SIDEBAR_WIDTH_RANGE`].
+pub fn sidebar_width(width: f32) -> Option<f32> {
+    width
+        .is_finite()
+        .then(|| width.clamp(SIDEBAR_WIDTH_RANGE.0, SIDEBAR_WIDTH_RANGE.1))
+}
+
+/// Whether the changes tab of the right panel is open, saved across launches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChangesLayout {
+    pub open: bool,
+}
+
+/// The device tab's visibility, selected device and stats overlay, saved across
 /// launches. One panel per window: the device is shared by all workspaces.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DeviceLayout {
     pub open: bool,
-    pub width: f32,
     #[serde(default)]
     pub selected: Option<DeviceKey>,
     /// Debug overlay with fps and capture → paint latency.
@@ -362,19 +536,6 @@ pub struct DeviceLayout {
     /// Lowest level shown in the logs pane (`LogLevel::as_str`); unknown means all.
     #[serde(default)]
     pub log_level: Option<String>,
-}
-
-impl Default for DeviceLayout {
-    fn default() -> Self {
-        Self {
-            open: false,
-            width: DEVICE_DEFAULT_WIDTH,
-            selected: None,
-            stats: false,
-            logs: false,
-            log_level: None,
-        }
-    }
 }
 
 impl DeviceLayout {
@@ -389,21 +550,6 @@ impl DeviceLayout {
                 .unwrap_or(LogLevel::Verbose),
         }
     }
-
-    /// Clamps the width; anything unusable means the default.
-    pub fn sanitized(self) -> Self {
-        Self {
-            width: device_width(self.width).unwrap_or(DEVICE_DEFAULT_WIDTH),
-            ..self
-        }
-    }
-}
-
-/// A usable device panel width, clamped to [`DEVICE_WIDTH_RANGE`].
-pub fn device_width(width: f32) -> Option<f32> {
-    width
-        .is_finite()
-        .then(|| width.clamp(DEVICE_WIDTH_RANGE.0, DEVICE_WIDTH_RANGE.1))
 }
 
 /// Short status for pane headers and the sidebar.
@@ -419,8 +565,9 @@ pub fn status_label(status: &SessionStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, PaneLayout, Panes,
-        ProjectList, changes_width, device_width, pane_shares, sanitize_shares, status_label,
+        ChangesLayout, DeviceLayout, PANEL_DEFAULT_WIDTH, PANEL_WIDTH_RANGE, PaneLayout, Panes,
+        ProjectList, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_WIDTH_RANGE, pane_shares, panel_width,
+        sanitize_shares, sidebar_width, status_label,
     };
     use crate::device_panel::{DeviceKey, LogsSettings, Platform};
     use hangar_core::{Project, SessionStatus, Timestamp, Workspace, WorkspaceId, WorkspaceStatus};
@@ -555,30 +702,30 @@ mod tests {
         panes.show(a);
         panes.split();
         panes.show(b);
+        assert!(panes.set_column_shares(vec![0.3, 0.7]));
+        assert!(!panes.set_column_shares(vec![1.0]));
 
-        let layout = panes.layout(&[0.3, 0.7]);
+        let layout = panes.layout();
         assert_eq!(layout.panes, vec![Some(a), Some(b)]);
         assert_eq!(layout.focused, 1);
-        assert_eq!(
-            layout.restore(|_| true),
-            (panes.clone(), layout.sizes.clone())
-        );
+        assert_eq!(layout.columns, [1, 1]);
+        assert_eq!(layout.sizes, [0.3, 0.7]);
+        assert_eq!(layout.restore(|_| true), panes);
 
         // Unknown workspaces, duplicates and empty panes are dropped; focus follows its pane.
         let saved = PaneLayout {
             panes: vec![Some(gone), None, Some(a), Some(a), Some(b)],
             focused: 4,
             sizes: vec![0.2, 0.2, 0.2, 0.2, 0.2],
-            split: None,
+            ..Default::default()
         };
-        let (restored, sizes) = saved.restore(|id| id != gone);
+        let restored = saved.restore(|id| id != gone);
         assert_eq!((restored.slot(0), restored.slot(1)), (Some(a), Some(b)));
         assert_eq!((restored.count(), restored.focused()), (2, 1));
-        assert_eq!(sizes, [0.5, 0.5]);
+        assert_eq!(restored.shares().columns, [0.5, 0.5]);
 
         // Nothing left: one empty pane.
-        let (restored, sizes) = saved.restore(|_| false);
-        assert_eq!((restored, sizes), (Panes::default(), Vec::new()));
+        assert_eq!(saved.restore(|_| false), Panes::default());
 
         assert!(panes.clear(a));
         assert!(!panes.clear(a));
@@ -586,27 +733,122 @@ mod tests {
     }
 
     #[test]
+    fn panes_split_down_into_columns() {
+        let (a, b, c, d) = (
+            WorkspaceId::new(),
+            WorkspaceId::new(),
+            WorkspaceId::new(),
+            WorkspaceId::new(),
+        );
+        let mut panes = Panes::default();
+        panes.show(a);
+        assert_eq!(panes.split_down(), Some(1));
+        panes.show(b);
+        assert_eq!(panes.layout().columns, [2]);
+        assert_eq!(panes.row_shares(0), [0.5, 0.5]);
+        // Split right of the bottom pane: a new column after the first.
+        assert_eq!(panes.split(), Some(2));
+        panes.show(c);
+        assert_eq!(panes.columns(), [0..2, 2..3]);
+        assert_eq!(panes.column_of(1), 0);
+        assert_eq!(panes.column_shares(), [0.5, 0.5]);
+        // Split the top pane down: it shares its half of the height.
+        panes.focus(0);
+        assert_eq!(panes.split_down(), Some(1));
+        panes.show(d);
+        assert_eq!(panes.columns(), [0..3, 3..4]);
+        assert_eq!(panes.row_shares(0), [0.25, 0.25, 0.5]);
+        assert_eq!(
+            (0..4).map(|p| panes.slot(p)).collect::<Vec<_>>(),
+            [Some(a), Some(d), Some(b), Some(c)]
+        );
+        assert_eq!(panes.split_down(), None);
+        assert_eq!(panes.split(), None);
+
+        // The round trip keeps the columns and their row shares.
+        let layout = panes.layout();
+        assert_eq!(layout.columns, [3, 1]);
+        assert_eq!(layout.restore(|_| true), panes);
+
+        // Closing a pane gives its height to its column; the last pane of a column takes the
+        // column with it.
+        assert!(panes.close(1));
+        assert_eq!(panes.columns(), [0..2, 2..3]);
+        assert_eq!(panes.row_shares(0), [1. / 3., 2. / 3.]);
+        assert_eq!(panes.focused(), 0);
+        assert!(panes.close(2));
+        assert_eq!(panes.layout().columns, [2]);
+        assert!(panes.shares().columns.is_empty());
+        assert!(panes.set_row_shares(0, vec![0.4, 0.6]));
+        assert!(!panes.set_row_shares(0, vec![1.0]));
+        assert!(!panes.set_row_shares(3, vec![0.4, 0.6]));
+        assert!(panes.close(0));
+        assert_eq!(panes.layout().columns, [1]);
+        assert_eq!(panes.slot(0), Some(b));
+    }
+
+    #[test]
+    fn column_layouts_restore_without_dropped_panes() {
+        let (a, b, c) = (WorkspaceId::new(), WorkspaceId::new(), WorkspaceId::new());
+        let saved = PaneLayout {
+            panes: vec![Some(a), Some(b), None, Some(c)],
+            focused: 3,
+            columns: vec![2, 1, 1],
+            sizes: vec![0.5, 0.2, 0.3],
+            rows: vec![vec![0.7, 0.3]],
+            ..Default::default()
+        };
+        let restored = saved.restore(|_| true);
+        // The empty column is dropped with its share.
+        assert_eq!(restored.columns(), [0..2, 2..3]);
+        assert_eq!(restored.focused(), 2);
+        assert_eq!(restored.row_shares(0), [0.7, 0.3]);
+        let columns = restored.column_shares();
+        assert!((columns[0] - 0.5 / 0.8).abs() < 1e-5);
+
+        // A column that loses a pane keeps one pane, no row shares.
+        let restored = saved.restore(|id| id != b);
+        assert_eq!(restored.columns(), [0..1, 1..2]);
+        assert_eq!(restored.shares().rows, [Vec::<f32>::new(), Vec::new()]);
+
+        // Columns that do not add up are read as one pane per column.
+        let broken = PaneLayout {
+            columns: vec![3, 3],
+            ..saved.clone()
+        };
+        assert_eq!(broken.restore(|_| true).column_count(), 3);
+    }
+
+    #[test]
     fn legacy_two_pane_layouts_migrate() {
         let (a, b) = (WorkspaceId::new(), WorkspaceId::new());
         let json = format!(r#"{{"panes":["{a}",null],"focused":1,"split":0.3}}"#);
         let saved: PaneLayout = serde_json::from_str(&json).unwrap();
-        let (panes, sizes) = saved.restore(|_| true);
+        let panes = saved.restore(|_| true);
         assert_eq!(
             (panes.count(), panes.slot(0), panes.focused()),
             (1, Some(a), 0)
         );
-        assert!(sizes.is_empty());
+        assert!(panes.shares().columns.is_empty());
 
         let json = format!(r#"{{"panes":["{a}","{b}"],"focused":1,"split":0.25}}"#);
         let saved: PaneLayout = serde_json::from_str(&json).unwrap();
-        let (panes, sizes) = saved.restore(|_| true);
+        let panes = saved.restore(|_| true);
         assert_eq!((panes.count(), panes.focused()), (2, 1));
-        assert_eq!(sizes, [0.25, 0.75]);
+        assert_eq!(panes.columns(), [0..1, 1..2]);
+        assert_eq!(panes.shares().columns, [0.25, 0.75]);
         assert!(
-            !serde_json::to_string(&panes.layout(&sizes))
+            !serde_json::to_string(&panes.layout())
                 .unwrap()
                 .contains("split")
         );
+
+        // Saved before columns: one pane per column, sizes are the columns' widths.
+        let json = format!(r#"{{"panes":["{a}","{b}"],"focused":0,"sizes":[0.4,0.6]}}"#);
+        let saved: PaneLayout = serde_json::from_str(&json).unwrap();
+        let panes = saved.restore(|_| true);
+        assert_eq!(panes.column_count(), 2);
+        assert_eq!(panes.shares().columns, [0.4, 0.6]);
     }
 
     #[test]
@@ -625,31 +867,69 @@ mod tests {
     }
 
     #[test]
-    fn changes_layout_sanitized() {
-        let ok = ChangesLayout {
-            open: true,
-            width: 400.0,
-        };
-        assert_eq!(ok.sanitized(), ok);
-        let narrow = ChangesLayout {
-            open: false,
-            width: 10.0,
-        };
-        assert_eq!(narrow.sanitized().width, CHANGES_WIDTH_RANGE.0);
-        let broken = ChangesLayout {
-            open: true,
-            width: f32::NAN,
-        };
-        assert_eq!(broken.sanitized().width, ChangesLayout::default().width);
-        assert!(broken.sanitized().open);
-        assert_eq!(changes_width(1e9), Some(CHANGES_WIDTH_RANGE.1));
+    fn panel_width_shared_and_migrated() {
+        let saved = |json: &str| serde_json::from_str::<PaneLayout>(json).unwrap();
+        // Saved before the tabs shared a width: the default.
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0}"#).panel_width(),
+            PANEL_DEFAULT_WIDTH
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"panel_width":500.0}"#).panel_width(),
+            500.0
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"panel_width":10.0}"#).panel_width(),
+            PANEL_WIDTH_RANGE.0
+        );
+        assert_eq!(panel_width(f32::NAN), None);
+        assert_eq!(panel_width(1e9), Some(PANEL_WIDTH_RANGE.1));
+        // Old per-tab widths are ignored.
+        let changes: ChangesLayout =
+            serde_json::from_str(r#"{"open":true,"width":520.0}"#).unwrap();
+        assert_eq!(changes, ChangesLayout { open: true });
+        let device: DeviceLayout = serde_json::from_str(r#"{"open":true,"width":420.0}"#).unwrap();
+        assert!(device.open);
+        assert_eq!(
+            crate::ui::RIGHT_PANEL_WIDTH,
+            gpui_kit::px(PANEL_DEFAULT_WIDTH)
+        );
+        assert_eq!(
+            crate::ui::RIGHT_PANEL_MIN_WIDTH,
+            gpui_kit::px(PANEL_WIDTH_RANGE.0)
+        );
     }
 
     #[test]
-    fn device_layout_sanitized() {
+    fn sidebar_width_saved_and_migrated() {
+        let saved = |json: &str| serde_json::from_str::<PaneLayout>(json).unwrap();
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0}"#).sidebar_width(),
+            SIDEBAR_DEFAULT_WIDTH
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"sidebar_width":300.0}"#).sidebar_width(),
+            300.0
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"sidebar_width":50.0}"#).sidebar_width(),
+            SIDEBAR_WIDTH_RANGE.0
+        );
+        assert_eq!(sidebar_width(f32::NAN), None);
+        assert_eq!(
+            crate::ui::SIDEBAR_WIDTH,
+            gpui_kit::px(SIDEBAR_DEFAULT_WIDTH)
+        );
+        assert_eq!(
+            crate::ui::SIDEBAR_MIN_WIDTH,
+            gpui_kit::px(SIDEBAR_WIDTH_RANGE.0)
+        );
+    }
+
+    #[test]
+    fn device_layout_logs() {
         let ok = DeviceLayout {
             open: true,
-            width: 500.0,
             selected: Some(DeviceKey {
                 platform: Platform::Ios,
                 id: "U".into(),
@@ -658,7 +938,6 @@ mod tests {
             logs: true,
             log_level: Some("warn".into()),
         };
-        assert_eq!(ok.clone().sanitized(), ok);
         assert_eq!(
             ok.logs_settings(),
             LogsSettings {
@@ -675,15 +954,6 @@ mod tests {
             ..ok.clone()
         };
         assert_eq!(junk.logs_settings().min_level, LogLevel::Verbose);
-        let broken = DeviceLayout {
-            width: f32::NAN,
-            ..ok.clone()
-        };
-        let fixed = broken.sanitized();
-        assert_eq!(fixed.width, DeviceLayout::default().width);
-        assert_eq!(fixed.selected, ok.selected);
-        assert_eq!(device_width(1.0), Some(DEVICE_WIDTH_RANGE.0));
-        assert_eq!(device_width(f32::INFINITY), None);
     }
 
     #[test]
