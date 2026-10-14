@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use hangar_core::ports::{
-    ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, Store, VersionControl,
+    BranchTip, ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, Store,
+    VersionControl,
 };
 use hangar_core::{
     Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
@@ -167,6 +168,17 @@ impl VersionControl for FakeGit {
         let mut names: Vec<String> = self.branches.lock().unwrap().iter().cloned().collect();
         names.sort();
         Ok(names)
+    }
+    fn branch_tips(&self, repo: &Path) -> PortResult<Vec<BranchTip>> {
+        Ok(self
+            .local_branches(repo)?
+            .into_iter()
+            .map(|name| BranchTip {
+                name,
+                short_sha: "0000000".to_owned(),
+                committed_at: 0,
+            })
+            .collect())
     }
     fn add_worktree(&self, _: &Path, worktree: &NewWorktree) -> PortResult<PathBuf> {
         self.record(format!("add {} from {}", worktree.branch, worktree.base));

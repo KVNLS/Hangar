@@ -31,7 +31,8 @@ pub use hangar_core::review::{
 pub use ignore::{check_ignored, git_dirs};
 pub use patch::parse_patch;
 pub use repo::{
-    branch_exists, current_branch, default_branch, is_valid_branch_name, local_branches, repo_root,
+    branch_exists, branch_tips, current_branch, default_branch, is_valid_branch_name,
+    local_branches, repo_root,
 };
 pub use review::{
     BaseCheckout, CommitOptions, base_checkout, commit, merge_conflicts, merge_into_base,

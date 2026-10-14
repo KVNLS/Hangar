@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use hangar_core::ports::BranchTip;
+
 use crate::error::Result;
 use crate::git::Git;
 
@@ -38,6 +40,35 @@ pub fn local_branches(repo: &Path) -> Result<Vec<String>> {
     Ok(branches)
 }
 
+/// Local branches with their tip's short hash and committer date, sorted by name.
+pub fn branch_tips(repo: &Path) -> Result<Vec<BranchTip>> {
+    let out = Git::new(repo).run([
+        "for-each-ref",
+        "--format=%(refname:short)%00%(objectname:short)%00%(committerdate:unix)",
+        "refs/heads",
+    ])?;
+    Ok(parse_branch_tips(&out))
+}
+
+fn parse_branch_tips(out: &str) -> Vec<BranchTip> {
+    let mut tips: Vec<BranchTip> = out
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\x00');
+            let name = fields.next()?.trim();
+            let short_sha = fields.next()?.trim();
+            let committed_at = fields.next()?.trim().parse().ok()?;
+            (!name.is_empty()).then(|| BranchTip {
+                name: name.to_owned(),
+                short_sha: short_sha.to_owned(),
+                committed_at,
+            })
+        })
+        .collect();
+    tips.sort_by(|a, b| a.name.cmp(&b.name));
+    tips
+}
+
 /// Whether `name` can be a new branch's name (`git check-ref-format --branch`).
 pub fn is_valid_branch_name(repo: &Path, name: &str) -> Result<bool> {
     if name.is_empty() || name.starts_with('-') {
@@ -69,4 +100,20 @@ pub fn default_branch(repo: &Path) -> Result<Option<String>> {
         }
     }
     current_branch(repo)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_branch_tips;
+
+    #[test]
+    fn parses_branch_tips() {
+        let tips = parse_branch_tips(
+            "main\x00abc1234\x001700000000\nfeat/x\x00def5678\x001700000100\nbad\x00x\n",
+        );
+        let names: Vec<&str> = tips.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["feat/x", "main"]);
+        assert_eq!(tips[1].short_sha, "abc1234");
+        assert_eq!(tips[1].committed_at, 1_700_000_000);
+    }
 }

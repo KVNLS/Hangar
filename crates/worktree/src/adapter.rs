@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use hangar_core::changes::{DiffOptions, FileDiff, GitDirs, Status};
 use hangar_core::ports::{
-    ChangeCounts, Changes, CodeHost, ListedWorktree, NewWorktree, PortError, PortResult, ReviewOps,
-    VersionControl,
+    BranchTip, ChangeCounts, Changes, CodeHost, ListedWorktree, NewWorktree, PortError, PortResult,
+    ReviewOps, VersionControl,
 };
 use hangar_core::review::{
     CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
@@ -38,6 +38,10 @@ impl VersionControl for GitCli {
 
     fn local_branches(&self, repo: &Path) -> PortResult<Vec<String>> {
         crate::local_branches(repo).map_err(PortError::new)
+    }
+
+    fn branch_tips(&self, repo: &Path) -> PortResult<Vec<BranchTip>> {
+        crate::branch_tips(repo).map_err(PortError::new)
     }
 
     fn add_worktree(&self, repo: &Path, worktree: &NewWorktree) -> PortResult<PathBuf> {
