@@ -98,12 +98,15 @@ actions!(
         StopRun,
         RestartServer,
         SplitPane,
-        ClosePane
+        ClosePane,
+        Quit
     ]
 );
 
 pub fn init(cx: &mut App) {
+    cx.on_action(|_: &Quit, cx| cx.quit());
     cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-shift-d", ToggleChanges, None),
         KeyBinding::new("cmd-shift-p", ToggleDevice, None),
         KeyBinding::new("cmd-alt-shift-p", ToggleDeviceStats, None),
@@ -507,6 +510,14 @@ impl HangarApp {
             show_archived: HashSet::new(),
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
+                // ACP agents run in their own process group and some (codex-acp) outlive a
+                // closed stdin, so quitting must stop them like ⌘W does.
+                cx.on_app_quit(|this, _| {
+                    for live in this.sessions.values() {
+                        live.stop();
+                    }
+                    async {}
+                }),
                 select_sub,
                 changes_sub,
                 device_sub,

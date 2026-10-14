@@ -207,6 +207,15 @@ Git access is the `git` CLI with porcelain output, not a library.
   reject_once options (request id 0). Checked on screen: tool cards, mode menu (build/plan) and switch, slash
   list, Resume after restart, Approval state with Allow once and Reject. OpenCode does not keep the mode
   across `session/load` (comes back as `build`).
+- Presets "Codex (structured)" (`codex-acp`, npm `@zed-industries/codex-acp` 0.16) and "Gemini CLI
+  (structured)" (`gemini-acp`: `gemini --acp --skip-trust`, Gemini CLI 0.62; `--experimental-acp` is
+  deprecated). Both get the hangar bridge through `session/new`. codex-acp checked at the protocol level:
+  standard `modes` (Read Only default, Default, Full Access), loadSession, tool calls, session/new MCP servers
+  used (MCP tool calls ask for approval). Its turn fails while `~/.codex/config.toml` picks a model the
+  ChatGPT login refuses (owner's config, left alone). Gemini is not signed in here: `session/new` answers
+  -32000, which Hangar now reports as `NotSignedIn` with each preset's login hint. Gemini turns unchecked.
+- Quit (⌘Q, new) and window close stop every live agent (`on_app_quit`): codex-acp ignores a closed stdin
+  and would outlive Hangar. A crash or SIGKILL of Hangar still leaves such agents running.
 - Mono text (`TypeScale::font_mono`, terminal) turns Geist Mono's `liga`/`calt` off: its ligatures drew `--`
   over the preceding space (`git log--oneline`). The Files code viewer (gpui-component editor, theme font
   family only) still uses them.
@@ -256,5 +265,6 @@ Git access is the `git` CLI with porcelain output, not a library.
 ## Next
 - Owner reviews `m7-acp` and looks at the mode menu, slash list and Resume in the app (not seen on screen:
   the display slept during the check).
-- OpenCode over ACP is on branch `opencode-acp` (awaiting review). Still to add: Gemini `--experimental-acp`
-  and `codex-acp` (neither installed here; installs need the owner's OK).
+- Branch `opencode-acp` (OpenCode, Codex, Gemini over ACP; mono ligature fix; ⌘Q) awaits review.
+- Gemini over ACP: sign in (`gemini`, Log in with Google), then check a turn, modes and MCP live.
+- Codex config/model selection per agent is not exposed (agents' `configOptions` model select ignored).

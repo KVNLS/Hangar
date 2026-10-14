@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use super::client::{AcpConnection, AcpEvent, RequestId};
-use super::protocol::{self, AgentInfo, McpServer, PROTOCOL_VERSION, SessionMode};
+use super::protocol::{self, AUTH_REQUIRED, AgentInfo, McpServer, PROTOCOL_VERSION, SessionMode};
 use crate::SpawnContext;
 use crate::error::{Error, Result};
 use crate::path::{find_program, resolve_program};
@@ -35,6 +35,8 @@ pub struct AcpAdapter {
     pub env: Vec<(String, String)>,
     /// Shown when the program is missing.
     pub install_hint: String,
+    /// Shown when the agent refuses to start a session until the user signs in.
+    pub login_hint: String,
 }
 
 impl AcpAdapter {
@@ -50,6 +52,7 @@ impl AcpAdapter {
             args: Vec::new(),
             env: Vec::new(),
             install_hint: String::new(),
+            login_hint: String::new(),
         }
     }
 
@@ -60,6 +63,11 @@ impl AcpAdapter {
 
     pub fn with_install_hint(mut self, hint: impl Into<String>) -> Self {
         self.install_hint = hint.into();
+        self
+    }
+
+    pub fn with_login_hint(mut self, hint: impl Into<String>) -> Self {
+        self.login_hint = hint.into();
         self
     }
 
@@ -147,8 +155,25 @@ impl AcpAdapter {
             Ok(()) => Ok((session, events)),
             Err(e) => {
                 session.kill();
-                Err(session.explain(e))
+                Err(self.explain_auth(session.explain(e)))
             }
+        }
+    }
+}
+
+impl AcpAdapter {
+    fn explain_auth(&self, e: Error) -> Error {
+        match e {
+            Error::Rpc {
+                code: AUTH_REQUIRED,
+                message,
+                ..
+            } => Error::NotSignedIn {
+                agent: self.display_name.clone(),
+                message: message.trim_end_matches('.').to_owned(),
+                hint: self.login_hint.clone(),
+            },
+            other => other,
         }
     }
 }
@@ -393,10 +418,22 @@ fn read_tail(tail: &Mutex<VecDeque<u8>>) -> String {
 pub fn acp_presets() -> Vec<AcpAdapter> {
     vec![
         AcpAdapter::new("claude-acp", "Claude Code (structured)", "claude-agent-acp")
-            .with_install_hint("npm install -g @agentclientprotocol/claude-agent-acp"),
+            .with_install_hint("npm install -g @agentclientprotocol/claude-agent-acp")
+            .with_login_hint("Run `claude` in a terminal and sign in."),
+        AcpAdapter::new("codex-acp", "Codex (structured)", "codex-acp")
+            .with_install_hint("npm install -g @zed-industries/codex-acp")
+            .with_login_hint("Run `codex login` in a terminal, or set OPENAI_API_KEY."),
         AcpAdapter::new("opencode-acp", "OpenCode (structured)", "opencode")
             .with_args(["acp"])
-            .with_install_hint("curl -fsSL https://opencode.ai/install | bash"),
+            .with_install_hint("curl -fsSL https://opencode.ai/install | bash")
+            .with_login_hint("Run `opencode auth login` in a terminal."),
+        // Nobody can answer the folder trust prompt over ACP; the PTY preset skips it too.
+        AcpAdapter::new("gemini-acp", "Gemini CLI (structured)", "gemini")
+            .with_args(["--acp", "--skip-trust"])
+            .with_install_hint("npm install -g @google/gemini-cli")
+            .with_login_hint(
+                "Run `gemini` in a terminal and choose Log in with Google, or set GEMINI_API_KEY.",
+            ),
     ]
 }
 
@@ -450,6 +487,24 @@ mod tests {
                 .is_some_and(|e| e.contains("Session not found"))
         );
         session.kill();
+    }
+
+    #[test]
+    fn auth_required_names_the_login_step() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = r#"
+            read l; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"authMethods":[{"id":"oauth","name":"Log in"}]}}'
+            read l; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"API key is missing"}}'
+            read l
+        "#;
+        let err = sh(script)
+            .with_login_hint("Run `t login`.")
+            .start(&SpawnContext::new(dir.path()), &[], None)
+            .expect_err("needs a login");
+        assert_eq!(
+            err.to_string(),
+            "t is not signed in (API key is missing). Run `t login`."
+        );
     }
 
     #[test]

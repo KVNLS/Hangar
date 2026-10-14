@@ -7,6 +7,8 @@ pub const PROTOCOL_VERSION: u64 = 1;
 
 pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
+/// The agent needs the user to sign in first.
+pub const AUTH_REQUIRED: i64 = -32000;
 
 /// An MCP server the agent should start for the session (stdio transport).
 #[derive(Clone, Debug, PartialEq, Eq)]

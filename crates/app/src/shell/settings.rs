@@ -59,6 +59,7 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Filter workspaces", "cmd-p", "Global"),
     ("Add project", "cmd-o", "Global"),
     ("Toggle sidebar", "cmd-b", "Global"),
+    ("Quit Hangar (stops running agents)", "cmd-q", "Global"),
     ("Review changes", "cmd-shift-r", "Workspace"),
     ("Build and run on the device", "cmd-r", "Workspace"),
     ("Stop the run", "cmd-.", "Workspace"),
