@@ -2956,8 +2956,9 @@ dependencies = [
 name = "hangar-agents"
 version = "0.1.0"
 dependencies = [
- "hangar-core",
  "hangar-terminal",
+ "hangar-worktree",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -3060,7 +3061,9 @@ dependencies = [
 name = "hangar-worktree"
 version = "0.1.0"
 dependencies = [
+ "tempfile",
  "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

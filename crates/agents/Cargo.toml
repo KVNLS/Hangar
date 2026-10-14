@@ -8,8 +8,11 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-hangar-core.workspace = true
 hangar-terminal.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+hangar-worktree.workspace = true
 
 [lints]
 workspace = true
