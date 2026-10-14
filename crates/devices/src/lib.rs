@@ -19,6 +19,8 @@ pub enum Error {
     Command(String),
     #[error("private API: {0}")]
     PrivateApi(String),
+    #[error("permission required: {0}")]
+    Permission(String),
     #[error("parse error: {0}")]
     Parse(String),
     #[error("io: {0}")]

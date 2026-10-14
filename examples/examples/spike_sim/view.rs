@@ -47,11 +47,13 @@ fn initial_window_size(info: &DeviceInfo) -> Size<Pixels> {
 struct Shown {
     image: Arc<RenderImage>,
     captured_at: Instant,
+    seq: u64,
     width: u32,
     height: u32,
 }
 
 struct Stats {
+    last_painted_seq: u64,
     enabled: bool,
     window_start: Instant,
     received: u32,
@@ -61,10 +63,12 @@ struct Stats {
 }
 
 impl Stats {
-    fn on_paint(&mut self, captured_at: Instant) {
-        if !self.enabled {
+    /// Counts each frame once: re-renders of an already painted frame are not new paints.
+    fn on_paint(&mut self, seq: u64, captured_at: Instant) {
+        if !self.enabled || seq == self.last_painted_seq {
             return;
         }
+        self.last_painted_seq = seq;
         let l = captured_at.elapsed();
         self.painted += 1;
         self.latency_sum += l;
@@ -144,6 +148,7 @@ impl SimView {
                     view.shown = Some(Shown {
                         image,
                         captured_at: frame.captured_at,
+                        seq: frame.seq,
                         width: frame.width,
                         height: frame.height,
                     });
@@ -173,6 +178,7 @@ impl SimView {
                 window_start: Instant::now(),
                 received: 0,
                 painted: 0,
+                last_painted_seq: 0,
                 latency_sum: Duration::ZERO,
                 latency_max: Duration::ZERO,
             })),
@@ -265,14 +271,14 @@ impl Render for SimView {
         let shown = self
             .shown
             .as_ref()
-            .map(|s| (s.image.clone(), s.captured_at, s.width, s.height));
+            .map(|s| (s.image.clone(), s.seq, s.captured_at, s.width, s.height));
         let bounds_cell = self.screen_bounds.clone();
         let stats = self.stats.clone();
         let screen = canvas(
             move |bounds, _, _| bounds,
             move |bounds, _, window, _| {
                 bounds_cell.set(bounds);
-                let Some((image, captured_at, w, h)) = shown else {
+                let Some((image, seq, captured_at, w, h)) = shown else {
                     return;
                 };
                 let r = geometry::contain(
@@ -296,7 +302,7 @@ impl Render for SimView {
                     0,
                     false,
                 );
-                stats.borrow_mut().on_paint(captured_at);
+                stats.borrow_mut().on_paint(seq, captured_at);
             },
         )
         .size_full();

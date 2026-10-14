@@ -55,9 +55,13 @@ fn poll(udid: &str, tx: &FrameSender, stop: &AtomicBool, seq: &mut u64) {
 
 /// One `simctl io screenshot` round trip, decoded to tightly packed BGRA.
 pub fn screenshot(udid: &str) -> Result<Frame> {
+    // Xcode 27's simctl treats "-" as a file name (no stdout output), so go through a temp file.
+    let path =
+        std::env::temp_dir().join(format!("hangar-simctl-{}-{udid}.png", std::process::id()));
     let started = Instant::now();
     let out = Command::new("xcrun")
-        .args(["simctl", "io", udid, "screenshot", "--type=png", "-"])
+        .args(["simctl", "io", udid, "screenshot", "--type=png"])
+        .arg(&path)
         .output()?;
     if !out.status.success() {
         return Err(Error::Command(format!(
@@ -65,7 +69,9 @@ pub fn screenshot(udid: &str) -> Result<Frame> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
-    let img = image::load_from_memory_with_format(&out.stdout, image::ImageFormat::Png)
+    let png = std::fs::read(&path)?;
+    let _ = std::fs::remove_file(&path);
+    let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
         .map_err(|e| Error::Parse(format!("screenshot PNG: {e}")))?
         .into_rgba8();
     let (width, height) = img.dimensions();

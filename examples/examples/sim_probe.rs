@@ -12,6 +12,10 @@ fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("no booted simulator"))?,
     };
     println!("{}", hangar_devices::ios::introspect(&udid)?);
+    println!("\nOn-screen windows:");
+    for w in hangar_devices::ios::on_screen_windows() {
+        println!("  {w:?}");
+    }
     Ok(())
 }
 
