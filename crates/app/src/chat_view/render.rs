@@ -135,10 +135,11 @@ impl ChatView {
         if !self.turn_done || self.running || self.exited {
             return None;
         }
-        let summary = self.diff.as_ref()?.0.read(cx).summary()?;
-        if summary.files == 0 {
+        let diff = self.diff.as_ref()?.0.read(cx);
+        if !diff.needs_review() {
             return None;
         }
+        let summary = diff.summary()?;
         Some(done_summary(
             summary.files,
             summary.insertions,
@@ -148,7 +149,7 @@ impl ChatView {
 }
 
 impl ChatView {
-    /// "Ready for review" after a turn that ended normally, while the workspace has changes.
+    /// "Ready for review" after a turn that ended normally, while changes are unpublished.
     fn render_done_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let text = self.done_text(cx)?;
         let t = cx.tokens();

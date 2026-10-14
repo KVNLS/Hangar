@@ -44,6 +44,11 @@ impl Status {
     pub fn is_clean(&self) -> bool {
         self.changes.is_empty()
     }
+
+    /// Nothing left to publish: a clean worktree on a branch pushed up to its last commit.
+    pub fn is_published(&self) -> bool {
+        self.is_clean() && self.upstream.is_some() && self.ahead == 0
+    }
 }
 
 impl Status {
@@ -201,4 +206,43 @@ impl Default for DiffOptions {
 pub struct GitDirs {
     pub git_dir: PathBuf,
     pub common_dir: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pushed() -> Status {
+        Status {
+            branch: Some("hangar/fix".into()),
+            upstream: Some("origin/hangar/fix".into()),
+            ..Status::default()
+        }
+    }
+
+    #[test]
+    fn published_needs_a_clean_tree_pushed_to_its_upstream() {
+        assert!(pushed().is_published());
+        let ahead = Status {
+            ahead: 1,
+            ..pushed()
+        };
+        assert!(!ahead.is_published());
+        let local = Status {
+            upstream: None,
+            ..pushed()
+        };
+        assert!(!local.is_published());
+        let dirty = Status {
+            changes: vec![ChangedPath {
+                path: "a.rs".into(),
+                orig_path: None,
+                kind: ChangeKind::Modified,
+                staged: false,
+                unstaged: true,
+            }],
+            ..pushed()
+        };
+        assert!(!dirty.is_published());
+    }
 }

@@ -73,7 +73,8 @@ impl AgentState {
     ];
 
     /// Derives the state of a PTY agent. `recently_active` means the terminal produced output
-    /// within the activity window; `has_changes` means the worktree differs from its base.
+    /// within the activity window; `has_changes` means the worktree differs from its base and is not
+    /// yet published (uncommitted, unpushed or never pushed).
     pub fn from_pty(
         status: Option<&SessionStatus>,
         recently_active: bool,
