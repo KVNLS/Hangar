@@ -2,6 +2,7 @@
 //! read-only viewer.
 
 mod tree;
+mod wide;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -66,8 +67,22 @@ pub struct FilesPanel {
     highlight_task: Option<Task<()>>,
     tree_scroll: UniformListScrollHandle,
     view_scroll: UniformListScrollHandle,
+    /// Shown as the full-width files screen rather than in the side panel.
+    wide: bool,
+    focus: FocusHandle,
     _theme: Subscription,
 }
+
+actions!(files, [ExitFiles]);
+
+pub enum FilesEvent {
+    /// The viewer's expand button.
+    OpenWide,
+    /// The files screen's back button or Escape.
+    ExitWide,
+}
+
+impl EventEmitter<FilesEvent> for FilesPanel {}
 
 impl FilesPanel {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -85,7 +100,42 @@ impl FilesPanel {
             highlight_task: None,
             tree_scroll: UniformListScrollHandle::new(),
             view_scroll: UniformListScrollHandle::new(),
+            wide: false,
+            focus: cx.focus_handle(),
             _theme: theme,
+        }
+    }
+
+    pub fn set_wide(&mut self, wide: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.wide != wide {
+            self.wide = wide;
+            if wide {
+                self.reveal_selected();
+            }
+            cx.notify();
+        }
+        if wide {
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    /// Scrolls the tree to the file in the viewer (the files screen lists more rows).
+    fn reveal_selected(&self) {
+        let Some(path) = self.viewer_path() else {
+            return;
+        };
+        if let Some(index) = self.rows.iter().position(|r| r.path == *path) {
+            self.tree_scroll
+                .scroll_to_item(index, ScrollStrategy::Center);
+        }
+    }
+
+    fn viewer_path(&self) -> Option<&PathBuf> {
+        match &self.viewer {
+            Viewer::Loading(p) | Viewer::Text { path: p, .. } | Viewer::Message { path: p, .. } => {
+                Some(p)
+            }
+            Viewer::None => None,
         }
     }
 
@@ -240,12 +290,7 @@ impl FilesPanel {
                 .source
                 .as_ref()
                 .is_some_and(|s| s.diff.read(cx).files().contains_key(&row.path));
-        let selected = match &self.viewer {
-            Viewer::Loading(p) | Viewer::Text { path: p, .. } | Viewer::Message { path: p, .. } => {
-                *p == row.path
-            }
-            Viewer::None => false,
-        };
+        let selected = self.viewer_path() == Some(&row.path);
         let icon = if row.dir {
             if row.expanded {
                 Lucide::FolderOpen
@@ -406,7 +451,17 @@ impl FilesPanel {
                             .truncate()
                             .child(path.map(|p| p.display().to_string()).unwrap_or_default()),
                     )
-                    .child(div().text_color(t.tx3).child("read-only")),
+                    .child(div().text_color(t.tx3).child("read-only"))
+                    .when(!self.wide, |this| {
+                        this.child(
+                            UiButton::new("files-wide")
+                                .icon(Lucide::Maximize2)
+                                .ghost()
+                                .small()
+                                .tooltip("Open full width (⌘⇧E)")
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(FilesEvent::OpenWide))),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -453,7 +508,10 @@ fn read_text(path: &std::path::Path) -> Result<Vec<SharedString>, SharedString> 
 impl Render for FilesPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
-        let Some(source) = &self.source else {
+        if self.wide {
+            return self.render_wide(cx);
+        }
+        if self.source.is_none() {
             return div()
                 .size_full()
                 .flex()
@@ -465,9 +523,7 @@ impl Render for FilesPanel {
                         .hint("Focus a pane that shows a workspace to browse its files."),
                 )
                 .into_any_element();
-        };
-        let changed = source.diff.read(cx).files().len();
-        let count = self.rows.len();
+        }
         v_flex()
             .size_full()
             .bg(t.panel)
@@ -483,28 +539,9 @@ impl Render for FilesPanel {
                     .font_mono()
                     .text_size(px(11.))
                     .text_color(t.tx3)
-                    .child(format!("{} files · {changed} changed", self.files.len()))
+                    .child(self.summary(cx))
                     .child(div().flex_1())
-                    .child(
-                        UiButton::new("files-collapse")
-                            .icon(Lucide::ListCollapse)
-                            .ghost()
-                            .small()
-                            .tooltip("Collapse all")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.expanded.clear();
-                                this.rebuild();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        UiButton::new("files-refresh")
-                            .icon(Lucide::RefreshCw)
-                            .ghost()
-                            .small()
-                            .tooltip("Refresh")
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
-                    ),
+                    .children(self.tree_buttons(cx)),
             )
             .when_some(self.error.clone(), |this, err| {
                 this.child(
@@ -523,22 +560,55 @@ impl Render for FilesPanel {
                     .p_1p5()
                     .border_b_1()
                     .border_color(t.line)
-                    .child(
-                        uniform_list(
-                            "files-tree",
-                            count,
-                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                range
-                                    .filter_map(|ix| this.render_tree_row(ix, cx))
-                                    .collect::<Vec<_>>()
-                            }),
-                        )
-                        .size_full()
-                        .track_scroll(&self.tree_scroll),
-                    ),
+                    .child(self.render_tree(cx)),
             )
             .child(self.render_viewer(cx))
             .into_any_element()
+    }
+}
+
+impl FilesPanel {
+    fn summary(&self, cx: &App) -> String {
+        let changed = self
+            .source
+            .as_ref()
+            .map_or(0, |s| s.diff.read(cx).files().len());
+        format!("{} files · {changed} changed", self.files.len())
+    }
+
+    fn tree_buttons(&self, cx: &mut Context<Self>) -> [UiButton; 2] {
+        [
+            UiButton::new("files-collapse")
+                .icon(Lucide::ListCollapse)
+                .ghost()
+                .small()
+                .tooltip("Collapse all")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.expanded.clear();
+                    this.rebuild();
+                    cx.notify();
+                })),
+            UiButton::new("files-refresh")
+                .icon(Lucide::RefreshCw)
+                .ghost()
+                .small()
+                .tooltip("Refresh")
+                .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+        ]
+    }
+
+    fn render_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        uniform_list(
+            "files-tree",
+            self.rows.len(),
+            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                range
+                    .filter_map(|ix| this.render_tree_row(ix, cx))
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .size_full()
+        .track_scroll(&self.tree_scroll)
     }
 }
 

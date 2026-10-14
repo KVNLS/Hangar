@@ -145,6 +145,7 @@ impl HangarApp {
                 Box::new(ToggleOverview),
             ),
             command("Review changes", Lucide::FileDiff, Box::new(OpenReview)),
+            command("Browse files", Lucide::FolderOpen, Box::new(OpenFiles)),
             command(
                 "Next needing you",
                 Lucide::ArrowRight,
