@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use hangar_core::ports::{ChangeCounts, Changes, NewWorktree, VersionControl};
+use hangar_core::ports::{ChangeCounts, Changes, NewWorktree, ReviewOps, VersionControl};
 use hangar_worktree::GitCli;
 use tempfile::TempDir;
 
@@ -23,6 +23,29 @@ fn git(dir: &Path, args: &[&str]) {
         "git {args:?}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn base_branch_name_through_the_review_port() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.name", "Hangar Test"]);
+    git(&repo, &["config", "user.email", "test@hangar.invalid"]);
+    git(&repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("README.md"), "one\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "--no-verify", "-q", "-m", "initial"]);
+    git(&repo, &["tag", "v1"]);
+
+    let ops: &dyn ReviewOps = &GitCli;
+    let name = |base: &str| ops.base_branch_name(&repo, base).unwrap();
+    assert_eq!(name("main").as_deref(), Some("main"));
+    assert_eq!(name("v1"), None, "a tag");
+    assert_eq!(name("HEAD"), None, "moves with the worktree");
+    assert_eq!(name("gone"), None);
 }
 
 #[test]

@@ -262,6 +262,8 @@ pub trait ReviewOps: Send + Sync {
     /// Subject of the newest commit in `base..HEAD`.
     fn last_subject(&self, worktree: &Path, base: &str) -> Result<Option<String>, ReviewError>;
     fn has_remote(&self, worktree: &Path) -> Result<bool, ReviewError>;
+    /// The branch a workspace base names, without its remote; `None` for a commit, tag or `HEAD`.
+    fn base_branch_name(&self, worktree: &Path, base: &str) -> Result<Option<String>, ReviewError>;
 }
 
 /// Where pull requests live (GitHub through `gh`).

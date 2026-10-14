@@ -77,6 +77,9 @@ impl ReviewOps for Fake {
     fn last_subject(&self, _: &Path, _: &str) -> Result<Option<String>, ReviewError> {
         Ok(Some("Fix login".into()))
     }
+    fn base_branch_name(&self, _: &Path, base: &str) -> Result<Option<String>, ReviewError> {
+        Ok(Some(base.to_owned()))
+    }
     fn has_remote(&self, _: &Path) -> Result<bool, ReviewError> {
         Ok(true)
     }

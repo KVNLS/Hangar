@@ -203,6 +203,10 @@ impl ReviewOps for GitCli {
         Ok(crate::commit(worktree, message, CommitOptions::default())?)
     }
 
+    fn base_branch_name(&self, worktree: &Path, base: &str) -> Result<Option<String>, ReviewError> {
+        Ok(crate::base_branch_name(worktree, base)?)
+    }
+
     fn upstream(&self, worktree: &Path) -> Result<Option<Upstream>, ReviewError> {
         Ok(crate::upstream(worktree)?)
     }
