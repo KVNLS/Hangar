@@ -514,6 +514,10 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
     merge backend forced.
   - Terminal: bracketed-paste injection, Shift+Enter (ESC CR), Option as Meta and OSC 52 switches in
     Settings › Appearance, title and clipboard caps.
+- Flaky `binary_crlf_mode_and_no_newline` was a live-diff bug: with untracked files the diff runs on a
+  scratch copy of the index, and the copy's new mtime turned off git's racy-entry check, so a
+  same-size edit in the same second as its index entry was missed once the diff ran a second later.
+  The copy now keeps the index's mtime (`same_second_same_size_edit_is_seen_with_untracked_files`).
 - Seen live with the dev hooks: second instance refused, corrupted database moved aside, 30 MB chat
   message, hung `gh` in setup, archive of a SIGHUP-ignoring agent, external simulator shutdown, exit 0
   mid-turn, the Terminal settings. Not driven live: the chat's stop timer (no dev hook presses Stop),

@@ -146,10 +146,6 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
     shortcut labels differ between palette, title bar and Keybindings.
   - Persistence: a read-only database has no read-only mode (move aside, continue without saving or quit);
     git version/identity probes have no deadline.
-  - Tests: `worktree` `tests/diff.rs` `binary_crlf_mode_and_no_newline` fails now and then when run
-    with the crate's other test binaries (never alone in 40 runs): the files rewritten at the same size
-    right after the commit are missing from the diff. Seen 4 times in about 50 suite runs on `qa-fixes`,
-    0 in 16 on `main`; no code on the diff path changed, cause not found.
 - **Devices:** simctl and Android frames still copied into the atlas (question 3); log lines from several
   processes can arrive a few ms out of order; logs: no multi-line merging, level filter client-side (low lines still fill the ring buffer),
   follow-tail ignores scrollbar drags (no scrollbar); emulators started outside Hangar keep Gboard's stylus

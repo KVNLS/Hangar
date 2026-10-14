@@ -170,7 +170,15 @@ impl ScratchIndex {
         let scratch = Self { dir, objects };
         // Read and write rather than `fs::copy`: on macOS that clones the file, and FSEvents
         // reports the clone on the source, which a watcher of the git directory takes for a change.
-        std::fs::write(scratch.dir.join("index"), std::fs::read(&index)?)?;
+        let copy = scratch.dir.join("index");
+        std::fs::write(&copy, std::fs::read(&index)?)?;
+        // git re-reads entries as new as the index file (an edit in the same second as its
+        // entry is invisible to stat): the copy keeps the index's mtime so that check still holds.
+        let modified = std::fs::metadata(&index)?.modified()?;
+        std::fs::File::options()
+            .write(true)
+            .open(&copy)?
+            .set_modified(modified)?;
         let mut list = Vec::new();
         for p in paths {
             list.extend_from_slice(p.as_os_str().as_encoded_bytes());
