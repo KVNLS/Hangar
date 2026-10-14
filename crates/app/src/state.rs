@@ -140,9 +140,20 @@ pub struct PaneLayout {
     /// Layouts saved with two fixed panes: the first pane's share.
     #[serde(default, skip_serializing)]
     pub split: Option<f32>,
+    /// Width of the right panel (device, changes and files share it); missing in layouts saved
+    /// when each tab had its own width.
+    #[serde(default)]
+    pub panel_width: Option<f32>,
 }
 
 impl PaneLayout {
+    /// The saved right panel width, clamped; the default when missing or unusable.
+    pub fn panel_width(&self) -> f32 {
+        self.panel_width
+            .and_then(panel_width)
+            .unwrap_or(PANEL_DEFAULT_WIDTH)
+    }
+
     /// Rebuilds panes from the layout, keeping only workspaces `keep` accepts, never showing one
     /// twice and dropping empty panes (at least one pane remains). Returns the panes and their
     /// sanitised width shares.
@@ -299,58 +310,33 @@ impl Panes {
             focused: self.focused,
             sizes: sanitize_shares(sizes, self.count()),
             split: None,
+            panel_width: None,
         }
     }
 }
 
-/// Width range of the changes panel, in pixels.
-pub const CHANGES_WIDTH_RANGE: (f32, f32) = (260.0, 1600.0);
-const CHANGES_DEFAULT_WIDTH: f32 = 520.0;
+/// Width range of the right panel (device, changes, files), in pixels.
+pub const PANEL_WIDTH_RANGE: (f32, f32) = (360.0, 1600.0);
+pub const PANEL_DEFAULT_WIDTH: f32 = 440.0;
 
-/// The changes panel's visibility and width, saved across launches.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ChangesLayout {
-    pub open: bool,
-    pub width: f32,
-}
-
-impl Default for ChangesLayout {
-    fn default() -> Self {
-        Self {
-            open: false,
-            width: CHANGES_DEFAULT_WIDTH,
-        }
-    }
-}
-
-impl ChangesLayout {
-    /// Clamps the width; anything unusable means the default.
-    pub fn sanitized(self) -> Self {
-        Self {
-            open: self.open,
-            width: changes_width(self.width).unwrap_or(CHANGES_DEFAULT_WIDTH),
-        }
-    }
-}
-
-/// A usable panel width, clamped to [`CHANGES_WIDTH_RANGE`].
-pub fn changes_width(width: f32) -> Option<f32> {
+/// A usable right panel width, clamped to [`PANEL_WIDTH_RANGE`].
+pub fn panel_width(width: f32) -> Option<f32> {
     width
         .is_finite()
-        .then(|| width.clamp(CHANGES_WIDTH_RANGE.0, CHANGES_WIDTH_RANGE.1))
+        .then(|| width.clamp(PANEL_WIDTH_RANGE.0, PANEL_WIDTH_RANGE.1))
 }
 
-/// Width range of the device panel, in pixels.
-pub const DEVICE_WIDTH_RANGE: (f32, f32) = (240.0, 1200.0);
-/// Roughly a phone at 1:1 points (402 pt wide) plus the panel's padding.
-const DEVICE_DEFAULT_WIDTH: f32 = 420.0;
+/// Whether the changes tab of the right panel is open, saved across launches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChangesLayout {
+    pub open: bool,
+}
 
-/// The device panel's visibility, width, selected device and stats overlay, saved across
+/// The device tab's visibility, selected device and stats overlay, saved across
 /// launches. One panel per window: the device is shared by all workspaces.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DeviceLayout {
     pub open: bool,
-    pub width: f32,
     #[serde(default)]
     pub selected: Option<DeviceKey>,
     /// Debug overlay with fps and capture → paint latency.
@@ -362,19 +348,6 @@ pub struct DeviceLayout {
     /// Lowest level shown in the logs pane (`LogLevel::as_str`); unknown means all.
     #[serde(default)]
     pub log_level: Option<String>,
-}
-
-impl Default for DeviceLayout {
-    fn default() -> Self {
-        Self {
-            open: false,
-            width: DEVICE_DEFAULT_WIDTH,
-            selected: None,
-            stats: false,
-            logs: false,
-            log_level: None,
-        }
-    }
 }
 
 impl DeviceLayout {
@@ -389,21 +362,6 @@ impl DeviceLayout {
                 .unwrap_or(LogLevel::Verbose),
         }
     }
-
-    /// Clamps the width; anything unusable means the default.
-    pub fn sanitized(self) -> Self {
-        Self {
-            width: device_width(self.width).unwrap_or(DEVICE_DEFAULT_WIDTH),
-            ..self
-        }
-    }
-}
-
-/// A usable device panel width, clamped to [`DEVICE_WIDTH_RANGE`].
-pub fn device_width(width: f32) -> Option<f32> {
-    width
-        .is_finite()
-        .then(|| width.clamp(DEVICE_WIDTH_RANGE.0, DEVICE_WIDTH_RANGE.1))
 }
 
 /// Short status for pane headers and the sidebar.
@@ -419,8 +377,8 @@ pub fn status_label(status: &SessionStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, PaneLayout, Panes,
-        ProjectList, changes_width, device_width, pane_shares, sanitize_shares, status_label,
+        ChangesLayout, DeviceLayout, PANEL_DEFAULT_WIDTH, PANEL_WIDTH_RANGE, PaneLayout, Panes,
+        ProjectList, pane_shares, panel_width, sanitize_shares, status_label,
     };
     use crate::device_panel::{DeviceKey, LogsSettings, Platform};
     use hangar_core::{Project, SessionStatus, Timestamp, Workspace, WorkspaceId, WorkspaceStatus};
@@ -570,6 +528,7 @@ mod tests {
             focused: 4,
             sizes: vec![0.2, 0.2, 0.2, 0.2, 0.2],
             split: None,
+            panel_width: None,
         };
         let (restored, sizes) = saved.restore(|id| id != gone);
         assert_eq!((restored.slot(0), restored.slot(1)), (Some(a), Some(b)));
@@ -625,31 +584,43 @@ mod tests {
     }
 
     #[test]
-    fn changes_layout_sanitized() {
-        let ok = ChangesLayout {
-            open: true,
-            width: 400.0,
-        };
-        assert_eq!(ok.sanitized(), ok);
-        let narrow = ChangesLayout {
-            open: false,
-            width: 10.0,
-        };
-        assert_eq!(narrow.sanitized().width, CHANGES_WIDTH_RANGE.0);
-        let broken = ChangesLayout {
-            open: true,
-            width: f32::NAN,
-        };
-        assert_eq!(broken.sanitized().width, ChangesLayout::default().width);
-        assert!(broken.sanitized().open);
-        assert_eq!(changes_width(1e9), Some(CHANGES_WIDTH_RANGE.1));
+    fn panel_width_shared_and_migrated() {
+        let saved = |json: &str| serde_json::from_str::<PaneLayout>(json).unwrap();
+        // Saved before the tabs shared a width: the default.
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0}"#).panel_width(),
+            PANEL_DEFAULT_WIDTH
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"panel_width":500.0}"#).panel_width(),
+            500.0
+        );
+        assert_eq!(
+            saved(r#"{"panes":[null],"focused":0,"panel_width":10.0}"#).panel_width(),
+            PANEL_WIDTH_RANGE.0
+        );
+        assert_eq!(panel_width(f32::NAN), None);
+        assert_eq!(panel_width(1e9), Some(PANEL_WIDTH_RANGE.1));
+        // Old per-tab widths are ignored.
+        let changes: ChangesLayout =
+            serde_json::from_str(r#"{"open":true,"width":520.0}"#).unwrap();
+        assert_eq!(changes, ChangesLayout { open: true });
+        let device: DeviceLayout = serde_json::from_str(r#"{"open":true,"width":420.0}"#).unwrap();
+        assert!(device.open);
+        assert_eq!(
+            crate::ui::RIGHT_PANEL_WIDTH,
+            gpui_kit::px(PANEL_DEFAULT_WIDTH)
+        );
+        assert_eq!(
+            crate::ui::RIGHT_PANEL_MIN_WIDTH,
+            gpui_kit::px(PANEL_WIDTH_RANGE.0)
+        );
     }
 
     #[test]
-    fn device_layout_sanitized() {
+    fn device_layout_logs() {
         let ok = DeviceLayout {
             open: true,
-            width: 500.0,
             selected: Some(DeviceKey {
                 platform: Platform::Ios,
                 id: "U".into(),
@@ -658,7 +629,6 @@ mod tests {
             logs: true,
             log_level: Some("warn".into()),
         };
-        assert_eq!(ok.clone().sanitized(), ok);
         assert_eq!(
             ok.logs_settings(),
             LogsSettings {
@@ -675,15 +645,6 @@ mod tests {
             ..ok.clone()
         };
         assert_eq!(junk.logs_settings().min_level, LogLevel::Verbose);
-        let broken = DeviceLayout {
-            width: f32::NAN,
-            ..ok.clone()
-        };
-        let fixed = broken.sanitized();
-        assert_eq!(fixed.width, DeviceLayout::default().width);
-        assert_eq!(fixed.selected, ok.selected);
-        assert_eq!(device_width(1.0), Some(DEVICE_WIDTH_RANGE.0));
-        assert_eq!(device_width(f32::INFINITY), None);
     }
 
     #[test]

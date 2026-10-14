@@ -133,17 +133,9 @@ impl Render for HangarApp {
                 }
             }))
             .on_drag_move(
-                cx.listener(|this, event: &DragMoveEvent<ChangesResize>, window, cx| {
-                    // The device panel, when open, is right of the changes panel.
-                    let right = event.bounds.right() - px(this.device_width_on_screen());
-                    let width = right - event.event.position.x;
-                    this.resize_changes(width.as_f32(), window, cx);
-                }),
-            )
-            .on_drag_move(
-                cx.listener(|this, event: &DragMoveEvent<DeviceResize>, window, cx| {
+                cx.listener(|this, event: &DragMoveEvent<PanelResize>, window, cx| {
                     let width = event.bounds.right() - event.event.position.x;
-                    this.resize_device(width.as_f32(), window, cx);
+                    this.resize_panel(width.as_f32(), window, cx);
                 }),
             )
             .size_full()
@@ -180,7 +172,7 @@ impl HangarApp {
         let workspace_id = self.layout.panes.slot(pane);
         let workspace = workspace_id.and_then(|id| self.work.projects.workspace(id));
         let live = workspace_id.and_then(|id| self.live.sessions.get(&id));
-        let changes_open = self.layout.changes.open && focused;
+        let panel_open = self.open_panel_tab().is_some() && focused;
 
         let shown = workspace_id.map(|id| self.pane_tab(id)).unwrap_or_default();
         let tab = match workspace {
@@ -341,18 +333,18 @@ impl HangarApp {
             })
             .child(
                 div().px_1p5().child(
-                    UiButton::new(("changes-toggle", pane))
-                        .icon(Lucide::FileDiff)
+                    UiButton::new(("panel-toggle", pane))
+                        .icon(Lucide::PanelRight)
                         .ghost()
                         .small()
-                        .selected(changes_open)
-                        .tooltip(if changes_open {
-                            "Hide changes ⌘⇧D"
+                        .selected(panel_open)
+                        .tooltip(if panel_open {
+                            "Hide panel ⌘⇧D"
                         } else {
-                            "Show changes ⌘⇧D"
+                            "Show panel ⌘⇧D"
                         })
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.toggle_changes_for(pane, window, cx)
+                            this.toggle_panel_for(pane, window, cx)
                         })),
                 ),
             );
@@ -389,7 +381,7 @@ impl HangarApp {
             .child(body)
     }
 
-    /// Device and changes as tabs of one right panel; each tab keeps its own width.
+    /// Device, changes and files as tabs of one right panel of one width.
     fn render_right_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let device_tab = self.layout.device.open;
         let changes_tab = !device_tab && self.layout.changes.open;
@@ -398,11 +390,7 @@ impl HangarApp {
             return None;
         }
         let t = cx.tokens();
-        let width = if device_tab {
-            self.layout.device.width
-        } else {
-            self.layout.changes.width
-        };
+        let width = self.layout.panel_width;
         let files = self
             .layout
             .panes
@@ -454,12 +442,8 @@ impl HangarApp {
                     .icon(Lucide::PanelRightClose)
                     .ghost()
                     .small()
-                    .tooltip("Hide panel")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.set_device_open(false, window, cx);
-                        this.set_changes_open(false, window, cx);
-                        this.set_files_open(false, window, cx);
-                    })),
+                    .tooltip("Hide panel ⌘⇧D")
+                    .on_click(cx.listener(|this, _, window, cx| this.hide_panel(window, cx))),
             );
         let handle = div()
             .id("right-panel-resize")
@@ -468,12 +452,8 @@ impl HangarApp {
             .top_0()
             .h_full()
             .w(px(6.))
-            .cursor_col_resize();
-        let handle = if device_tab {
-            handle.on_drag(DeviceResize, |_, _, _, cx| cx.new(|_| DeviceResize))
-        } else {
-            handle.on_drag(ChangesResize, |_, _, _, cx| cx.new(|_| ChangesResize))
-        };
+            .cursor_col_resize()
+            .on_drag(PanelResize, |_, _, _, cx| cx.new(|_| PanelResize));
         Some(
             v_flex()
                 .relative()

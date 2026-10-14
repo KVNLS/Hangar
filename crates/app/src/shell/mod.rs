@@ -55,9 +55,8 @@ use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
 use crate::setting_keys;
 use crate::state::{
-    CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, MAX_PANES, PaneLayout,
-    Panes, ProjectEntry, ProjectList, changes_width, device_width, pane_shares, sanitize_shares,
-    status_label,
+    ChangesLayout, DeviceLayout, MAX_PANES, PANEL_DEFAULT_WIDTH, PANEL_WIDTH_RANGE, PaneLayout,
+    Panes, ProjectEntry, ProjectList, pane_shares, panel_width, sanitize_shares, status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
 pub use chrome::titlebar_options;
@@ -72,7 +71,7 @@ use view::agent_options;
 const SIDEBAR_WIDTH: f32 = 256.;
 /// How long a killed agent gets to exit before its worktree is removed.
 const KILL_GRACE: Duration = Duration::from_secs(3);
-/// The panes keep at least this much width when the changes panel is dragged wider.
+/// The panes keep at least this much width when the right panel is dragged wider.
 const MIN_PANES_WIDTH: f32 = 320.;
 /// Quiet time after a panel resize before the width is saved.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
@@ -254,19 +253,10 @@ struct DiffEntry {
     _observe: Subscription,
 }
 
-/// Drag payload of the changes panel's resize handle.
-struct ChangesResize;
+/// Drag payload of the right panel's resize handle.
+struct PanelResize;
 
-impl Render for ChangesResize {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        Empty
-    }
-}
-
-/// Drag payload of the device panel's resize handle.
-struct DeviceResize;
-
-impl Render for DeviceResize {
+impl Render for PanelResize {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         Empty
     }
@@ -302,10 +292,12 @@ struct Layout {
     _appearance_observer: Subscription,
     changes: ChangesLayout,
     files_open: bool,
-    save_changes: Option<Task<()>>,
     /// The window's device panel; it shows the focused workspace's device.
     device: DeviceLayout,
-    save_device: Option<Task<()>>,
+    /// The right panel's width, shared by its tabs.
+    panel_width: f32,
+    /// The tab the right panel shows when reopened.
+    panel_tab: layout::PanelTab,
     /// The pending (debounced) pane layout save.
     save_panes: Option<Task<()>>,
     sidebar_open: bool,
@@ -518,9 +510,9 @@ impl HangarApp {
                 _appearance_observer: appearance_observer,
                 changes: ChangesLayout::default(),
                 files_open: false,
-                save_changes: None,
                 device: DeviceLayout::default(),
-                save_device: None,
+                panel_width: PANEL_DEFAULT_WIDTH,
+                panel_tab: Default::default(),
                 save_panes: None,
                 sidebar_open: true,
                 screen: Screen::Workspace,
@@ -638,10 +630,10 @@ impl HangarApp {
                     self.restore_layout(&layout, window, cx);
                 }
                 if let Some(changes) = loaded.changes {
-                    self.layout.changes = changes.sanitized();
+                    self.layout.changes = changes;
                 }
                 if let Some(device) = loaded.device {
-                    self.layout.device = device.sanitized();
+                    self.layout.device = device;
                     let (selected, stats) = (
                         self.layout.device.selected.clone(),
                         self.layout.device.stats,
@@ -666,6 +658,9 @@ impl HangarApp {
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
                     self.layout.changes.open = false;
+                }
+                if self.layout.changes.open {
+                    self.layout.panel_tab = layout::PanelTab::Changes;
                 }
                 self.sync_diffs(cx);
                 self.sync_device_focus(window, cx);

@@ -1,6 +1,15 @@
-//! Changes/device panel sizing and pane layout persistence.
+//! Right panel tabs and sizing, and pane layout persistence.
 
 use super::*;
+
+/// Tabs of the right panel; they share its width.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PanelTab {
+    #[default]
+    Device,
+    Changes,
+    Files,
+}
 
 impl HangarApp {
     /// Saves the pane layout once it has been quiet for [`SAVE_DEBOUNCE`] (pane drags and splits
@@ -11,10 +20,18 @@ impl HangarApp {
             cx.background_executor().timer(SAVE_DEBOUNCE).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.layout.save_panes = None;
-                let layout = this.layout.panes.layout(&this.layout.pane_shares);
+                let layout = this.saved_layout();
                 this.persist(window, cx, move |store| ops::save_layout(store, &layout));
             });
         }));
+    }
+
+    /// What [`Self::save_layout`] writes: the panes and the panel widths.
+    fn saved_layout(&self) -> PaneLayout {
+        PaneLayout {
+            panel_width: Some(self.layout.panel_width),
+            ..self.layout.panes.layout(&self.layout.pane_shares)
+        }
     }
 
     /// Writes a pending layout save now (the app is quitting).
@@ -25,9 +42,7 @@ impl HangarApp {
         let Some(store) = self.store.clone() else {
             return;
         };
-        if let Err(err) =
-            ops::save_layout(&store, &self.layout.panes.layout(&self.layout.pane_shares))
-        {
+        if let Err(err) = ops::save_layout(&store, &self.saved_layout()) {
             tracing::warn!("pane layout not saved on quit: {err:#}");
         }
     }
@@ -142,6 +157,46 @@ impl HangarApp {
         self.set_screen(screen, window, cx);
     }
 
+    /// The right panel's open tab, if it is shown.
+    pub(super) fn open_panel_tab(&self) -> Option<PanelTab> {
+        if self.layout.device.open {
+            Some(PanelTab::Device)
+        } else if self.layout.changes.open {
+            Some(PanelTab::Changes)
+        } else if self.layout.files_open {
+            Some(PanelTab::Files)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn show_panel_tab(
+        &mut self,
+        tab: PanelTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match tab {
+            PanelTab::Device => self.set_device_open(true, window, cx),
+            PanelTab::Changes => self.set_changes_open(true, window, cx),
+            PanelTab::Files => self.set_files_open(true, window, cx),
+        }
+    }
+
+    pub(super) fn hide_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_device_open(false, window, cx);
+        self.set_changes_open(false, window, cx);
+        self.set_files_open(false, window, cx);
+    }
+
+    /// Hides the right panel, or shows it on the tab it last showed.
+    pub(super) fn toggle_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.open_panel_tab() {
+            Some(_) => self.hide_panel(window, cx),
+            None => self.show_panel_tab(self.layout.panel_tab, window, cx),
+        }
+    }
+
     /// The Files tab (not saved: it reopens on Device or Changes).
     pub(super) fn set_files_open(
         &mut self,
@@ -152,6 +207,7 @@ impl HangarApp {
         if open {
             self.set_device_open(false, window, cx);
             self.set_changes_open(false, window, cx);
+            self.layout.panel_tab = PanelTab::Files;
         }
         self.layout.files_open = open;
         cx.notify();
@@ -169,6 +225,7 @@ impl HangarApp {
         }
         if open {
             self.layout.files_open = false;
+            self.layout.panel_tab = PanelTab::Changes;
         }
         if self.layout.changes.open != open {
             self.layout.changes.open = open;
@@ -184,20 +241,24 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_changes_open(!self.layout.changes.open, window, cx);
+        self.toggle_panel(window, cx);
     }
 
-    /// The pane header button: opens the panel on this pane, or closes it if it already
-    /// shows this pane.
-    pub(super) fn toggle_changes_for(
+    /// The pane header button: shows the panel for this pane, or hides it if it already shows
+    /// this pane.
+    pub(super) fn toggle_panel_for(
         &mut self,
         pane: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let showing_this = self.layout.changes.open && self.layout.panes.focused() == pane;
+        let showing_this = self.open_panel_tab().is_some() && self.layout.panes.focused() == pane;
         self.focus_pane(pane, window, cx);
-        self.set_changes_open(!showing_this, window, cx);
+        if showing_this {
+            self.hide_panel(window, cx);
+        } else if self.open_panel_tab().is_none() {
+            self.show_panel_tab(self.layout.panel_tab, window, cx);
+        }
     }
 
     pub(super) fn save_changes_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -205,46 +266,24 @@ impl HangarApp {
         self.persist(window, cx, move |store| ops::save_changes(store, &changes));
     }
 
-    pub(super) fn device_width_on_screen(&self) -> f32 {
-        if self.layout.device.open {
-            self.layout.device.width
+    /// Resizes the right panel (all its tabs), leaving the panes their minimum width.
+    pub(super) fn resize_panel(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let sidebar = if self.layout.sidebar_open {
+            SIDEBAR_WIDTH
         } else {
             0.
-        }
-    }
-
-    pub(super) fn changes_width_on_screen(&self) -> f32 {
-        if self.layout.changes.open {
-            self.layout.changes.width
-        } else {
-            0.
-        }
-    }
-
-    pub(super) fn resize_changes(
-        &mut self,
-        width: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let max = (window.viewport_size().width.as_f32()
-            - SIDEBAR_WIDTH
-            - MIN_PANES_WIDTH
-            - self.device_width_on_screen())
-        .max(CHANGES_WIDTH_RANGE.0);
-        let Some(width) = changes_width(width.min(max)) else {
+        };
+        let max = (window.viewport_size().width.as_f32() - sidebar - MIN_PANES_WIDTH)
+            .max(PANEL_WIDTH_RANGE.0);
+        let Some(width) = panel_width(width.min(max)) else {
             return;
         };
-        if (width - self.layout.changes.width).abs() < 0.5 {
+        if (width - self.layout.panel_width).abs() < 0.5 {
             return;
         }
-        self.layout.changes.width = width;
+        self.layout.panel_width = width;
         cx.notify();
-        // Dropping the previous task cancels it: only the last width is written.
-        self.layout.save_changes = Some(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(SAVE_DEBOUNCE).await;
-            let _ = this.update_in(cx, |this, window, cx| this.save_changes_layout(window, cx));
-        }));
+        self.save_layout(window, cx);
     }
 
     pub(super) fn set_device_open(
@@ -258,6 +297,7 @@ impl HangarApp {
         }
         if open {
             self.layout.files_open = false;
+            self.layout.panel_tab = PanelTab::Device;
         }
         if self.layout.device.open != open {
             self.layout.device.open = open;
@@ -269,13 +309,18 @@ impl HangarApp {
             .update(cx, |panel, cx| panel.set_visible(open, window, cx));
     }
 
+    /// Shows the device tab, or hides the panel if the device tab is showing.
     pub(super) fn toggle_device(
         &mut self,
         _: &ToggleDevice,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_device_open(!self.layout.device.open, window, cx);
+        if self.layout.device.open {
+            self.hide_panel(window, cx);
+        } else {
+            self.set_device_open(true, window, cx);
+        }
     }
 
     pub(super) fn toggle_device_stats(
@@ -295,31 +340,6 @@ impl HangarApp {
         self.persist(window, cx, move |store| ops::save_device(store, &device));
     }
 
-    pub(super) fn resize_device(
-        &mut self,
-        width: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let max = (window.viewport_size().width.as_f32()
-            - SIDEBAR_WIDTH
-            - MIN_PANES_WIDTH
-            - self.changes_width_on_screen())
-        .max(DEVICE_WIDTH_RANGE.0);
-        let Some(width) = device_width(width.min(max)) else {
-            return;
-        };
-        if (width - self.layout.device.width).abs() < 0.5 {
-            return;
-        }
-        self.layout.device.width = width;
-        cx.notify();
-        self.layout.save_device = Some(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(SAVE_DEBOUNCE).await;
-            let _ = this.update_in(cx, |this, window, cx| this.save_device_layout(window, cx));
-        }));
-    }
-
     /// Shows the saved workspaces (without starting agents) and re-applies their widths once the
     /// pane group has been laid out.
     pub(super) fn restore_layout(
@@ -332,6 +352,7 @@ impl HangarApp {
         let (panes, shares) = layout.restore(|id| projects.is_active(id));
         self.layout.panes = panes;
         self.layout.pane_shares = shares;
+        self.layout.panel_width = layout.panel_width();
         self.apply_pane_shares(window, cx);
     }
 
