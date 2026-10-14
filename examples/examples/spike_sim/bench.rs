@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
-use hangar_devices::{Device, Frame, FrameReceiver, Input};
+use hangar_devices::{Device, Frame, FrameReceiver, Input, SavePng as _};
 
 /// Settings icon on the default iOS 27 iPhone 17 home screen, in points (402x874 pt screen).
 const SETTINGS_ICON: (f64, f64) = (339.0, 422.0);

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use hangar_devices::android::{AndroidSdk, adb::Adb};
-use hangar_devices::{Device, Frame, FrameReceiver, Input};
+use hangar_devices::{Device, Frame, FrameReceiver, Input, SavePng as _};
 
 /// Photos icon on the default Pixel 10 Pro (API 37) home screen, in dp (426.7x952 dp screen).
 const TAP_TARGET: (f64, f64) = (263.0, 664.0);

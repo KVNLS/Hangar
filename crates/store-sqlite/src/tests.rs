@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::*;
-use crate::slugify;
+use hangar_core::slugify;
 
 fn store() -> Store {
     Store::open_in_memory().unwrap()
@@ -346,14 +346,12 @@ fn v1_database_file_is_migrated_to_settings() {
     assert_eq!(SCHEMA_VERSION, 2);
     assert_eq!(store.schema_version().unwrap(), 2);
     assert_eq!(store.list_projects().unwrap(), vec![p]);
-    assert_eq!(store.get_setting::<String>("agent").unwrap(), None);
-    store.set_setting("agent", "codex").unwrap();
+    const AGENT: Setting<String> = Setting::new("agent");
+    assert_eq!(store.get_setting(&AGENT).unwrap(), None);
+    store.set_setting(&AGENT, &"codex".to_owned()).unwrap();
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(
-        store.get_setting::<String>("agent").unwrap().as_deref(),
-        Some("codex")
-    );
+    assert_eq!(store.get_setting(&AGENT).unwrap().as_deref(), Some("codex"));
 }
 
 #[test]
@@ -368,20 +366,23 @@ fn settings_round_trip_and_overwrite() {
         panes: vec![Some(WorkspaceId::new()), None],
         split: Some(0.4),
     };
-    store.set_setting("layout", &layout).unwrap();
-    assert_eq!(store.get_setting::<Layout>("layout").unwrap(), Some(layout));
+    const LAYOUT: Setting<Layout> = Setting::new("layout");
+    store.set_setting(&LAYOUT, &layout).unwrap();
+    assert_eq!(store.get_setting(&LAYOUT).unwrap(), Some(layout));
 
     let empty = Layout {
         panes: vec![],
         split: None,
     };
-    store.set_setting("layout", &empty).unwrap();
-    assert_eq!(store.get_setting::<Layout>("layout").unwrap(), Some(empty));
+    store.set_setting(&LAYOUT, &empty).unwrap();
+    assert_eq!(store.get_setting(&LAYOUT).unwrap(), Some(empty));
 
     // A value of the wrong shape is an error, not a silent default.
-    store.set_setting("layout", "not a layout").unwrap();
+    store
+        .set_setting(&Setting::new("layout"), &"not a layout")
+        .unwrap();
     assert!(matches!(
-        store.get_setting::<Layout>("layout"),
+        store.get_setting(&LAYOUT),
         Err(StoreError::Serde(_))
     ));
 }
@@ -389,8 +390,11 @@ fn settings_round_trip_and_overwrite() {
 #[test]
 fn delete_setting_removes_the_key() {
     let store = Store::open_in_memory().unwrap();
-    store.set_setting("run:x", &8100u16).unwrap();
-    store.delete_setting("run:x").unwrap();
-    assert_eq!(store.get_setting::<u16>("run:x").unwrap(), None);
-    store.delete_setting("missing").unwrap();
+    let run = Setting::<u16>::scoped("run", "x");
+    store.set_setting(&run, &8100).unwrap();
+    store.delete_setting(&run).unwrap();
+    assert_eq!(store.get_setting(&run).unwrap(), None);
+    store
+        .delete_setting(&Setting::<u16>::new("missing"))
+        .unwrap();
 }

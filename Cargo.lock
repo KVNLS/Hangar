@@ -2997,7 +2997,9 @@ dependencies = [
  "hangar-files",
  "hangar-mcp",
  "hangar-runner",
+ "hangar-store-sqlite",
  "hangar-terminal",
+ "hangar-usecases",
  "hangar-worktree",
  "image",
  "libc",
@@ -3016,13 +3018,9 @@ dependencies = [
 name = "hangar-core"
 version = "0.1.0"
 dependencies = [
- "rusqlite",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.21",
- "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -3031,6 +3029,7 @@ name = "hangar-devices"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "hangar-core",
  "image",
  "libc",
  "objc2 0.6.4",
@@ -3080,7 +3079,7 @@ dependencies = [
 name = "hangar-mcp"
 version = "0.1.0"
 dependencies = [
- "hangar-devices",
+ "hangar-core",
  "image",
  "serde_json",
  "tempfile",
@@ -3093,11 +3092,25 @@ dependencies = [
 name = "hangar-runner"
 version = "0.1.0"
 dependencies = [
- "hangar-devices",
+ "hangar-core",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "hangar-store-sqlite"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3112,9 +3125,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-usecases"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-worktree"
 version = "0.1.0"
 dependencies = [
+ "hangar-core",
  "libc",
  "serde_json",
  "tempfile",

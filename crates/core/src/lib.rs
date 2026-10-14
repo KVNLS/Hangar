@@ -1,16 +1,17 @@
-//! Projects, workspaces, sessions, event bus and SQLite persistence.
+//! The domain: projects, workspaces, sessions, agent state, device vocabulary and typed
+//! setting keys. Pure data and rules; persistence lives in `hangar-store-sqlite`.
 
 mod agent_state;
-mod bus;
+pub mod device;
 mod model;
+pub mod ports;
+mod setting;
 mod slug;
-mod store;
 
 pub use agent_state::{AcpTurn, AgentState};
-pub use bus::{DEFAULT_BUS_CAPACITY, Event, EventBus};
 pub use model::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
     WorkspaceId, WorkspaceStatus,
 };
-pub use slug::slugify;
-pub use store::{SCHEMA_VERSION, Store, StoreError, default_db_path};
+pub use setting::Setting;
+pub use slug::{BRANCH_PREFIX, branch_name, slugify, unique_slug, worktree_path};

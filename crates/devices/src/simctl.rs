@@ -6,6 +6,8 @@ use serde::Deserialize;
 
 use crate::{DeviceInfo, Error, Result, ScreenSpec};
 
+pub use hangar_core::device::state;
+
 #[derive(Deserialize)]
 struct DeviceList {
     devices: BTreeMap<String, Vec<SimctlDevice>>,
@@ -28,7 +30,7 @@ pub fn parse_booted(json: &str) -> Result<Vec<DeviceInfo>> {
     let list: DeviceList = serde_json::from_str(json).map_err(|e| Error::Parse(e.to_string()))?;
     let mut out = Vec::new();
     for (runtime, devices) in list.devices {
-        for d in devices.into_iter().filter(|d| d.state == "Booted") {
+        for d in devices.into_iter().filter(|d| d.state == state::BOOTED) {
             out.push(DeviceInfo {
                 udid: d.udid,
                 name: d.name,

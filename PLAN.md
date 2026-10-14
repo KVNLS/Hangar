@@ -9,18 +9,21 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 - macOS first; Linux kept possible. iOS-specific code is `#[cfg(target_os = "macos")]`.
 - Private Apple frameworks only inside `devices` (or its helper), behind the `Device` trait, with a public
   fallback (`simctl`) always available.
+- Hexagonal: dependencies point inwards to `core`; see docs/ARCHITECTURE.md for the dependency rule
+  (checked by `crates/app/tests/architecture.rs`) and the migration roadmap.
 
 ## Crates
 | crate    | owns                                                                             | depends on     |
 |----------|----------------------------------------------------------------------------------|----------------|
-| core     | Project / Workspace / Session models, EventBus, SQLite Store                     | —              |
+| core     | domain: Project / Workspace / Session, AgentState, device vocabulary, Setting<T> | —              |
+| store-sqlite | SQLite Store (projects, workspaces, sessions, settings)                      | core           |
 | worktree | git CLI wrapper: worktree add/remove/list, status, diff                          | —              |
 | agents   | AgentAdapter trait, PtyAdapter; ACP client (`acp`: protocol, stdio, AcpAdapter)  | terminal       |
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |
 | files    | file watching (notify, debounced, git-ignore aware), LiveDiff model              | worktree       |
-| devices  | Device trait; iOS (private + simctl fallback), Android (M4)                      | —              |
-| runner   | build/run per stack: Xcode, Gradle, React Native, Expo                           | devices        |
-| mcp      | MCP device tools for agents: protocol engine, socket server, stdio bridge (M8)   | devices        |
+| devices  | Device trait; iOS (private + simctl fallback), Android (M4)                      | core           |
+| runner   | build/run per stack: Xcode, Gradle, React Native, Expo                           | core           |
+| mcp      | MCP device tools for agents: protocol engine, socket server, stdio bridge (M8)   | core           |
 | app      | GPUI shell, all views (terminal, diff, device), wiring                           | all            |
 
 Views (terminal, diff, device) live in `app`; library crates expose plain data and input enums.

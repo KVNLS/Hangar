@@ -10,13 +10,16 @@ use anyhow::{Context as _, anyhow};
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, AgentHandle, PtyAdapter, SpawnContext, UpdateHook};
 use hangar_core::{
-    Project, ProjectId, Session, SessionId, SessionStatus, Store, Timestamp, Workspace,
-    WorkspaceId, WorkspaceStatus, slugify,
+    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
 };
+use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
+use hangar_usecases::workspaces::Workspaces;
+pub use hangar_usecases::workspaces::{DeleteOptions, DeleteOutcome, DeleteSummary};
+use hangar_worktree::GitCli;
 
 use crate::agents::{self, AgentExtras};
-use crate::paths::{BRANCH_PREFIX, branch_name, unique_slug, worktree_path};
+use crate::setting_keys;
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
 use crate::ui::theme::Appearance;
 
@@ -25,19 +28,6 @@ pub fn open_store(path: &Path) -> anyhow::Result<Arc<Store>> {
         Store::open(path).with_context(|| format!("failed to open database {}", path.display()))?;
     Ok(Arc::new(store))
 }
-
-/// Setting key of the saved [`PaneLayout`].
-pub const LAYOUT_SETTING: &str = "layout";
-/// Setting key of the agent picked for new workspaces.
-pub const AGENT_SETTING: &str = "agent";
-/// Setting key of the saved [`ChangesLayout`].
-pub const CHANGES_SETTING: &str = "changes_panel";
-/// Setting key of the saved [`DeviceLayout`].
-pub const DEVICE_SETTING: &str = "device_panel";
-/// Setting key of the saved [`Appearance`].
-pub const APPEARANCE_SETTING: &str = "appearance";
-/// Setting key of the saved [`OllamaSettings`].
-pub const OLLAMA_SETTING: &str = "ollama";
 
 /// Local models served by Ollama, offered to OpenCode as an extra provider.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -63,7 +53,7 @@ pub struct Loaded {
     pub settings_error: Option<anyhow::Error>,
 }
 
-/// The ACP conversation a workspace can resume, saved under [`chat_key`].
+/// The ACP conversation a workspace can resume, saved under [`setting_keys::chat`].
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SavedChat {
     /// The preset that ran it; only that preset resumes it.
@@ -71,20 +61,10 @@ pub struct SavedChat {
     pub session: String,
 }
 
-pub fn chat_key(id: WorkspaceId) -> String {
-    format!("chat:{id}")
-}
-
-/// Model, effort and other non-mode choices made in an agent's chat, re-applied to its next
-/// sessions. The mode is left out: it decides what the agent may do without asking.
-pub fn agent_config_key(agent: &str) -> String {
-    format!("agent_config:{agent}")
-}
-
 /// `(config id, value)` pairs in the order they were chosen.
 pub fn saved_agent_config(store: &Store, agent: &str) -> Vec<(String, String)> {
     store
-        .get_setting(&agent_config_key(agent))
+        .get_setting(&setting_keys::agent_config(agent))
         .unwrap_or_else(|err| {
             tracing::warn!(agent, "cannot read saved agent settings: {err}");
             None
@@ -101,7 +81,7 @@ pub fn remember_agent_config(
     let mut saved = saved_agent_config(store, agent);
     saved.retain(|(id, _)| id != config_id);
     saved.push((config_id.to_owned(), value.to_owned()));
-    Ok(store.set_setting(&agent_config_key(agent), &saved)?)
+    Ok(store.set_setting(&setting_keys::agent_config(agent), &saved)?)
 }
 
 /// Loads every project with its workspaces (active and archived) and the saved settings.
@@ -113,7 +93,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     for project in store.list_projects()? {
         let workspaces = store.list_workspaces(project.id)?;
         for ws in &workspaces {
-            match store.get_setting::<SavedChat>(&chat_key(ws.id)) {
+            match store.get_setting(&setting_keys::chat(ws.id)) {
                 Ok(Some(chat)) => {
                     chats.insert(ws.id, chat);
                 }
@@ -139,9 +119,9 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         });
     }
     let settings = (|| {
-        let layout = store.get_setting::<PaneLayout>(LAYOUT_SETTING)?;
-        let agent = store.get_setting::<String>(AGENT_SETTING)?;
-        let changes = store.get_setting::<ChangesLayout>(CHANGES_SETTING)?;
+        let layout = store.get_setting(&setting_keys::LAYOUT)?;
+        let agent = store.get_setting(&setting_keys::AGENT)?;
+        let changes = store.get_setting(&setting_keys::CHANGES)?;
         anyhow::Ok((layout, agent, changes))
     })()
     .context("failed to read saved layout");
@@ -151,7 +131,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     };
     // Read on its own so a bad device setting does not reset the pane layout.
     let device = match store
-        .get_setting::<DeviceLayout>(DEVICE_SETTING)
+        .get_setting(&setting_keys::DEVICE)
         .context("failed to read the device panel settings")
     {
         Ok(device) => device,
@@ -161,7 +141,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         }
     };
     let appearance = match store
-        .get_setting::<Appearance>(APPEARANCE_SETTING)
+        .get_setting(&setting_keys::APPEARANCE)
         .context("failed to read the appearance setting")
     {
         Ok(appearance) => appearance,
@@ -171,7 +151,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         }
     };
     let ollama = match store
-        .get_setting::<OllamaSettings>(OLLAMA_SETTING)
+        .get_setting(&setting_keys::OLLAMA)
         .context("failed to read the Ollama settings")
     {
         Ok(ollama) => ollama,
@@ -195,61 +175,43 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
 
 pub fn save_layout(store: &Store, layout: &PaneLayout) -> anyhow::Result<()> {
     store
-        .set_setting(LAYOUT_SETTING, layout)
+        .set_setting(&setting_keys::LAYOUT, layout)
         .context("failed to save pane layout")
 }
 
 pub fn save_changes(store: &Store, changes: &ChangesLayout) -> anyhow::Result<()> {
     store
-        .set_setting(CHANGES_SETTING, changes)
+        .set_setting(&setting_keys::CHANGES, changes)
         .context("failed to save the changes panel layout")
 }
 
 pub fn save_device(store: &Store, device: &DeviceLayout) -> anyhow::Result<()> {
     store
-        .set_setting(DEVICE_SETTING, device)
+        .set_setting(&setting_keys::DEVICE, device)
         .context("failed to save the device panel settings")
 }
 
 pub fn save_appearance(store: &Store, appearance: Appearance) -> anyhow::Result<()> {
     store
-        .set_setting(APPEARANCE_SETTING, &appearance)
+        .set_setting(&setting_keys::APPEARANCE, &appearance)
         .context("failed to save the appearance")
 }
 
 pub fn save_ollama(store: &Store, ollama: &OllamaSettings) -> anyhow::Result<()> {
     store
-        .set_setting(OLLAMA_SETTING, ollama)
+        .set_setting(&setting_keys::OLLAMA, ollama)
         .context("failed to save the Ollama settings")
 }
 
 pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {
     store
-        .set_setting(AGENT_SETTING, agent)
+        .set_setting(&setting_keys::AGENT, &agent.to_owned())
         .context("failed to save the selected agent")
 }
 
 /// Registers the repository containing `path`, or returns the existing project for it.
 pub fn add_project(store: &Store, path: &Path) -> anyhow::Result<Project> {
-    let root = hangar_worktree::repo_root(path)
-        .with_context(|| format!("{} is not inside a Git repository", path.display()))?;
-    if let Some(existing) = store
-        .list_projects()?
-        .into_iter()
-        .find(|p| p.repo_path == root)
-    {
-        return Ok(existing);
-    }
-    let base = hangar_worktree::default_branch(&root)
-        .with_context(|| format!("failed to read branches of {}", root.display()))?
-        .unwrap_or_else(|| "HEAD".to_owned());
-    let name = root
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| root.display().to_string());
-    let project = Project::new(name, root, base);
-    store.insert_project(&project)?;
-    Ok(project)
+    Ok(workspaces(store).add_project(path)?)
 }
 
 /// Creates the branch, the worktree and the workspace row. The slug gets a numeric suffix when
@@ -274,89 +236,7 @@ pub fn create_workspace_from(
     base: Option<&str>,
     branch: Option<&str>,
 ) -> anyhow::Result<Workspace> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(anyhow!("workspace name is empty"));
-    }
-    let repo = &project.repo_path;
-    let base = base
-        .map(str::trim)
-        .filter(|b| !b.is_empty())
-        .unwrap_or(&project.default_base)
-        .to_owned();
-    let chosen = branch.map(str::trim).filter(|b| !b.is_empty());
-    if let Some(chosen) = chosen {
-        if !hangar_worktree::is_valid_branch_name(repo, chosen)? {
-            return Err(anyhow!("`{chosen}` is not a valid branch name"));
-        }
-        if hangar_worktree::branch_exists(repo, chosen)? {
-            return Err(anyhow!("branch `{chosen}` already exists"));
-        }
-    }
-    let project_slug = slugify(&project.name);
-    let existing: Vec<String> = store
-        .list_workspaces(project.id)?
-        .into_iter()
-        .map(|ws| ws.slug)
-        .collect();
-    let mut git_error = None;
-    let slug = unique_slug(&slugify(name), |candidate| {
-        if existing.iter().any(|s| s == candidate)
-            || worktree_path(worktrees_root, &project_slug, candidate).exists()
-        {
-            return true;
-        }
-        if chosen.is_some() {
-            return false;
-        }
-        match hangar_worktree::branch_exists(repo, &branch_name(candidate)) {
-            Ok(taken) => taken,
-            Err(err) => {
-                git_error.get_or_insert(err);
-                false
-            }
-        }
-    });
-    if let Some(err) = git_error {
-        return Err(err).context("failed to check existing branches");
-    }
-
-    let branch = chosen.map_or_else(|| branch_name(&slug), str::to_owned);
-    let path = worktree_path(worktrees_root, &project_slug, &slug);
-    let options = hangar_worktree::CreateOptions {
-        branch: branch.clone(),
-        base: Some(base.clone()),
-        path: path.clone(),
-        reuse_existing_branch: false,
-    };
-    let worktree = hangar_worktree::create(repo, &options)
-        .with_context(|| format!("failed to create worktree {}", path.display()))?;
-
-    let workspace = Workspace {
-        id: WorkspaceId::new(),
-        project_id: project.id,
-        name: name.to_owned(),
-        slug,
-        branch,
-        base,
-        worktree_path: worktree.path,
-        status: WorkspaceStatus::Active,
-        created_at: Timestamp::now(),
-    };
-    if let Err(err) = store.insert_workspace(&workspace) {
-        rollback_worktree(repo, &path, &workspace.branch);
-        return Err(err).context("failed to save workspace");
-    }
-    Ok(workspace)
-}
-
-fn rollback_worktree(repo: &Path, path: &Path, branch: &str) {
-    if let Err(err) = hangar_worktree::remove(repo, path, true) {
-        tracing::warn!(%err, "rollback: failed to remove worktree");
-    }
-    if let Err(err) = hangar_worktree::delete_branch(repo, branch, true) {
-        tracing::warn!(%err, "rollback: failed to delete branch");
-    }
+    Ok(workspaces(store).create(project, name, worktrees_root, base, branch)?)
 }
 
 pub struct StartedSession {
@@ -550,15 +430,7 @@ pub fn finish_session(
 
 /// Records that a running session was stopped by Hangar (archive, delete).
 pub fn stop_session(store: &Store, id: SessionId, reason: &str) -> anyhow::Result<()> {
-    store
-        .update_session_status(
-            id,
-            &SessionStatus::Failed {
-                message: format!("stopped: {reason}"),
-            },
-        )
-        .context("failed to record the stopped session")?;
-    Ok(())
+    Ok(workspaces(store).stop_session(id, reason)?)
 }
 
 /// Marks the workspace archived, recording `session` (if any) as stopped.
@@ -567,99 +439,18 @@ pub fn archive_workspace(
     id: WorkspaceId,
     session: Option<SessionId>,
 ) -> anyhow::Result<()> {
-    store
-        .update_workspace_status(id, WorkspaceStatus::Archived)
-        .context("failed to archive the workspace")?;
-    if let Some(session) = session {
-        stop_session(store, session, "workspace archived")?;
-    }
-    Ok(())
+    Ok(workspaces(store).archive(id, session)?)
 }
 
 pub fn restore_workspace(store: &Store, id: WorkspaceId) -> anyhow::Result<()> {
-    store
-        .update_workspace_status(id, WorkspaceStatus::Active)
-        .context("failed to restore the workspace")
-}
-
-/// What deleting a workspace would throw away.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DeleteSummary {
-    /// The worktree directory still exists.
-    pub exists: bool,
-    /// Staged, unstaged and conflicted paths.
-    pub uncommitted: usize,
-    pub untracked: usize,
-    /// Commits on the workspace branch that are not on its base; `None` if unknown.
-    pub ahead: Option<u32>,
-}
-
-impl DeleteSummary {
-    /// Removing the worktree needs `--force` (and loses work).
-    pub fn is_dirty(&self) -> bool {
-        self.uncommitted > 0 || self.untracked > 0
-    }
-
-    pub fn describe(&self, base: &str) -> Vec<String> {
-        if !self.exists {
-            return vec!["The worktree directory no longer exists.".to_owned()];
-        }
-        let mut lines = Vec::new();
-        if self.is_dirty() {
-            lines.push(format!(
-                "{} uncommitted and {} untracked file(s) will be lost.",
-                self.uncommitted, self.untracked
-            ));
-        } else {
-            lines.push("No uncommitted or untracked files.".to_owned());
-        }
-        match self.ahead {
-            Some(0) => lines.push(format!("No commits ahead of {base}.")),
-            Some(n) => lines.push(format!("{n} commit(s) ahead of {base}.")),
-            None => lines.push(format!("Could not count commits ahead of {base}.")),
-        }
-        lines
-    }
+    Ok(workspaces(store).restore(id)?)
 }
 
 /// Reads the worktree's status for the delete confirmation.
 pub fn delete_summary(workspace: &Workspace) -> anyhow::Result<DeleteSummary> {
-    let path = &workspace.worktree_path;
-    if !path.exists() {
-        return Ok(DeleteSummary::default());
-    }
-    let status = hangar_worktree::status(path)
-        .with_context(|| format!("failed to read the status of {}", path.display()))?;
-    let uncommitted = status
-        .changes
-        .iter()
-        .filter(|c| c.kind != hangar_worktree::ChangeKind::Untracked)
-        .count();
-    let ahead = hangar_worktree::Git::new(path)
-        .run(["rev-list", "--count", &format!("{}..HEAD", workspace.base)])
-        .map_err(|err| tracing::warn!(%err, "failed to count commits ahead of base"))
-        .ok()
-        .and_then(|out| out.trim().parse().ok());
-    Ok(DeleteSummary {
-        exists: true,
-        uncommitted,
-        untracked: status.untracked,
-        ahead,
-    })
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DeleteOptions {
-    /// Discard uncommitted and untracked files. Only set after the user saw them listed.
-    pub force: bool,
-    /// Also delete the `hangar/<slug>` branch (never forced: unmerged branches are kept).
-    pub delete_branch: bool,
-}
-
-#[derive(Debug, Default)]
-pub struct DeleteOutcome {
-    /// The workspace is gone but its branch could not be deleted.
-    pub branch_error: Option<String>,
+    Ok(hangar_usecases::workspaces::delete_summary(
+        &GitCli, workspace,
+    )?)
 }
 
 /// Removes the workspace's worktree, prunes, optionally deletes its branch, then deletes its
@@ -670,77 +461,17 @@ pub fn delete_workspace(
     id: WorkspaceId,
     options: DeleteOptions,
 ) -> anyhow::Result<DeleteOutcome> {
-    let workspace = store.get_workspace(id)?;
-    let project = store.get_project(workspace.project_id)?;
-    let repo = &project.repo_path;
-    let path = &workspace.worktree_path;
-
-    if path.exists() {
-        let wanted = canonical(path);
-        let listed = hangar_worktree::list(repo)
-            .with_context(|| format!("failed to list worktrees of {}", repo.display()))?
-            .into_iter()
-            .find(|wt| canonical(&wt.path) == wanted);
-        match listed {
-            Some(wt) if !wt.is_main && !wt.bare => {
-                hangar_worktree::remove(repo, path, options.force)
-                    .with_context(|| format!("failed to remove worktree {}", path.display()))?;
-            }
-            Some(_) => {
-                return Err(anyhow!(
-                    "refusing to delete {}: it is the repository's main working tree",
-                    path.display()
-                ));
-            }
-            None => {
-                return Err(anyhow!(
-                    "refusing to delete {}: it is not a worktree of {}",
-                    path.display(),
-                    repo.display()
-                ));
-            }
-        }
-    }
-    if let Err(err) = hangar_worktree::prune(repo) {
-        tracing::warn!(%err, "git worktree prune failed");
-    }
-
-    let mut outcome = DeleteOutcome::default();
-    if options.delete_branch {
-        if !workspace.branch.starts_with(BRANCH_PREFIX) {
-            outcome.branch_error = Some(format!(
-                "kept branch `{}`: not created by Hangar",
-                workspace.branch
-            ));
-        } else if let Err(err) = hangar_worktree::delete_branch(repo, &workspace.branch, false) {
-            outcome.branch_error = Some(format!("kept branch `{}`: {err}", workspace.branch));
-        }
-    }
-    store
-        .delete_workspace(id)
-        .context("the worktree was removed but the workspace could not be deleted")?;
-    Ok(outcome)
+    Ok(workspaces(store).delete(id, options)?)
 }
 
 /// Forgets the project (and its archived workspaces) without touching the repository or any
 /// worktree on disk. Refused while it has active workspaces.
 pub fn remove_project(store: &Store, id: ProjectId) -> anyhow::Result<()> {
-    let active: Vec<String> = store
-        .list_workspaces(id)?
-        .into_iter()
-        .filter(|w| w.status == WorkspaceStatus::Active)
-        .map(|w| w.name)
-        .collect();
-    if !active.is_empty() {
-        return Err(anyhow!(
-            "archive or delete its workspaces first: {}",
-            active.join(", ")
-        ));
-    }
-    store
-        .delete_project(id)
-        .context("failed to remove project")?;
-    Ok(())
+    Ok(workspaces(store).remove_project(id)?)
+}
+
+fn workspaces(store: &Store) -> Workspaces<'_> {
+    Workspaces::new(store, &GitCli)
 }
 
 /// Session status for a finished program.
@@ -780,7 +511,8 @@ pub fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::agents;
-    use hangar_core::{SessionStatus, Store};
+    use hangar_core::{SessionStatus, Setting, WorkspaceStatus, branch_name};
+    use hangar_store_sqlite::Store;
     use hangar_terminal::ExitInfo;
     use std::path::Path;
     use std::process::Command;
@@ -960,7 +692,9 @@ mod tests {
             agent: "claude-acp".into(),
             session: "s-1".into(),
         };
-        store.set_setting(&chat_key(ws.id), &chat).unwrap();
+        store
+            .set_setting(&setting_keys::chat(ws.id), &chat)
+            .unwrap();
         let loaded = load(&store).unwrap();
         assert_eq!(loaded.chats.get(&ws.id), Some(&chat));
     }
@@ -1338,7 +1072,7 @@ mod tests {
         save_changes(&f.store, &changes).unwrap();
         assert_eq!(load(&f.store).unwrap().changes, Some(changes));
 
-        f.store.set_setting(LAYOUT_SETTING, &42).unwrap();
+        f.store.set_setting(&Setting::new("layout"), &42).unwrap();
         let loaded = load(&f.store).unwrap();
         assert!(loaded.layout.is_none());
         assert!(loaded.settings_error.is_some());
@@ -1392,7 +1126,7 @@ mod tests {
         }
         f.store
             .set_setting(
-                DEVICE_SETTING,
+                &Setting::new("device_panel"),
                 &Saved {
                     open: true,
                     width: 400.0,
@@ -1421,7 +1155,7 @@ mod tests {
         }
         f.store
             .set_setting(
-                DEVICE_SETTING,
+                &Setting::new("device_panel"),
                 &Old {
                     open: false,
                     width: 300.0,
@@ -1437,7 +1171,9 @@ mod tests {
 
         // A broken device setting is reported but leaves the other settings alone.
         save_agent(&f.store, "codex").unwrap();
-        f.store.set_setting(DEVICE_SETTING, &"nope").unwrap();
+        f.store
+            .set_setting(&Setting::new("device_panel"), &"nope")
+            .unwrap();
         let loaded = load(&f.store).unwrap();
         assert!(loaded.device.is_none());
         assert!(loaded.settings_error.is_some());

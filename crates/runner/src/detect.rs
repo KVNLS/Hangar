@@ -28,8 +28,8 @@ impl Stack {
 
 impl Stack {
     /// Whether this stack builds for `platform` (React Native and Expo build for both).
-    pub fn targets(&self, platform: hangar_devices::Platform) -> bool {
-        use hangar_devices::Platform;
+    pub fn targets(&self, platform: hangar_core::device::Platform) -> bool {
+        use hangar_core::device::Platform;
         match self {
             Self::Xcode { .. } => platform == Platform::Ios,
             Self::Gradle { .. } => platform == Platform::Android,
@@ -40,7 +40,7 @@ impl Stack {
 
 /// The first detected stack that builds for `platform`: a repository with native `ios/` and
 /// `android/` apps runs the one matching the open device.
-pub fn pick_stack(stacks: &[Stack], platform: hangar_devices::Platform) -> Option<&Stack> {
+pub fn pick_stack(stacks: &[Stack], platform: hangar_core::device::Platform) -> Option<&Stack> {
     stacks.iter().find(|stack| stack.targets(platform))
 }
 
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn picks_the_stack_for_the_device_platform() {
-        use hangar_devices::Platform;
+        use hangar_core::device::Platform;
         let native = vec![
             Stack::Xcode {
                 container: PathBuf::from("ios/Demo.xcodeproj"),

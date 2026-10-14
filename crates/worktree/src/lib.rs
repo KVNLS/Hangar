@@ -1,6 +1,7 @@
 //! Git worktree management, branch status and diffs via the git CLI (porcelain output only).
 //! Every call blocks on a `git` subprocess: run them off the UI thread.
 
+mod adapter;
 mod diff;
 mod error;
 pub mod gh;
@@ -12,6 +13,7 @@ mod review;
 mod status;
 mod worktree;
 
+pub use adapter::GitCli;
 pub use diff::{
     FileStat, diff_file, diff_files, diff_files_with, diff_paths, diff_stat, list_files,
     merge_base, parse_numstat, untracked_files,

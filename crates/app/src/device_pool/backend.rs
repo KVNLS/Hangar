@@ -7,7 +7,7 @@ use anyhow::{Context as _, anyhow};
 use hangar_devices::DeviceInfo;
 use hangar_devices::capacity::DeviceCost;
 
-use crate::device_panel::{BackendReason, Platform};
+use crate::device_panel::{BackendReason, Platform, PlatformDevices as _};
 use crate::device_view::DeviceSession;
 
 /// Prefix of the simulators the pool creates (recognisable and cleanable in Device Hub).
@@ -346,13 +346,7 @@ pub fn stack_platforms(root: &std::path::Path) -> Vec<Platform> {
     let stacks = hangar_runner::detect(root);
     Platform::ALL
         .into_iter()
-        .filter(|p| {
-            let p = match p {
-                Platform::Ios => hangar_devices::Platform::Ios,
-                Platform::Android => hangar_devices::Platform::Android,
-            };
-            stacks.iter().any(|s| s.targets(p))
-        })
+        .filter(|p| stacks.iter().any(|s| s.targets(*p)))
         .collect()
 }
 

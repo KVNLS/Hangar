@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use hangar_devices::Platform;
+use hangar_core::device::Platform;
 
 use crate::{Error, Result, Stack};
 

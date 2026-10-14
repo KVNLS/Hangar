@@ -1,6 +1,7 @@
 //! `HANGAR_DEV_*` automation hooks (documented in `main.rs`).
 
 use super::*;
+use hangar_devices::SavePng as _;
 
 impl HangarApp {
     pub(super) fn dev_open(

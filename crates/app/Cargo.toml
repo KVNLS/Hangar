@@ -30,6 +30,8 @@ gpui-kit = { workspace = true, features = [
     "tree-sitter-html",
 ] }
 hangar-core.workspace = true
+hangar-store-sqlite.workspace = true
+hangar-usecases.workspace = true
 hangar-worktree.workspace = true
 hangar-agents.workspace = true
 hangar-terminal.workspace = true

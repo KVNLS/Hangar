@@ -1,7 +1,7 @@
 //! SQLite persistence for projects, workspaces, sessions and app settings.
 //!
 //! [`Store`] is synchronous: every call takes a lock and does disk I/O. Never call it from the UI thread;
-//! use `tokio::task::spawn_blocking` (or a dedicated thread) and share it via `Arc<Store>`.
+//! run it on a background thread or executor and share it via `Arc<Store>`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -9,9 +9,10 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, ffi, params};
 use uuid::Uuid;
 
-use crate::model::{
-    AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
-    WorkspaceId, WorkspaceStatus,
+use hangar_core::ports::{PortError, PortResult};
+use hangar_core::{
+    AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Setting, Timestamp,
+    Workspace, WorkspaceId, WorkspaceStatus,
 };
 
 #[cfg(test)]
@@ -323,12 +324,17 @@ impl Store {
     }
 
     /// Reads a JSON-encoded setting; `None` when the key was never set.
-    pub fn get_setting<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+    pub fn get_setting<T: serde::de::DeserializeOwned>(
+        &self,
+        setting: &Setting<T>,
+    ) -> Result<Option<T>> {
         let value: Option<String> = self
             .conn()
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [setting.key()],
+                |row| row.get(0),
+            )
             .optional()?;
         value
             .map(|v| serde_json::from_str(&v))
@@ -336,21 +342,21 @@ impl Store {
             .map_err(StoreError::from)
     }
 
-    /// Stores `value` as JSON under `key`, replacing any previous value.
-    pub fn set_setting<T: serde::Serialize + ?Sized>(&self, key: &str, value: &T) -> Result<()> {
+    /// Stores `value` as JSON under `setting`, replacing any previous value.
+    pub fn set_setting<T: serde::Serialize>(&self, setting: &Setting<T>, value: &T) -> Result<()> {
         let encoded = serde_json::to_string(value)?;
         self.conn().execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, encoded],
+            params![setting.key(), encoded],
         )?;
         Ok(())
     }
 
-    /// Removes the setting under `key`; removing a missing key is not an error.
-    pub fn delete_setting(&self, key: &str) -> Result<()> {
+    /// Removes `setting`; removing a missing one is not an error.
+    pub fn delete_setting<T>(&self, setting: &Setting<T>) -> Result<()> {
         self.conn()
-            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
+            .execute("DELETE FROM settings WHERE key = ?1", [setting.key()])?;
         Ok(())
     }
 }
@@ -508,4 +514,54 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
         created_at: Timestamp(row.get(6)?),
         ended_at: row.get::<_, Option<i64>>(7)?.map(Timestamp),
     })
+}
+
+impl hangar_core::ports::Store for Store {
+    fn insert_project(&self, project: &Project) -> PortResult<()> {
+        Store::insert_project(self, project).map_err(PortError::new)
+    }
+
+    fn list_projects(&self) -> PortResult<Vec<Project>> {
+        Store::list_projects(self).map_err(PortError::new)
+    }
+
+    fn get_project(&self, id: ProjectId) -> PortResult<Project> {
+        Store::get_project(self, id).map_err(PortError::new)
+    }
+
+    fn delete_project(&self, id: ProjectId) -> PortResult<()> {
+        Store::delete_project(self, id).map_err(PortError::new)
+    }
+
+    fn insert_workspace(&self, workspace: &Workspace) -> PortResult<()> {
+        Store::insert_workspace(self, workspace).map_err(PortError::new)
+    }
+
+    fn list_workspaces(&self, project: ProjectId) -> PortResult<Vec<Workspace>> {
+        Store::list_workspaces(self, project).map_err(PortError::new)
+    }
+
+    fn get_workspace(&self, id: WorkspaceId) -> PortResult<Workspace> {
+        Store::get_workspace(self, id).map_err(PortError::new)
+    }
+
+    fn update_workspace_status(&self, id: WorkspaceId, status: WorkspaceStatus) -> PortResult<()> {
+        Store::update_workspace_status(self, id, status).map_err(PortError::new)
+    }
+
+    fn delete_workspace(&self, id: WorkspaceId) -> PortResult<()> {
+        Store::delete_workspace(self, id).map_err(PortError::new)
+    }
+
+    fn insert_session(&self, session: &Session) -> PortResult<()> {
+        Store::insert_session(self, session).map_err(PortError::new)
+    }
+
+    fn list_sessions(&self, workspace: WorkspaceId) -> PortResult<Vec<Session>> {
+        Store::list_sessions(self, workspace).map_err(PortError::new)
+    }
+
+    fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session> {
+        Store::update_session_status(self, id, status).map_err(PortError::new)
+    }
 }

@@ -12,60 +12,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+pub use hangar_core::device::LogLevel;
+
 use crate::{Error, Result};
 
 /// Default queue capacity of a [`LogStream`].
 pub const DEFAULT_CAPACITY: usize = 10_000;
 const STDERR_TAIL: usize = 4096;
-
-/// Severity, ordered from least to most severe. iOS `Default` maps to `Info`, Android `F` (fatal)
-/// and iOS `Fault` both map to `Fault`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LogLevel {
-    Verbose,
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Fault,
-}
-
-impl LogLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Verbose => "verbose",
-            Self::Debug => "debug",
-            Self::Info => "info",
-            Self::Warn => "warn",
-            Self::Error => "error",
-            Self::Fault => "fault",
-        }
-    }
-}
-
-impl std::fmt::Display for LogLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for LogLevel {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "verbose" | "v" => Ok(Self::Verbose),
-            "debug" | "d" => Ok(Self::Debug),
-            "info" | "i" => Ok(Self::Info),
-            "warn" | "warning" | "w" => Ok(Self::Warn),
-            "error" | "e" => Ok(Self::Error),
-            "fault" | "fatal" | "f" => Ok(Self::Fault),
-            other => Err(format!(
-                "unknown log level {other:?} (expected verbose|debug|info|warn|error|fault)"
-            )),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
