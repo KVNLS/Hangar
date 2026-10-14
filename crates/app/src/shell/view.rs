@@ -10,7 +10,7 @@ use crate::ui::{ActiveTokens as _, FONT_MONO, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT}
 impl Render for HangarApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut panes = h_resizable("panes").with_state(&self.pane_sizes);
-        for pane in 0..PANE_COUNT {
+        for pane in 0..self.panes.count() {
             panes = panes.child(resizable_panel().child(self.render_pane(pane, cx)));
         }
         let main = match self.screen {
@@ -69,6 +69,10 @@ impl Render for HangarApp {
             )
             .on_action(cx.listener(|this, _: &Run, window, cx| this.run_focused(window, cx)))
             .on_action(cx.listener(|this, _: &StopRun, _, cx| this.stop_run(cx)))
+            .on_action(cx.listener(|this, _: &SplitPane, window, cx| this.split_pane(window, cx)))
+            .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
+                this.close_pane(this.panes.focused(), window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &RestartServer, window, cx| this.restart_server(window, cx)),
             )
@@ -298,6 +302,30 @@ impl HangarApp {
             })
             .children(start)
             .children(run_button)
+            .child(
+                UiButton::new(("split", pane))
+                    .icon(Lucide::Columns2)
+                    .ghost()
+                    .small()
+                    .disabled(self.panes.count() >= MAX_PANES)
+                    .tooltip("Split right ⌘D")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.panes.focus(pane);
+                        this.split_pane(window, cx)
+                    })),
+            )
+            .when(self.panes.count() > 1, |this| {
+                this.child(
+                    UiButton::new(("close-pane", pane))
+                        .icon(Lucide::X)
+                        .ghost()
+                        .small()
+                        .tooltip("Close pane ⌘W (the agent keeps running)")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.close_pane(pane, window, cx)
+                        })),
+                )
+            })
             .child(
                 div().px_1p5().child(
                     UiButton::new(("changes-toggle", pane))

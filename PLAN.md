@@ -97,6 +97,9 @@ Git access is the `git` CLI with porcelain output, not a library.
   X10/UTF-8/SGR; Shift bypasses), focus reporting (1004).
 - Workspaces: archive/restore, delete (status-checked, optional non-forced branch delete, only linked worktrees),
   remove project, Escape cancels, layout + agent picker persisted (schema v2 `settings`), store errors surfaced.
+- Panes: one pane by default; split right (⌘D, pane tab bar, palette) up to 4 panes, close a pane (⌘W, ✕) while
+  its agent keeps running. Layout saves each pane's width share; old two-pane layouts migrate (empty panes
+  dropped, `split` → shares).
 - M3 headless: unified diff parser + `diff_files`/`diff_file` (incl. untracked, renames, binary, truncation),
   `check_ignored`; `hangar-files` Watcher (150 ms debounce) + LiveDiff (incremental status).
   Write → DiffUpdate ~220–245 ms p50 (see spikes/m3-files-notes.md).

@@ -1,4 +1,4 @@
-//! The main window: project sidebar and two tiled terminal panes.
+//! The main window: project sidebar and tiled terminal panes (one by default, split on demand).
 
 mod chrome;
 mod dev;
@@ -52,8 +52,8 @@ use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
 use crate::state::{
-    CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, PANE_COUNT, PaneLayout,
-    Panes, ProjectEntry, ProjectList, changes_width, device_width, sanitize_split, split_ratio,
+    CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, MAX_PANES, PaneLayout,
+    Panes, ProjectEntry, ProjectList, changes_width, device_width, pane_shares, sanitize_shares,
     status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
@@ -96,7 +96,9 @@ actions!(
         NextNeedingYou,
         Run,
         StopRun,
-        RestartServer
+        RestartServer,
+        SplitPane,
+        ClosePane
     ]
 );
 
@@ -119,6 +121,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-r", OpenReview, None),
         KeyBinding::new("cmd-r", Run, None),
         KeyBinding::new("cmd-.", StopRun, None),
+        KeyBinding::new("cmd-d", SplitPane, None),
+        KeyBinding::new("cmd-w", ClosePane, None),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
@@ -289,8 +293,12 @@ pub struct HangarApp {
     pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
     panes: Panes,
     pane_sizes: Entity<ResizableState>,
-    /// First pane's share of the width, once the user has resized (or it was restored).
-    split: Option<f32>,
+    /// Each pane's share of the width, once the user has resized (or it was restored); empty
+    /// means equal shares.
+    pane_shares: Vec<f32>,
+    /// Pending resize of the pane group to `pane_shares`; replacing it cancels the previous one.
+    apply_shares: Option<Task<()>>,
+    _pane_sizes_sub: Subscription,
     new_workspace: Option<new_workspace::NewWorkspaceSheet>,
     /// Agent presets with their install state (all assumed installed until the PATH is known).
     agent_choices: Vec<AgentChoice>,
@@ -365,20 +373,7 @@ impl HangarApp {
                 cx.notify();
             },
         );
-        let pane_sizes = cx.new(|_| ResizableState::default());
-        let resize_sub = cx.subscribe_in(
-            &pane_sizes,
-            window,
-            |this, sizes, _: &ResizablePanelEvent, window, cx| {
-                let sizes = sizes.read(cx);
-                let first = sizes.sizes().first().map(|s| s.as_f32());
-                let total = sizes.container_size().as_f32();
-                if let Some(split) = first.and_then(|first| split_ratio(first, total)) {
-                    this.split = Some(split);
-                    this.save_layout(window, cx);
-                }
-            },
-        );
+        let (pane_sizes, pane_sizes_sub) = Self::new_pane_sizes(window, cx);
 
         let changes_panel = cx.new(ChangesPanel::new);
         let changes_sub = cx.subscribe_in(
@@ -480,7 +475,9 @@ impl HangarApp {
             pane_tabs: HashMap::new(),
             panes: Panes::default(),
             pane_sizes,
-            split: None,
+            pane_shares: Vec::new(),
+            apply_shares: None,
+            _pane_sizes_sub: pane_sizes_sub,
             new_workspace: None,
             agent_choices: initial_choices,
             palette: None,
@@ -511,7 +508,6 @@ impl HangarApp {
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
                 select_sub,
-                resize_sub,
                 changes_sub,
                 device_sub,
                 filter_sub,

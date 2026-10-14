@@ -331,7 +331,7 @@ impl HangarApp {
             return;
         };
         let relative = relative.to_owned();
-        if let Some(pane) = (0..PANE_COUNT).find(|p| self.panes.slot(*p) == Some(workspace_id)) {
+        if let Some(pane) = self.panes.pane_of(workspace_id) {
             self.focus_pane(pane, window, cx);
         }
         self.set_files_open(true, window, cx);
@@ -790,7 +790,7 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         self.pane_tabs.insert(id, tab);
-        if let Some(pane) = (0..PANE_COUNT).find(|p| self.panes.slot(*p) == Some(id)) {
+        if let Some(pane) = self.panes.pane_of(id) {
             self.focus_pane(pane, window, cx);
         }
         self.focus_terminal(window, cx);

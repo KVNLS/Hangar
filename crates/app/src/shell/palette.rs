@@ -109,6 +109,8 @@ impl HangarApp {
                 Lucide::ArrowRight,
                 Box::new(NextNeedingYou),
             ),
+            command("Split pane right", Lucide::Columns2, Box::new(SplitPane)),
+            command("Close pane", Lucide::X, Box::new(ClosePane)),
             command("Toggle sidebar", Lucide::PanelLeft, Box::new(ToggleSidebar)),
             command(
                 "Filter workspaces",
