@@ -20,6 +20,29 @@ pub fn titlebar_options() -> TitlebarOptions {
 }
 
 /// The title of a screen that replaces the workspace (settings, overview, review).
+/// The project name in the crumbs: truncated and capped, so a long name never pushes the
+/// workspace crumb or the title bar buttons away.
+fn project_crumb(name: impl Into<SharedString>, color: Hsla) -> Div {
+    div()
+        .min_w_0()
+        .max_w(px(240.))
+        .truncate()
+        .text_color(color)
+        .child(name.into())
+}
+
+/// Longest branch name the title bar shows before cutting it with `…`.
+const MAX_BRANCH_CHARS: usize = 32;
+
+fn short_branch(branch: &str) -> String {
+    match branch.char_indices().nth(MAX_BRANCH_CHARS - 1) {
+        Some((cut, _)) if branch.chars().count() > MAX_BRANCH_CHARS => {
+            format!("{}…", &branch[..cut])
+        }
+        _ => branch.to_owned(),
+    }
+}
+
 fn screen_crumb(title: &'static str, color: Hsla) -> Div {
     div()
         .font_weight(FontWeight::SEMIBOLD)
@@ -50,9 +73,13 @@ impl HangarApp {
         let device_open = self.layout.device.open;
         let crumb = self.focused_workspace();
         let new_target = self.current_project();
+        // A zero basis, not just `min_w_0`: the title bar sizes itself to its children's content,
+        // and long crumbs would push the buttons out of the window.
         let crumbs = h_flex()
             .flex_1()
+            .w_0()
             .min_w_0()
+            .overflow_hidden()
             .gap_1p5()
             .items_center()
             .text_size(px(13.))
@@ -61,7 +88,7 @@ impl HangarApp {
                 (Screen::Settings, _) => this.child(screen_crumb("Settings", t.tx)),
                 (Screen::Overview, _) => this.child(screen_crumb("Overview", t.tx)),
                 (Screen::Review, Some((project, ws))) => this
-                    .child(div().text_color(t.tx2).child(project.name.clone()))
+                    .child(project_crumb(project.name.clone(), t.tx2))
                     .child(div().text_color(t.tx3).child("/"))
                     .child(screen_crumb("Review", t.tx))
                     .child(div().text_color(t.tx3).child("·"))
@@ -74,7 +101,7 @@ impl HangarApp {
                     ),
                 (Screen::Review, None) => this.child(screen_crumb("Review", t.tx)),
                 (Screen::Files, Some((project, ws))) => this
-                    .child(div().text_color(t.tx2).child(project.name.clone()))
+                    .child(project_crumb(project.name.clone(), t.tx2))
                     .child(div().text_color(t.tx3).child("/"))
                     .child(screen_crumb("Files", t.tx))
                     .child(div().text_color(t.tx3).child("·"))
@@ -88,7 +115,7 @@ impl HangarApp {
                 (Screen::Files, None) => this.child(screen_crumb("Files", t.tx)),
                 (Screen::Workspace, None) => this.child(div().text_color(t.tx2).child("Hangar")),
                 (Screen::Workspace, Some((project, ws))) => this
-                    .child(div().text_color(t.tx2).child(project.name.clone()))
+                    .child(project_crumb(project.name.clone(), t.tx2))
                     .child(div().text_color(t.tx3).child("/"))
                     .child(
                         div()
@@ -97,7 +124,12 @@ impl HangarApp {
                             .truncate()
                             .child(ws.name.clone()),
                     )
-                    .child(Chip::new(ws.branch.clone()).icon(Lucide::GitBranch)),
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(Chip::new(short_branch(&ws.branch)).icon(Lucide::GitBranch)),
+                    ),
             });
         TitleBar::new()
             .h(TITLEBAR_HEIGHT)
@@ -132,8 +164,9 @@ impl HangarApp {
                     .child(
                         h_flex()
                             .id("palette-search")
-                            .flex_none()
+                            // Gives way before the buttons on its right when space runs out.
                             .w(px(300.))
+                            .min_w(px(160.))
                             .h(px(26.))
                             .px(px(8.))
                             .gap(px(8.))
@@ -164,9 +197,11 @@ impl HangarApp {
                                 cx.listener(|this, _, window, cx| this.open_palette(window, cx)),
                             ),
                     )
+                    // Keeps the search box near the middle; the buttons never shrink.
+                    .child(div().flex_1().min_w_0())
                     .child(
                         h_flex()
-                            .flex_1()
+                            .flex_none()
                             .justify_end()
                             .gap_1()
                             .items_center()
