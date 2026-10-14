@@ -15,6 +15,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::*;
 use hangar_terminal::{
     ExitInfo, GridSize, Key, SpawnOptions, TerminalConfig, TerminalError, TerminalSession,
@@ -350,8 +351,21 @@ impl TerminalView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
+        self.paste_text(&text);
+    }
+
+    fn paste_text(&mut self, text: &str) {
         let bracketed = self.session.terminal().modes().bracketed_paste;
-        self.send(encode_paste(&text, bracketed));
+        self.send(encode_paste(text, bracketed));
+    }
+
+    /// Middle click: the selected text, like X11's primary selection, else the clipboard.
+    fn paste_selection_or_clipboard(&mut self, cx: &mut Context<Self>) {
+        let selected = self.session.terminal().selection_text();
+        match selected {
+            Some(text) if !text.is_empty() => self.paste_text(&text),
+            _ => self.paste(cx),
+        }
     }
 
     fn on_scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -434,7 +448,7 @@ impl Render for TerminalView {
             }
             terminal.palette().background
         };
-        div()
+        let terminal = div()
             .id("terminal")
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
@@ -452,7 +466,38 @@ impl Render for TerminalView {
                     window.focus(&view.focus_handle, cx);
                 }),
             )
-            .child(TerminalElement::new(cx.entity()))
+            .child(TerminalElement::new(cx.entity()));
+        // Programs tracking the mouse (vim, htop…) get the right click themselves.
+        if self.session.terminal().mouse_mode().is_active() {
+            return terminal.into_any_element();
+        }
+        let view = cx.entity().downgrade();
+        terminal
+            .context_menu(move |menu, _, cx| {
+                let has_selection = view.upgrade().is_some_and(|term| {
+                    term.read(cx).session.terminal().selection_text().is_some()
+                });
+                let (copy, paste, all) = (view.clone(), view.clone(), view.clone());
+                menu.item(
+                    PopupMenuItem::new("Copy")
+                        .disabled(!has_selection)
+                        .on_click(move |_, window, cx| {
+                            let _ = copy.update(cx, |term, cx| {
+                                term.copy_selection(&CopySelection, window, cx)
+                            });
+                        }),
+                )
+                .item(PopupMenuItem::new("Paste").on_click(move |_, _, cx| {
+                    let _ = paste.update(cx, |term, cx| term.paste(cx));
+                }))
+                .separator()
+                .item(
+                    PopupMenuItem::new("Select all").on_click(move |_, window, cx| {
+                        let _ = all.update(cx, |term, cx| term.select_all(&SelectAll, window, cx));
+                    }),
+                )
+            })
+            .into_any_element()
     }
 }
 
