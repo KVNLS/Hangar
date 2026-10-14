@@ -330,8 +330,10 @@ impl Device for GrpcEmulator {
             | Input::Lock
             | Input::VolumeUp
             | Input::VolumeDown
-            | Input::AppSwitch => {
+            | Input::AppSwitch
+            | Input::Key(_) => {
                 let code = match input {
+                    Input::Key(k) => keys::named(k),
                     Input::Home => keys::HOME,
                     Input::Back => keys::BACK,
                     Input::Lock => keys::POWER,

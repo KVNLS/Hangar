@@ -92,10 +92,67 @@ pub struct DevOptions {
     pub device_tap: Option<(f64, f64)>,
     /// Type this text into the device once it shows frames (same check as the tap).
     pub device_text: Option<String>,
-    /// Boot the device first when it is a shut-down virtual device (Android AVD id).
+    /// Boot the device first when it is a shut-down virtual device (simulator UDID, AVD id).
     pub device_boot: bool,
+    /// Comma-separated hardware controls to press after the text (`lock`, `volume-up`, ...).
+    pub device_buttons: Vec<hangar_devices::Input>,
+    /// Comma-separated keys to press after the buttons (`Backspace`, `Enter`, `ArrowUp`, ...).
+    pub device_keys: Vec<hangar_devices::Input>,
+    /// Shut the device down after all other device hooks.
+    pub device_shutdown: bool,
     /// Open the logs pane under the device screen.
     pub device_logs: bool,
+}
+
+/// Parses a comma-separated list; unknown names are logged and skipped.
+fn parse_list(
+    hook: &str,
+    value: Option<String>,
+    parse: impl Fn(&str) -> Option<hangar_devices::Input>,
+) -> Vec<hangar_devices::Input> {
+    let value = value.unwrap_or_default();
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .filter_map(|name| {
+            let parsed = parse(name);
+            if parsed.is_none() {
+                tracing::error!(%name, "{hook}: unknown name");
+            }
+            parsed
+        })
+        .collect()
+}
+
+fn parse_button(name: &str) -> Option<hangar_devices::Input> {
+    use hangar_devices::Input;
+    Some(match name {
+        "home" => Input::Home,
+        "back" => Input::Back,
+        "lock" | "power" => Input::Lock,
+        "volume-up" => Input::VolumeUp,
+        "volume-down" => Input::VolumeDown,
+        "app-switch" => Input::AppSwitch,
+        _ => return None,
+    })
+}
+
+fn parse_key(name: &str) -> Option<hangar_devices::Input> {
+    use hangar_devices::Key;
+    Some(hangar_devices::Input::Key(
+        match name.to_ascii_lowercase().as_str() {
+            "backspace" => Key::Backspace,
+            "enter" => Key::Enter,
+            "tab" => Key::Tab,
+            "escape" => Key::Escape,
+            "arrowup" | "up" => Key::ArrowUp,
+            "arrowdown" | "down" => Key::ArrowDown,
+            "arrowleft" | "left" => Key::ArrowLeft,
+            "arrowright" | "right" => Key::ArrowRight,
+            _ => return None,
+        },
+    ))
 }
 
 impl DevOptions {
@@ -129,6 +186,17 @@ impl DevOptions {
             device_home: flag("HANGAR_DEV_DEVICE_HOME"),
             device_text: var("HANGAR_DEV_DEVICE_TEXT"),
             device_boot: flag("HANGAR_DEV_DEVICE_BOOT"),
+            device_buttons: parse_list(
+                "HANGAR_DEV_DEVICE_BUTTONS",
+                var("HANGAR_DEV_DEVICE_BUTTONS"),
+                parse_button,
+            ),
+            device_keys: parse_list(
+                "HANGAR_DEV_DEVICE_KEYS",
+                var("HANGAR_DEV_DEVICE_KEYS"),
+                parse_key,
+            ),
+            device_shutdown: flag("HANGAR_DEV_DEVICE_SHUTDOWN"),
             device_logs: flag("HANGAR_DEV_DEVICE_LOGS"),
             device_tap: var("HANGAR_DEV_DEVICE_TAP").and_then(|v| {
                 let parsed = v
@@ -1702,11 +1770,15 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
         if let Some(text) = dev.device_text.clone() {
             inputs.push(("HANGAR_DEV_DEVICE_TEXT", DevAction::Text(text)));
         }
+        for input in dev.device_buttons.iter().chain(&dev.device_keys) {
+            inputs.push(("HANGAR_DEV_DEVICE_INPUT", DevAction::Input(*input)));
+        }
         let boot = dev.device_boot;
+        let shutdown = dev.device_shutdown;
         let logs = dev.device_logs;
         let this = this.clone();
         // Runs alongside the other hooks: waiting for frames must not hold them up.
-        cx.spawn(async move |cx| dev_device(this, id, boot, logs, inputs, cx).await)
+        cx.spawn(async move |cx| dev_device(this, id, boot, logs, shutdown, inputs, cx).await)
             .detach();
     }
     if let Some(repo) = dev.open.clone() {
@@ -1798,6 +1870,7 @@ async fn dev_device(
     id: String,
     boot: bool,
     logs: bool,
+    shutdown: bool,
     inputs: Vec<(&'static str, DevAction)>,
     cx: &mut AsyncWindowContext,
 ) {
@@ -1911,6 +1984,19 @@ async fn dev_device(
             }
         }
         tracing::error!("{hook}: painted frame did not change within 5 s");
+    }
+    if shutdown {
+        tracing::info!(%id, "HANGAR_DEV_DEVICE_SHUTDOWN");
+        panel.update(cx, |panel, cx| panel.shutdown_device(cx));
+        let deadline = std::time::Instant::now() + DEV_BOOT_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            wait(cx).await;
+            if panel.read_with(cx, |panel, _| panel.view().is_none()) {
+                tracing::info!(%id, "HANGAR_DEV_DEVICE_SHUTDOWN done");
+                return;
+            }
+        }
+        tracing::error!(%id, "HANGAR_DEV_DEVICE_SHUTDOWN: device still open");
     }
 }
 

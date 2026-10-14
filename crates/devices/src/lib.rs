@@ -171,6 +171,21 @@ pub enum Input {
     VolumeDown,
     /// Android app switcher / recents (unsupported on iOS).
     AppSwitch,
+    /// A non-text keyboard key press (text goes through [`Device::send_text`]).
+    Key(Key),
+}
+
+/// Keyboard keys without a printable character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Backspace,
+    Enter,
+    Tab,
+    Escape,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
 }
 
 /// Physical orientation of the device (UIDeviceOrientation naming: the side the home indicator

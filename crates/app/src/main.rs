@@ -41,7 +41,13 @@
 //! - `HANGAR_DEV_DEVICE_HOME=1` — press Home first (same check).
 //! - `HANGAR_DEV_DEVICE_TEXT=<text>` — type that text (after tap/home) with the same check.
 //! - `HANGAR_DEV_DEVICE_BOOT=1` — with `HANGAR_DEV_DEVICE=<AVD id>` of a shut-down Android
-//!   virtual device: boot it from the panel first, then open it (waits up to 5 minutes).
+//!   virtual device: boot it from the panel first, then open it (waits up to 5 minutes). Also works for a
+//!   shut-down iOS simulator UDID.
+//! - `HANGAR_DEV_DEVICE_BUTTONS=lock,volume-up,...` — press these hardware controls (`home`, `back`,
+//!   `lock`, `volume-up`, `volume-down`, `app-switch`) after the text, with the same check.
+//! - `HANGAR_DEV_DEVICE_KEYS=Backspace,Enter,...` — then press these keys (`Backspace`, `Enter`,
+//!   `Tab`, `Escape`, `ArrowUp`/`Down`/`Left`/`Right`).
+//! - `HANGAR_DEV_DEVICE_SHUTDOWN=1` — finally shut the device down from the panel.
 //! - `HANGAR_DEVICE_BACKEND=private|simctl|grpc|adb` — force an iOS (`private`, `simctl`) or
 //!   Android (`grpc`, `adb`) backend (no automatic fallback).
 //! - `HANGAR_DEVICE_STATS=1` — force the stats overlay on.
@@ -68,6 +74,7 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             hangar_app::terminal_view::init(cx);
+            hangar_app::device_view::init(cx);
             hangar_app::shell::init(cx);
             cx.on_window_closed(|cx, _| cx.quit()).detach();
 

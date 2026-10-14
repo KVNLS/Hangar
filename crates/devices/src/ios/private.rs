@@ -578,6 +578,12 @@ impl Hid {
             Input::Lock => self.click_button(BUTTON_LOCK),
             Input::VolumeUp => self.click_usage(USAGE_PAGE_CONSUMER, USAGE_VOLUME_UP),
             Input::VolumeDown => self.click_usage(USAGE_PAGE_CONSUMER, USAGE_VOLUME_DOWN),
+            Input::Key(k) => {
+                let usage = keymap::usage_for_key(k);
+                self.key(usage, BUTTON_DOWN)?;
+                std::thread::sleep(KEY_HOLD);
+                self.key(usage, BUTTON_UP)
+            }
         }
     }
 
