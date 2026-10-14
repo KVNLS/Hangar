@@ -5,7 +5,7 @@ use hangar_core::{Setting, WorkspaceId};
 
 use crate::device_panel::{DeviceKey, Platform};
 use crate::device_pool::policy::{Assignment, Limit};
-use crate::ops::{OllamaSettings, SavedChat};
+use crate::ops::{OllamaSettings, SavedChat, SavedMode};
 use crate::shell::RunConfig;
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout};
 use crate::ui::theme::Appearance;
@@ -19,6 +19,9 @@ pub const APPEARANCE: Setting<Appearance> = Setting::new("appearance");
 pub const OLLAMA: Setting<OllamaSettings> = Setting::new("ollama");
 /// Whether commits from the review box credit the workspace's agent with a trailer.
 pub const COAUTHOR_TRAILER: Setting<bool> = Setting::new("review:coauthor_trailer");
+/// Default approval level of structured agents, as an `ApprovalLevel` id; missing means
+/// "Ask every time".
+pub const APPROVAL_LEVEL: Setting<String> = Setting::new("permissions:approval_level");
 
 pub const DEVICE_LIMIT: Setting<Limit> = Setting::new("device_pool:limit");
 pub const SINGLE_DEVICE_ALERT_SHOWN: Setting<bool> = Setting::new("device_pool:single_alert_shown");
@@ -34,6 +37,12 @@ pub fn chat(id: WorkspaceId) -> Setting<SavedChat> {
 /// without asking.
 pub fn agent_config(agent: &str) -> Setting<Vec<(String, String)>> {
     Setting::scoped("agent_config", agent)
+}
+
+/// The session mode picked in a workspace's composer; it wins over [`APPROVAL_LEVEL`] when
+/// the same agent starts there again.
+pub fn workspace_mode(id: WorkspaceId) -> Setting<SavedMode> {
+    Setting::scoped("mode", id)
 }
 
 /// A workspace's dev-server port and Xcode scheme.
@@ -66,6 +75,8 @@ mod tests {
         assert_eq!(APPEARANCE.key(), "appearance");
         assert_eq!(OLLAMA.key(), "ollama");
         assert_eq!(COAUTHOR_TRAILER.key(), "review:coauthor_trailer");
+        assert_eq!(APPROVAL_LEVEL.key(), "permissions:approval_level");
+        assert_eq!(workspace_mode(ws).key(), format!("mode:{ws}"));
         assert_eq!(DEVICE_LIMIT.key(), "device_pool:limit");
         assert_eq!(
             SINGLE_DEVICE_ALERT_SHOWN.key(),

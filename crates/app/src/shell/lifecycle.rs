@@ -244,6 +244,7 @@ impl HangarApp {
             session,
             acp,
             events,
+            approval,
             record_error,
         } = started;
         let workspace_id = session.workspace_id;
@@ -281,6 +282,7 @@ impl HangarApp {
             let name = agent_name.clone();
             cx.new(|cx| ChatView::new(acp, events, waker, name, root, window, cx))
         };
+        view.update(cx, |chat, _| chat.set_approval(approval));
         if acp.resumed() {
             view.update(cx, |chat, _| {
                 chat.add_notice(false, "Resumed the previous conversation")
@@ -313,6 +315,12 @@ impl HangarApp {
                     let (agent, id, value) = (agent_id.clone(), config_id.clone(), value.clone());
                     this.persist(window, cx, move |store| {
                         ops::remember_agent_config(store, &agent, &id, &value)
+                    });
+                }
+                ChatEvent::ModeChosen(mode) => {
+                    let (agent, mode) = (agent_id.clone(), mode.clone());
+                    this.persist(window, cx, move |store| {
+                        ops::remember_workspace_mode(store, workspace_id, &agent, &mode)
                     });
                 }
             },

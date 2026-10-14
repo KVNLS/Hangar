@@ -8,6 +8,8 @@ use std::sync::mpsc::Receiver;
 
 use crate::adapters;
 use anyhow::{Context as _, anyhow};
+use hangar_agents::acp::approval::ApprovalLevel;
+use hangar_agents::acp::protocol::SessionMode;
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext, UpdateHook};
 
@@ -55,6 +57,89 @@ pub struct SavedChat {
     /// The preset that ran it; only that preset resumes it.
     pub agent: String,
     pub session: String,
+}
+
+/// A session mode picked in a workspace's composer, saved under [`setting_keys::workspace_mode`].
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SavedMode {
+    /// Mode ids belong to one agent; another agent ignores it.
+    pub agent: String,
+    pub mode: String,
+}
+
+/// The default approval level; "Ask every time" when unset or unreadable.
+pub fn approval_level(store: &dyn Store) -> ApprovalLevel {
+    match store.get_setting(&setting_keys::APPROVAL_LEVEL) {
+        Ok(Some(id)) => ApprovalLevel::from_id(&id).unwrap_or_else(|| {
+            tracing::warn!(id, "unknown approval level saved, asking every time");
+            ApprovalLevel::default()
+        }),
+        Ok(None) => ApprovalLevel::default(),
+        Err(err) => {
+            tracing::warn!("cannot read the approval level, asking every time: {err}");
+            ApprovalLevel::default()
+        }
+    }
+}
+
+pub fn save_approval_level(store: &dyn Store, level: ApprovalLevel) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::APPROVAL_LEVEL, &level.id().to_owned())
+        .context("failed to save the approval level")
+}
+
+pub fn remember_workspace_mode(
+    store: &dyn Store,
+    workspace: WorkspaceId,
+    agent: &str,
+    mode: &str,
+) -> anyhow::Result<()> {
+    let saved = SavedMode {
+        agent: agent.to_owned(),
+        mode: mode.to_owned(),
+    };
+    Ok(store.set_setting(&setting_keys::workspace_mode(workspace), &saved)?)
+}
+
+/// The mode a new session of `agent` starts in: the workspace's own pick while that agent
+/// still offers it, otherwise the level's mode (`None`: the agent keeps its default).
+pub fn start_mode<'a>(
+    level: ApprovalLevel,
+    saved: Option<&SavedMode>,
+    agent: &str,
+    modes: &'a [SessionMode],
+) -> Option<&'a str> {
+    saved
+        .filter(|saved| saved.agent == agent)
+        .and_then(|saved| modes.iter().find(|m| m.id == saved.mode))
+        .or_else(|| level.mode(modes))
+        .map(|m| m.id.as_str())
+}
+
+/// Picks and applies the starting mode of a fresh session (see [`start_mode`]).
+fn apply_start_mode(store: &dyn Store, acp: &mut AcpSession, workspace: WorkspaceId) {
+    let level = approval_level(store);
+    let saved = store
+        .get_setting(&setting_keys::workspace_mode(workspace))
+        .unwrap_or_else(|err| {
+            tracing::warn!(%workspace, "cannot read the workspace's mode: {err}");
+            None
+        });
+    let agent = acp.agent_id().to_owned();
+    let Some(mode) = start_mode(level, saved.as_ref(), &agent, acp.modes()).map(str::to_owned)
+    else {
+        if !acp.modes().is_empty() {
+            tracing::info!(
+                agent,
+                level = level.label(),
+                "no session mode fits the approval level; the agent keeps its default"
+            );
+        }
+        return;
+    };
+    if let Err(err) = acp.apply_mode(&mode) {
+        tracing::warn!(agent, mode, "starting mode not applied: {err}");
+    }
 }
 
 /// `(config id, value)` pairs in the order they were chosen.
@@ -301,6 +386,8 @@ pub struct StartedAcpSession {
     pub session: Session,
     pub acp: Arc<AcpSession>,
     pub events: Receiver<AcpEvent>,
+    /// The default approval level when it started (read-kind requests follow it).
+    pub approval: ApprovalLevel,
     /// The agent runs but its session row could not be written.
     pub record_error: Option<anyhow::Error>,
 }
@@ -337,6 +424,7 @@ pub fn start_acp_session(
             for refused in acp.apply_config(&wanted) {
                 tracing::warn!(agent = %adapter.id, "saved setting not applied: {refused}");
             }
+            apply_start_mode(store, &mut acp, workspace.id);
             let command = acp.program().display().to_string();
             ((acp, events), command)
         });
@@ -346,6 +434,7 @@ pub fn start_acp_session(
         session,
         acp: Arc::new(acp),
         events,
+        approval: approval_level(store),
         record_error,
     })
 }
