@@ -18,8 +18,7 @@ use gpui_kit::*;
 use hangar_devices::{DeviceInfo, Frame, Input, Key, Orientation};
 
 use geometry::{Gesture, Rect};
-use session::Outcome;
-pub use session::{DeviceHandle, DeviceSession, InputResult, TextResult};
+pub use session::{DeviceHandle, DeviceSession, InputResult, Outcome, TextResult};
 
 /// Key context of the device screen; bindings in it take precedence over app-wide ones.
 pub const KEY_CONTEXT: &str = "DeviceScreen";
@@ -74,7 +73,7 @@ pub struct DeviceView {
 impl EventEmitter<DeviceViewEvent> for DeviceView {}
 
 impl DeviceView {
-    pub fn new(mut session: DeviceSession, stats: bool, cx: &mut Context<Self>) -> Self {
+    pub fn new(session: DeviceSession, stats: bool, cx: &mut Context<Self>) -> Self {
         let frames = cx.spawn({
             let mut rx = session.frames();
             async move |this, cx| {
@@ -100,8 +99,9 @@ impl DeviceView {
                 }
             }
         });
-        let results = match session.take_results() {
-            Some(mut rx) => cx.spawn(async move |this, cx| {
+        let results = {
+            let mut rx = session.subscribe();
+            cx.spawn(async move |this, cx| {
                 while let Some(outcome) = rx.recv().await {
                     let event = match outcome {
                         Outcome::Input(result) => DeviceViewEvent::Input(result),
@@ -121,8 +121,7 @@ impl DeviceView {
                         break;
                     }
                 }
-            }),
-            None => Task::ready(()),
+            })
         };
         Self {
             session,
@@ -150,6 +149,10 @@ impl DeviceView {
 
     pub fn handle(&self) -> DeviceHandle {
         self.session.handle()
+    }
+
+    pub fn session(&self) -> &DeviceSession {
+        &self.session
     }
 
     /// Queues input for the device (hardware buttons, dev hooks).
