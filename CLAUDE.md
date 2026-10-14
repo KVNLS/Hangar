@@ -49,6 +49,11 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
   serde, serde_json, uuid, tracing, tracing-subscriber, tempfile (dev), objc2 family, block2, libc, image.
 - Do not copy code from Zed's GPL crates, idb, SimView or baguette; learn from them and credit in SPIKES.md.
 - Code, comments, logs and UI copy in English. Minimal comments: only the non-obvious why.
+- File layout: modules as `foo.rs` next to `foo/` (no `mod.rs`). Unit tests start inline in
+  `#[cfg(test)] mod tests`; past about 150 lines (or 100 and longer than the code) they move to
+  `foo/tests.rs` via `#[cfg(test)] mod tests;`, still a child module. Public-API tests go in
+  `crates/<x>/tests/`. A source file past about 800 lines is split by concern into child modules,
+  each with its own `impl Type` block; helpers shared between them are `pub(super)`.
 
 ## Workflow
 - In agent worktrees (`.claude/worktrees/`) the rtk hook refuses plain `git`/`cargo`: use `/usr/bin/git` and
