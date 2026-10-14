@@ -684,8 +684,17 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        // SAFETY: signal 0 only checks whether the process exists.
-        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        // The group got SIGKILL before push_within returned, but ssh is not our child: it stays
+        // a zombie (kill(pid, 0) still succeeds) until init reaps it, which lags under load.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let alive = loop {
+            // SAFETY: signal 0 only checks whether the process exists.
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if !alive || std::time::Instant::now() >= deadline {
+                break alive;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
         assert!(!alive, "the fake ssh ({pid}) still runs");
     }
 
