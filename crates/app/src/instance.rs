@@ -90,6 +90,12 @@ mod tests {
         assert_eq!(running.pid, Some(std::process::id()));
         assert!(lock(&dir.path().join("other.db")).is_ok());
         drop(held);
-        assert!(lock(&db).is_ok());
+        // Another test forking a child right now briefly shares the descriptor (until the
+        // child's exec closes it), so the lock can take a moment to free up.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while lock(&db).is_err() {
+            assert!(std::time::Instant::now() < deadline, "lock not released");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
