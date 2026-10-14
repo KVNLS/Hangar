@@ -32,6 +32,7 @@
 
 mod base64;
 mod bridge;
+pub mod hook;
 mod protocol;
 mod screenshot;
 mod server;
@@ -39,8 +40,8 @@ mod tools;
 
 pub use bridge::{run_bridge, run_bridge_from_env};
 pub use protocol::{
-    INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, SUPPORTED_PROTOCOL_VERSIONS,
-    ToolHost, UNAVAILABLE, UNKNOWN_SESSION, handle,
+    AGENT_SIGNAL_METHOD, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
+    SUPPORTED_PROTOCOL_VERSIONS, ToolHost, UNAVAILABLE, UNKNOWN_SESSION, handle,
 };
 pub use screenshot::{MAX_SIDE, Screenshot, ScreenshotError, encode_screenshot};
 pub use server::{bind, handle_envelope, serve, serve_connection};

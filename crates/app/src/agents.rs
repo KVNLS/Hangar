@@ -282,6 +282,9 @@ pub fn mcp_launch(
         McpWiring::ClaudeFlag => {
             extras.args.push("--mcp-config".to_owned());
             extras.args.push(stdio_server.to_string());
+            // Hooks report waits and finished turns, which output timing cannot tell.
+            extras.args.push("--settings".to_owned());
+            extras.args.push(claude_hooks(exe).to_string());
         }
         McpWiring::AcpSession => extras.mcp_servers.push(McpServer {
             name: SERVER_NAME.to_owned(),
@@ -329,6 +332,34 @@ pub fn mcp_launch(
     Ok(extras)
 }
 
+/// Claude Code settings that run `Hangar notify <event>` on the events that change the agent's
+/// state (see `hangar_mcp::hook`). Added to the user's own settings, not replacing them.
+fn claude_hooks(exe: &str) -> Value {
+    let hooks: Map<String, Value> = hangar_mcp::hook::HOOK_EVENTS
+        .iter()
+        .map(|event| {
+            let command = json!({
+                "type": "command",
+                "command": format!("{} notify {event}", shell_quote(exe)),
+                "timeout": 5,
+            });
+            let entry = match *event {
+                "PreToolUse" | "PostToolUse" | "PermissionRequest" => {
+                    json!({ "matcher": "*", "hooks": [command] })
+                }
+                _ => json!({ "hooks": [command] }),
+            };
+            ((*event).to_owned(), json!([entry]))
+        })
+        .collect();
+    json!({ "hooks": hooks })
+}
+
+/// `s` as one POSIX shell word.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 fn utf8<'a>(path: &'a Path, what: &str) -> anyhow::Result<&'a str> {
     path.to_str()
         .with_context(|| format!("the {what} path is not UTF-8: {}", path.display()))
@@ -357,7 +388,7 @@ fn toml_string(s: &str) -> String {
 mod tests {
     use super::{
         AgentChoice, AgentExtras, AgentPreset, BridgeLaunch, McpWiring, PROFILES, apply_ollama,
-        choices, default_agent, is_installed, kind, mcp_launch, preset, toml_string,
+        choices, default_agent, is_installed, kind, mcp_launch, preset, shell_quote, toml_string,
     };
     use hangar_core::AgentKind;
     use serde_json::{Value, json};
@@ -457,6 +488,15 @@ mod tests {
     }
 
     #[test]
+    fn shell_quote_survives_quotes_and_spaces() {
+        assert_eq!(
+            shell_quote("/Applications/Hangar.app/x"),
+            "'/Applications/Hangar.app/x'"
+        );
+        assert_eq!(shell_quote("/tmp/it's here"), r"'/tmp/it'\''s here'");
+    }
+
+    #[test]
     fn claude_gets_inline_mcp_config() {
         let x = mcp_launch("claude", &bridge(EXE), &device_env()).unwrap();
         assert_eq!(x.args[0], "--mcp-config");
@@ -465,9 +505,22 @@ mod tests {
             config,
             json!({ "mcpServers": { "hangar": { "command": EXE, "args": ["mcp-bridge"] } } })
         );
-        assert_eq!(x.args.len(), 2);
+        assert_eq!(x.args[2], "--settings");
+        let settings: Value = serde_json::from_str(&x.args[3]).unwrap();
+        let stop = &settings["hooks"]["Stop"][0]["hooks"][0];
+        assert_eq!(stop["type"], "command");
+        assert_eq!(stop["command"], format!("'{EXE}' notify Stop"));
+        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "*");
+        assert_eq!(
+            settings["hooks"].as_object().unwrap().len(),
+            hangar_mcp::hook::HOOK_EVENTS.len()
+        );
+        assert_eq!(x.args.len(), 4);
         assert!(x.files.is_empty());
-        assert!(!x.args[1].contains("ab12"), "no secret in argv");
+        assert!(
+            !x.args.iter().any(|a| a.contains("ab12")),
+            "no secret in argv"
+        );
         assert_bridge_env(&x.env);
     }
 

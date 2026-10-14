@@ -4,6 +4,9 @@
 //! GPUI starts): agents launched from a workspace start it as their `hangar` MCP server. It
 //! relays stdin/stdout to the running app's socket (`HANGAR_MCP_SOCKET`) with the workspace's
 //! session secret (`HANGAR_MCP_SESSION`), prints errors to stderr and exits non-zero on failure.
+//! `Hangar notify <event>` is a Claude Code hook command: it sends what the event means for the
+//! agent's state (working, approval, input, turn ended) to the app the same way, and always exits
+//! 0 so a closed Hangar never gets in Claude Code's way.
 //!
 //! Environment:
 //! - `HANGAR_DB` — database file (default `~/Library/Application Support/Hangar/hangar.db`).
@@ -47,6 +50,8 @@
 //! device panel's ⌘S screenshot for the agent.
 //! `HANGAR_DEV_APPROVE=<seconds>` then waits for a structured agent's permission request and
 //! allows it once that many seconds later, through the overview's and palette's path.
+//! `HANGAR_DEV_KEYS="<s>|<keys>||<s>|<keys>"` types raw keys into the focused agent after each
+//! delay (`\r`, `\n`, `\e` escapes), e.g. to answer Claude Code's folder trust prompt.
 //!
 //! Device pool (one device per workspace):
 //! - `HANGAR_DEV_WORKSPACES=a,b` — `HANGAR_DEV_OPEN` creates these workspaces instead of
@@ -116,6 +121,17 @@ fn main() -> std::process::ExitCode {
                 std::process::ExitCode::FAILURE
             }
         };
+    }
+    let mut args = std::env::args_os().skip(1);
+    if args.next().is_some_and(|arg| arg == "notify") {
+        let event = args
+            .next()
+            .and_then(|e| e.into_string().ok())
+            .unwrap_or_default();
+        if let Err(err) = hangar_mcp::hook::notify_from_env(&event, std::io::stdin().lock()) {
+            eprintln!("Hangar notify {event}: {err}");
+        }
+        return std::process::ExitCode::SUCCESS;
     }
     run_app();
     std::process::ExitCode::SUCCESS

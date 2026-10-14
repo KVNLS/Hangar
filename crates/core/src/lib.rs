@@ -10,7 +10,7 @@ pub mod review;
 mod setting;
 mod slug;
 
-pub use agent_state::{AcpTurn, AgentState};
+pub use agent_state::{AcpTurn, AgentSignal, AgentState};
 pub use model::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
     WorkspaceGroupId, WorkspaceId, WorkspaceStatus,

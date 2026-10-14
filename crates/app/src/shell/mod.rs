@@ -201,6 +201,8 @@ struct LiveSession {
     agent_name: SharedString,
     surface: AgentSurface,
     activity: status::Activity,
+    /// What a terminal agent last reported through its hooks (Claude Code); `None` without hooks.
+    signal: Option<hangar_core::AgentSignal>,
     _exit: Subscription,
 }
 

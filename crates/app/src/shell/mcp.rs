@@ -67,6 +67,16 @@ fn answer<T: 'static, U: Send + 'static>(
 impl HangarApp {
     fn dispatch_mcp(&mut self, request: McpRequest, window: &mut Window, cx: &mut Context<Self>) {
         match request {
+            McpRequest::Signal { ws, signal } => {
+                if let Some(live) = self.live.sessions.get_mut(&ws)
+                    && matches!(live.surface, AgentSurface::Terminal { .. })
+                {
+                    tracing::debug!(workspace = %ws, signal = signal.as_str(), "agent signal");
+                    live.signal = Some(signal);
+                    self.sync_attention(cx);
+                    cx.notify();
+                }
+            }
             McpRequest::Status { ws, reply } => {
                 let task = self.device_status(ws, cx);
                 answer(task, reply, status, cx);

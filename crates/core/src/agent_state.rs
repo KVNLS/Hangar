@@ -20,6 +20,37 @@ pub enum AgentState {
     Idle,
 }
 
+/// What a terminal agent last reported through the hooks Hangar gives it (Claude Code). Without
+/// hooks a terminal agent's state is guessed from its output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AgentSignal {
+    /// A prompt was submitted or a tool is running.
+    Working,
+    /// A permission prompt is shown.
+    Approval,
+    /// The agent asked the user something.
+    Input,
+    /// The turn finished; the agent waits for the next prompt.
+    TurnEnded,
+}
+
+impl AgentSignal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Approval => "approval",
+            Self::Input => "input",
+            Self::TurnEnded => "turn_ended",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::Working, Self::Approval, Self::Input, Self::TurnEnded]
+            .into_iter()
+            .find(|s| s.as_str() == value)
+    }
+}
+
 /// What a structured agent's current prompt turn is doing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AcpTurn {
@@ -54,6 +85,36 @@ impl AgentState {
             Some(SessionStatus::Exited { .. }) if has_changes => Self::Review,
             Some(SessionStatus::Starting) => Self::Working,
             Some(SessionStatus::Running) if recently_active => Self::Working,
+            _ => Self::Idle,
+        }
+    }
+
+    /// Derives the state of a terminal agent that reports `signal` through hooks: waits are
+    /// known instead of guessed, and a finished turn with changes is ready for review.
+    /// `Working` only holds while the terminal draws (Claude Code animates its spinner for the
+    /// whole turn): hooks run as separate processes and one can land after `Stop`.
+    pub fn from_signal(
+        status: Option<&SessionStatus>,
+        signal: AgentSignal,
+        recently_active: bool,
+        has_changes: bool,
+    ) -> Self {
+        let signal = match signal {
+            AgentSignal::Working if !recently_active => AgentSignal::TurnEnded,
+            other => other,
+        };
+        match status {
+            Some(SessionStatus::Failed { .. }) => Self::Failed,
+            Some(SessionStatus::Exited { code }) if *code != 0 => Self::Failed,
+            Some(SessionStatus::Exited { .. }) if has_changes => Self::Review,
+            Some(SessionStatus::Starting) => Self::Working,
+            Some(SessionStatus::Running) => match signal {
+                AgentSignal::Approval => Self::Approval,
+                AgentSignal::Input => Self::Input,
+                AgentSignal::Working => Self::Working,
+                AgentSignal::TurnEnded if has_changes => Self::Review,
+                AgentSignal::TurnEnded => Self::Idle,
+            },
             _ => Self::Idle,
         }
     }
@@ -111,6 +172,34 @@ mod tests {
         let mut sorted = AgentState::ORDER;
         sorted.sort();
         assert_eq!(sorted, AgentState::ORDER);
+    }
+
+    #[test]
+    fn signal_mapping() {
+        use AgentSignal as S;
+        use AgentState::*;
+        let running = Some(&SessionStatus::Running);
+        let state = |status, signal, active, changes| {
+            AgentState::from_signal(status, signal, active, changes)
+        };
+        // Waits hold while the terminal is quiet.
+        assert_eq!(state(running, S::Approval, false, true), Approval);
+        assert_eq!(state(running, S::Input, false, false), Input);
+        assert_eq!(state(running, S::Working, true, true), Working);
+        assert_eq!(state(running, S::TurnEnded, true, true), Review);
+        assert_eq!(state(running, S::TurnEnded, false, false), Idle);
+        // A late `Working` with a quiet terminal reads as a finished turn.
+        assert_eq!(state(running, S::Working, false, true), Review);
+        assert_eq!(state(running, S::Working, false, false), Idle);
+        let exited = SessionStatus::Exited { code: 0 };
+        assert_eq!(state(Some(&exited), S::Approval, false, false), Idle);
+        assert_eq!(state(Some(&exited), S::Approval, false, true), Review);
+        let crashed = SessionStatus::Exited { code: 1 };
+        assert_eq!(state(Some(&crashed), S::Working, true, false), Failed);
+        for s in [S::Working, S::Approval, S::Input, S::TurnEnded] {
+            assert_eq!(AgentSignal::parse(s.as_str()), Some(s));
+        }
+        assert_eq!(AgentSignal::parse("done"), None);
     }
 
     #[test]

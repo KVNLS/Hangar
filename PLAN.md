@@ -437,8 +437,19 @@ Git access is the `git` CLI with porcelain output, not a library.
   scratch repo): `echo done > note.txt` asked, the card showed Deny / Allow once, the hook allowed it, the
   file was written (diff +1 240 ms later). Not seen on screen: the palette group. Claude Code runs
   read-only commands such as `date` without asking. Terminal agents have no request to answer here.
-- Next, in order: Claude Code hooks for terminal agents (`Input` state);
-  MCP orchestration tools; typed `usage_update`; session history; transcript virtualization.
+- Done: terminal Claude Code reports its state through hooks. The `claude` preset gets inline
+  `--settings` hooks (UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Notification, Stop)
+  running `Hangar notify <event>`, which maps the event (`hangar_mcp::hook::signal_for_hook`) to an
+  `AgentSignal` and sends `hangar/agentSignal` over the MCP socket with the workspace's session secret; it
+  always exits 0 (2 s timeout) so Claude Code is never held up. `AgentState::from_signal` gives Approval
+  (permission prompt), Input (`elicitation_dialog`, not seen live), Review/Idle after Stop; a `Working` only
+  holds while the terminal draws, because a late hook once landed after Stop. Other terminal agents keep the
+  output-timing guess. `HANGAR_DEV_KEYS` types timed raw keys into the focused agent. Live (terminal Claude
+  Code 2.1.285, scratch repo): prompt → working, permission dialog → Approval in sidebar, tab and status bar
+  ("1 approval"), Enter → working → turn ended, file written. Seen: every new worktree first shows Claude
+  Code's folder trust prompt (not a hook event, so Hangar shows Idle there); the owner's Claude config
+  starts in auto mode, so most commands never ask.
+- Next, in order: MCP orchestration tools; typed `usage_update`; session history; transcript virtualization.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a

@@ -1,6 +1,7 @@
 //! MCP over JSON-RPC 2.0: one incoming message in, at most one response out. Stateless, so any
 //! number of messages may be handled concurrently.
 
+use hangar_core::AgentSignal;
 use serde_json::{Value, json};
 
 use crate::base64;
@@ -33,7 +34,14 @@ pub trait ToolHost: Send + Sync {
 
     /// Runs `tool` on the device of the workspace owning `session`.
     fn call(&self, session: &str, tool: Tool) -> Result<ToolOutput, ToolError>;
+
+    /// Records what the agent of the workspace owning `session` reports through its hooks
+    /// (`Hangar notify`, see [`crate::hook`]).
+    fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError>;
 }
+
+/// Hangar's own method (not MCP): `{"signal": "working" | "approval" | "input" | "turn_ended"}`.
+pub const AGENT_SIGNAL_METHOD: &str = "hangar/agentSignal";
 
 /// Handles one raw JSON-RPC message (or batch) from the client of workspace `session`.
 /// Returns the serialized response, or `None` for notifications.
@@ -96,12 +104,42 @@ fn handle_single(host: &dyn ToolHost, session: &str, message: &Value) -> Option<
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools::definitions() })),
         "tools/call" => tools_call(host, session, params),
+        AGENT_SIGNAL_METHOD => agent_signal(host, session, params),
         _ => Err((METHOD_NOT_FOUND, format!("method not found: {method}"))),
     };
     Some(match result {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
         Err((code, msg)) => error_response(id, code, &msg),
     })
+}
+
+fn agent_signal(
+    host: &dyn ToolHost,
+    session: &str,
+    params: Option<&Value>,
+) -> Result<Value, (i64, String)> {
+    let signal = params
+        .and_then(|p| p.get("signal"))
+        .and_then(Value::as_str)
+        .and_then(AgentSignal::parse)
+        .ok_or((
+            INVALID_PARAMS,
+            "params.signal must be working, approval, input or turn_ended".to_owned(),
+        ))?;
+    // The hook event and who raised it, for diagnosing states (`Hangar notify` sends them).
+    let field = |name: &str| params.and_then(|p| p.get(name)).and_then(Value::as_str);
+    tracing::debug!(
+        signal = signal.as_str(),
+        event = field("event"),
+        agent = field("agent"),
+        "agent signal from hook"
+    );
+    host.agent_signal(session, signal)
+        .map(|()| json!({}))
+        .map_err(|e| match e {
+            ToolError::UnknownSession => (UNKNOWN_SESSION, "unknown workspace session".to_owned()),
+            other => (UNAVAILABLE, other.to_string()),
+        })
 }
 
 fn initialize(params: Option<&Value>) -> Value {
@@ -190,6 +228,7 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub struct FakeHost {
         pub calls: Mutex<Vec<(String, Tool)>>,
+        pub signals: Mutex<Vec<AgentSignal>>,
     }
 
     impl ToolHost for FakeHost {
@@ -221,6 +260,39 @@ pub(crate) mod tests {
                 other => Ok(ToolOutput::text(format!("ok {}", other.name()))),
             }
         }
+
+        fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError> {
+            if session != SESSION {
+                return Err(ToolError::UnknownSession);
+            }
+            self.signals.lock().unwrap().push(signal);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn agent_signals_reach_the_host() {
+        let host = FakeHost::default();
+        let ok = call(
+            &host,
+            request(1, AGENT_SIGNAL_METHOD, json!({ "signal": "approval" })),
+        )
+        .unwrap();
+        assert_eq!(ok["result"], json!({}));
+        let bad = call(
+            &host,
+            request(2, AGENT_SIGNAL_METHOD, json!({ "signal": "done" })),
+        )
+        .unwrap();
+        assert_eq!(bad["error"]["code"], INVALID_PARAMS);
+        let stranger = handle(
+            &host,
+            "other",
+            &request(3, AGENT_SIGNAL_METHOD, json!({ "signal": "working" })).to_string(),
+        )
+        .unwrap();
+        assert!(stranger.contains("-32001"), "{stranger}");
+        assert_eq!(*host.signals.lock().unwrap(), [AgentSignal::Approval]);
     }
 
     fn call(host: &FakeHost, msg: Value) -> Option<Value> {

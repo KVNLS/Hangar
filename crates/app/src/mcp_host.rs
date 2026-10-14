@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use hangar_core::WorkspaceId;
+use hangar_core::{AgentSignal, WorkspaceId};
 use hangar_devices::{Frame, Input, LogEntry, LogLevel};
 use hangar_mcp::{
     DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost, ToolOutput, encode_screenshot,
@@ -72,6 +72,11 @@ pub enum McpRequest {
         app_id: String,
         reply: Reply<()>,
     },
+    /// What the workspace's terminal agent reported through its hooks (no reply).
+    Signal {
+        ws: WorkspaceId,
+        signal: AgentSignal,
+    },
 }
 
 impl McpRequest {
@@ -83,7 +88,8 @@ impl McpRequest {
             | Self::Text { ws, .. }
             | Self::Logs { ws, .. }
             | Self::BuildAndRun { ws, .. }
-            | Self::Launch { ws, .. } => *ws,
+            | Self::Launch { ws, .. }
+            | Self::Signal { ws, .. } => *ws,
         }
     }
 }
@@ -317,6 +323,16 @@ impl McpHost {
 impl ToolHost for McpHost {
     fn knows_session(&self, session: &str) -> bool {
         self.sessions.resolve(session).is_some()
+    }
+
+    fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError> {
+        let ws = self
+            .sessions
+            .resolve(session)
+            .ok_or(ToolError::UnknownSession)?;
+        self.requests
+            .send(McpRequest::Signal { ws, signal })
+            .map_err(|_| ToolError::Failed("Hangar is shutting down".into()))
     }
 
     fn call(&self, session: &str, tool: Tool) -> Result<ToolOutput, ToolError> {

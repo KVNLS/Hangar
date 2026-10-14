@@ -170,11 +170,19 @@ impl HangarApp {
                 view.read(cx).turn(),
                 has_changes,
             ),
-            _ => AgentState::from_pty(
-                live.map(|l| &l.session.status),
-                live.is_some_and(|l| l.activity.active),
-                has_changes,
-            ),
+            _ => match live.and_then(|l| l.signal) {
+                Some(signal) => AgentState::from_signal(
+                    live.map(|l| &l.session.status),
+                    signal,
+                    live.is_some_and(|l| l.activity.active),
+                    has_changes,
+                ),
+                None => AgentState::from_pty(
+                    live.map(|l| &l.session.status),
+                    live.is_some_and(|l| l.activity.active),
+                    has_changes,
+                ),
+            },
         }
     }
 

@@ -72,6 +72,7 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                     };
                     let _ = reply.send(result);
                 }
+                McpRequest::Signal { signal, .. } => record(format!("signal {}", signal.as_str())),
                 McpRequest::Text { text, reply, .. } => {
                     record(format!("text {text}"));
                     let _ = reply.send(Ok(()));
@@ -350,4 +351,23 @@ fn start_serves_and_cleans_up() {
 
     drop(handle);
     assert!(!socket.exists());
+}
+
+#[test]
+fn agent_signals_go_to_the_workspace_without_waiting() {
+    let (host, sessions, mut rx) = host(short());
+    let ws = WorkspaceId::new();
+    let s = sessions.register(ws);
+    host.agent_signal(&s, hangar_core::AgentSignal::Approval)
+        .unwrap();
+    match rx.try_recv() {
+        Ok(McpRequest::Signal { ws: got, signal }) => {
+            assert_eq!((got, signal), (ws, hangar_core::AgentSignal::Approval));
+        }
+        other => panic!("expected a signal, got {:?}", other.map(|r| r.workspace())),
+    }
+    assert_eq!(
+        host.agent_signal("nope", hangar_core::AgentSignal::Working),
+        Err(ToolError::UnknownSession)
+    );
 }

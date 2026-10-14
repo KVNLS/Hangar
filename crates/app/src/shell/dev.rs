@@ -110,6 +110,9 @@ pub struct DevOptions {
     /// After `show`: wait for a permission request, then allow it once after this many seconds
     /// (as the overview card and the palette do).
     pub approve: Option<u64>,
+    /// After `show`: raw keys typed into the focused agent, each step after its delay
+    /// (`HANGAR_DEV_KEYS="8|\e[B\r||3|hello\r"`: seconds, `|`, text with `\r`, `\n`, `\e`).
+    pub keys: Vec<(u64, String)>,
     /// Build and run on their devices: `1` = the workspaces `HANGAR_DEV_OPEN` created (else the
     /// focused one), or comma-separated slugs.
     pub run: Option<String>,
@@ -249,6 +252,7 @@ impl DevOptions {
             show: var("HANGAR_DEV_SHOW"),
             screenshot: flag("HANGAR_DEV_SCREENSHOT"),
             approve: var("HANGAR_DEV_APPROVE").and_then(|v| v.parse().ok()),
+            keys: var("HANGAR_DEV_KEYS").map(|v| key_steps(&v)).unwrap_or_default(),
             run: var("HANGAR_DEV_RUN"),
             select: var("HANGAR_DEV_SELECT"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
@@ -492,9 +496,34 @@ pub(super) async fn run_dev_hooks(
     if dev.screenshot {
         dev_screenshot(&this, cx).await;
     }
+    for (delay, text) in dev.keys.clone() {
+        cx.background_executor()
+            .timer(Duration::from_secs(delay))
+            .await;
+        let typed = this.update_in(cx, |this, window, cx| {
+            let id = this.layout.panes.slot(this.layout.panes.focused())?;
+            let live = this.live.sessions.get(&id)?;
+            Some(live.prefill(&text, window, cx))
+        });
+        tracing::info!(keys = %text.escape_debug(), ok = matches!(typed, Ok(Some(Ok(())))), "HANGAR_DEV_KEYS");
+    }
     if let Some(delay) = dev.approve {
         dev_approve(&this, Duration::from_secs(delay), cx).await;
     }
+}
+
+/// `8|\e[B\r||3|hi\r` → `[(8, "\x1b[B\r"), (3, "hi\r")]`.
+fn key_steps(spec: &str) -> Vec<(u64, String)> {
+    spec.split("||")
+        .filter_map(|step| {
+            let (delay, text) = step.split_once('|')?;
+            let text = text
+                .replace("\\r", "\r")
+                .replace("\\n", "\n")
+                .replace("\\e", "\x1b");
+            Some((delay.trim().parse().ok()?, text))
+        })
+        .collect()
 }
 
 /// `HANGAR_DEV_APPROVE=<seconds>`: allows the first pending permission request once.
@@ -1083,4 +1112,17 @@ async fn dev_settings(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWi
         tracing::info!(appearance = ?this.layout.appearance, dark = cx.theme().is_dark(), "HANGAR_DEV_APPEARANCE");
         this.set_screen(Screen::Workspace, window, cx);
     });
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::key_steps;
+
+    #[test]
+    fn key_steps_parse_delays_and_escapes() {
+        assert_eq!(
+            key_steps(r"8|\e[B\r||3|hi\r||x|ignored"),
+            [(8, "\x1b[B\r".to_owned()), (3, "hi\r".to_owned())]
+        );
+    }
 }
