@@ -7,7 +7,11 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+alacritty_terminal.workspace = true
+portable-pty.workspace = true
+libc.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true
