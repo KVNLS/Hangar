@@ -89,6 +89,9 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
      `WorkState` (55 fields to 14), field paths only.
    - Done: the agent queue and attention policies live in `usecases::agents`; `app` only applies
      their decisions.
+   - Done (M9): `usecases::batch`, `usecases::orchestration` and `usecases::history` are pure
+     policies tested on plain data. The approved `AgentRuntime` port was not added: dispatch to live
+     agents stays in `app` like the device tools, and a port would only wrap GPUI calls.
    - Next: make those groups entities (controllers) with services passed in, so views do no I/O;
      turn `DevicePool`'s orchestration into a state machine (events and `Instant` in, commands
      out) behind `DeviceCatalog`. Check on macOS with the dev hooks and real
