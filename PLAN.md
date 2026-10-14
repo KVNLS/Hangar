@@ -266,18 +266,24 @@ Git access is the `git` CLI with porcelain output, not a library.
   "This workspace's device". The control row no longer jumps when the input status line appears.
 
 ## Remaining gaps
-- UI vs mockup: New workspace sheet has no base-branch / new-branch fields (branch shown in the footer only);
-  the device panel shows a `backend: …` status line the mockup does not have.
-- Terminal: no block selection, right-click menu, middle-click paste.
-- Review: no pull/rebase after a rejected push; merged base not pushed.
-- Agents: if Hangar crashes or is killed, codex-acp (ignores a closed stdin) keeps running; the Files code
-  viewer (gpui-component editor) still draws Geist Mono's `--` ligatures.
-- Devices: logs pane fixed height, no horizontal scroll (long lines cut), lines from several processes can
-  arrive a few ms out of order. The device picker names the base model ("iPhone 17 Pro · iOS 26.5") the
-  workspace's clone is made from (by design for now; the backend line names the clone). Android boot stage
-  text not seen yet: the only AVD (Pixel_10_Pro) was already running outside Hangar (the pool refuses a
-  second instance, and offers "Shut down … and retry"). Emulators started outside Hangar keep Gboard's stylus
+- Device panel (design call): the `backend: …` line is not in the mockup, but in the normal case it is the
+  only place naming the workspace's own clone (the picker names the base model). Options: hide it unless a
+  fallback/forced backend; keep only the device name; or name the clone in the picker.
+- Devices: lines from several processes can arrive a few ms out of order. Android boot stage text not seen
+  yet (the only AVD was already running outside Hangar). Emulators started outside Hangar keep Gboard's stylus
   sheet until `stylus_handwriting_enabled` is turned off.
+
+## Closed gaps (2026-10-05, round 2, unit-tested, not checked on screen)
+- New workspace sheet: Base branch (default base first, then local branches) and New branch (empty:
+  `hangar/<slug>`; a chosen name must be valid and free) fields.
+- Terminal: right-click menu (Copy / Paste / Select all; not while a program tracks the mouse), middle-click
+  pastes the selection else the clipboard, Option-drag block selection.
+- Review: a non-fast-forward push rejection offers "Pull and rebase" (`pull_rebase`: fetch, rebase
+  `--autostash`, conflicts aborted); the merge dialog can push the base afterwards (off by default).
+- Device logs: list height dragged from its top edge (80–600 px); long lines scroll sideways.
+- ACP agents: a watchdog in the agent's process group stops it if Hangar dies (crash, SIGKILL).
+- No Geist Mono ligatures anywhere: the Files viewer already used `font_mono`; device logs and chat
+  markdown code now turn them off too.
 
 ## Closed gaps (2026-10-05, unit-tested, not checked on screen)
 - Push: git runs in its own session (no terminal for ssh prompts) and push gives up after 120 s
