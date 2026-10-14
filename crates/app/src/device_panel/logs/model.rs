@@ -71,6 +71,9 @@ pub struct LogModel {
     min_level: LogLevel,
     /// Lowercased search text; empty matches everything.
     query: String,
+    /// The visible line with the most characters (sequence number, length): the list is as
+    /// wide as it, so long lines scroll sideways.
+    widest: Option<(u64, usize)>,
 }
 
 impl LogModel {
@@ -82,6 +85,7 @@ impl LogModel {
             next_seq: 0,
             min_level: LogLevel::Verbose,
             query: String::new(),
+            widest: None,
         }
     }
 
@@ -101,24 +105,57 @@ impl LogModel {
                 text: format_entry(&entry),
             };
             self.next_seq += 1;
+            let mut evicted_widest = false;
             if self.lines.len() >= self.cap
                 && let Some(old) = self.lines.pop_front()
                 && self.visible.front() == Some(&old.seq)
             {
                 self.visible.pop_front();
+                evicted_widest = self.widest.is_some_and(|(seq, _)| seq == old.seq);
             }
             if self.passes(line.level, &line.text) {
                 self.visible.push_back(line.seq);
                 shown += 1;
+                let chars = line.text.chars().count();
+                if self.widest.is_none_or(|(_, widest)| chars > widest) {
+                    self.widest = Some((line.seq, chars));
+                }
             }
             self.lines.push_back(line);
+            if evicted_widest {
+                self.measure_widest();
+            }
         }
         shown
+    }
+
+    /// Position (among visible lines) of the widest one.
+    pub fn widest_index(&self) -> Option<usize> {
+        let (seq, _) = self.widest?;
+        self.visible.binary_search(&seq).ok()
+    }
+
+    fn measure_widest(&mut self) {
+        self.widest = None;
+        for &seq in &self.visible {
+            let first = self.lines.front().map_or(seq, |l| l.seq);
+            let Some(line) = usize::try_from(seq - first)
+                .ok()
+                .and_then(|i| self.lines.get(i))
+            else {
+                continue;
+            };
+            let chars = line.text.chars().count();
+            if self.widest.is_none_or(|(_, widest)| chars > widest) {
+                self.widest = Some((seq, chars));
+            }
+        }
     }
 
     pub fn clear(&mut self) {
         self.lines.clear();
         self.visible.clear();
+        self.widest = None;
     }
 
     pub fn set_min_level(&mut self, level: LogLevel) {
@@ -143,6 +180,7 @@ impl LogModel {
             .filter(|l| self.passes(l.level, &l.text))
             .map(|l| l.seq)
             .collect();
+        self.measure_widest();
     }
 
     /// Lines passing the filters.
@@ -234,6 +272,34 @@ mod tests {
         assert!(m.get(0).is_some_and(|l| l.text.ends_with("m2")));
         assert!(m.get(2).is_some_and(|l| l.text.ends_with("m4")));
         assert!(m.get(3).is_none());
+    }
+
+    #[test]
+    fn widest_line_follows_pushes_eviction_and_filters() {
+        let mut m = LogModel::new(3);
+        assert_eq!(m.widest_index(), None);
+        m.push([
+            entry(LogLevel::Info, "a very long line indeed"),
+            entry(LogLevel::Error, "short"),
+            entry(LogLevel::Info, "medium line"),
+        ]);
+        assert_eq!(m.widest_index(), Some(0));
+        // The widest line is evicted: the next widest takes over.
+        m.push([entry(LogLevel::Info, "x")]);
+        let widest = m
+            .widest_index()
+            .and_then(|i| m.get(i))
+            .map(|l| l.text.clone());
+        assert!(widest.is_some_and(|t| t.ends_with("medium line")));
+        // Only visible lines count.
+        m.set_min_level(LogLevel::Error);
+        let widest = m
+            .widest_index()
+            .and_then(|i| m.get(i))
+            .map(|l| l.text.clone());
+        assert!(widest.is_some_and(|t| t.ends_with("short")));
+        m.clear();
+        assert_eq!(m.widest_index(), None);
     }
 
     #[test]
