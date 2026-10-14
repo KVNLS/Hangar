@@ -18,6 +18,7 @@ use hangar_core::changes::{FileDiff, LineKind};
 use crate::changes::highlight::{RowStyles, highlight_lines};
 use crate::changes::language::language_for_path;
 use crate::changes::live::WorkspaceDiff;
+use crate::changes::model::DisplayLine;
 use crate::ui::components::{EmptyState, UiButton};
 use crate::ui::{ActiveTokens as _, TypeScale as _};
 pub use tree::{TreeRow, ancestors, tree_rows};
@@ -489,19 +490,31 @@ fn added_lines(file: &FileDiff) -> HashSet<u32> {
 
 /// The file's lines, or a short message when it is too big, binary or unreadable.
 fn read_text(path: &std::path::Path) -> Result<Vec<SharedString>, SharedString> {
-    let meta =
-        std::fs::metadata(path).map_err(|e| SharedString::from(format!("Cannot read: {e}")))?;
+    use std::io::Read as _;
+
+    let cannot_read = |e: std::io::Error| SharedString::from(format!("Cannot read: {e}"));
+    let meta = std::fs::metadata(path).map_err(cannot_read)?;
+    // Devices and FIFOs report a length of 0 and never end (or never open).
+    if !meta.is_file() {
+        return Err("Not a regular file.".into());
+    }
     if meta.len() > MAX_VIEW_BYTES {
         return Err(format!("Too large to show ({} KB).", meta.len() / 1024).into());
     }
-    let bytes = std::fs::read(path).map_err(|e| SharedString::from(format!("Cannot read: {e}")))?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(MAX_VIEW_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(cannot_read)?;
+    if bytes.len() as u64 > MAX_VIEW_BYTES {
+        return Err("Too large to show (it grew while reading).".into());
+    }
     if bytes.iter().take(8192).any(|b| *b == 0) {
         return Err("Binary file.".into());
     }
     let text = String::from_utf8_lossy(&bytes);
     Ok(text
         .lines()
-        .map(|l| SharedString::from(l.replace('\t', "    ")))
+        .map(|l| SharedString::from(DisplayLine::new(l).text))
         .collect())
 }
 
@@ -616,8 +629,37 @@ impl FilesPanel {
 mod tests {
     use std::collections::HashSet;
 
-    use super::added_lines;
+    use super::{MAX_VIEW_BYTES, added_lines, read_text};
+    use crate::changes::model::MAX_LINE_BYTES;
     use hangar_core::changes::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
+
+    #[test]
+    fn read_text_refuses_devices_and_fifos() {
+        let dir = tempfile::tempdir().unwrap();
+        let zero = dir.path().join("zero");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        assert!(read_text(&zero).is_err());
+
+        let fifo = dir.path().join("fifo");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(read_text(&fifo).is_err());
+    }
+
+    #[test]
+    fn read_text_cuts_long_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("min.js");
+        std::fs::write(
+            &path,
+            format!("{}\nshort\tline", "x".repeat(MAX_VIEW_BYTES as usize - 20)),
+        )
+        .unwrap();
+        let lines = read_text(&path).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].len() <= MAX_LINE_BYTES + '…'.len_utf8());
+        assert_eq!(lines[1].as_ref(), "short    line");
+    }
 
     #[test]
     fn added_lines_are_new_line_numbers() {
