@@ -168,6 +168,8 @@ fn run_app() {
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
+                // Leaves room for the widest sidebar (SIDEBAR_WIDTH_RANGE) plus a usable pane.
+                window_min_size: Some(size(px(800.), px(500.))),
                 titlebar: Some(hangar_app::shell::titlebar_options()),
                 // The custom title bar moves the window itself (see gpui-component TitleBar).
                 app_owns_titlebar_drag: true,
