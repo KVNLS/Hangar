@@ -111,6 +111,7 @@ pub fn parse_initialize(result: &Value) -> AgentInfo {
 pub struct SessionMode {
     pub id: String,
     pub name: String,
+    pub description: Option<String>,
 }
 
 /// The modes of a `session/new` or `session/load` result: the current mode id and the
@@ -142,7 +143,12 @@ fn parse_mode_list(items: &Value, id_key: &str) -> Vec<SessionMode> {
                 .filter_map(|m| {
                     let id = m[id_key].as_str()?.to_owned();
                     let name = m["name"].as_str().unwrap_or(&id).to_owned();
-                    Some(SessionMode { id, name })
+                    let description = m["description"].as_str().map(str::to_owned);
+                    Some(SessionMode {
+                        id,
+                        name,
+                        description,
+                    })
                 })
                 .collect()
         })

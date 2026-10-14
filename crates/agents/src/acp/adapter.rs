@@ -343,6 +343,20 @@ impl AcpSession {
         Ok(())
     }
 
+    /// [`Self::set_mode`] before the session is shared; [`Self::initial_mode`] and the mode
+    /// config option follow, since agents do not always send an update for it.
+    pub fn apply_mode(&mut self, mode_id: &str) -> Result<()> {
+        if self.current_mode.as_deref() == Some(mode_id) {
+            return Ok(());
+        }
+        self.set_mode(mode_id)?;
+        self.current_mode = Some(mode_id.to_owned());
+        for option in self.config.iter_mut().filter(|o| o.is_mode()) {
+            option.current = mode_id.to_owned();
+        }
+        Ok(())
+    }
+
     /// The config options the session started with; later lists arrive as `ConfigOptions`
     /// updates or from [`Self::set_config_option`].
     pub fn config_options(&self) -> &[ConfigOption] {
@@ -734,5 +748,24 @@ mod tests {
         assert!(matches!(wait(rx), AcpEvent::Exited { .. }));
         assert!(session.wait_for_exit(Duration::from_secs(1)));
         assert!(matches!(session.set_mode("plan"), Err(Error::Protocol(_))));
+    }
+
+    #[test]
+    fn applied_mode_becomes_the_initial_mode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = r#"
+            read l; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+            read l; echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-1","modes":{"currentModeId":"default","availableModes":[{"id":"default","name":"Manual"},{"id":"bypassPermissions","name":"Bypass"}]},"configOptions":[{"id":"mode","category":"mode","type":"select","currentValue":"default","options":[{"value":"default","name":"Manual"},{"value":"bypassPermissions","name":"Bypass"}]}]}}'
+            read l; case "$l" in *session/set_mode*bypassPermissions*) echo '{"jsonrpc":"2.0","id":3,"result":{}}';; esac
+            read l
+        "#;
+        let (mut session, _events) = sh(script)
+            .start(&SpawnContext::new(dir.path()), &[], None)
+            .expect("starts");
+        session.apply_mode("default").expect("already in it");
+        session.apply_mode("bypassPermissions").expect("switches");
+        assert_eq!(session.initial_mode(), Some("bypassPermissions"));
+        assert_eq!(session.config_options()[0].current, "bypassPermissions");
+        session.kill();
     }
 }

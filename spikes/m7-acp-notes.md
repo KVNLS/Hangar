@@ -31,3 +31,16 @@ with npm, run by Hangar from PATH as preset `claude-acp`.
 - The adapter passes `mcpServers` to its `claude` child as `--mcp-config` JSON in argv, so the workspace's
   MCP session secret is visible in `ps` to the same user (Hangar itself keeps it out of argv). The socket is
   0700/0600, so only that user can use it anyway.
+
+## Session modes (2026-10-07, `session/new` in an empty directory)
+- claude-agent-acp: `default` "Manual" (Always ask before making changes), `acceptEdits` "Accept edits"
+  (Automatically accept all file edits), `plan`, `auto` (Claude handles permission decisions),
+  `bypassPermissions` "Bypass permissions" (Accepts all permissions). Also mirrored as the `mode` config option.
+- codex-acp: `read-only` "Read Only" (current; reads, asks to edit or go online), `auto` "Default" (reads, edits
+  and runs commands in the workspace without asking), `full-access` "Full Access" (no approval at all).
+- opencode acp: no `modes`; `mode` config option with `build` (tools per OpenCode's configured permissions) and
+  `plan` (no edit tools).
+- Gemini CLI 0.62 (from its `buildAvailableModes`, not signed in here): `default` (Prompts for approval),
+  `autoEdit`, `yolo` (Auto-approves all tools), `plan` when plan mode is enabled.
+- No agent has a mode that approves only reads, so Settings › Permissions "Auto-approve reads" keeps the asking
+  mode and Hangar answers `read`/`search` permission requests with allow-once (`acp::approval`).
