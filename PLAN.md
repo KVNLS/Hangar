@@ -46,7 +46,8 @@ Git access is the `git` CLI with porcelain output, not a library.
 3. Frame transport into GPUI: today BGRA copied twice (~12.6 MB/frame). Zero-copy via GPUI `paint_surface`
    needs a CoreVideo binding (new dependency, needs approval).
 4. Android frames: emulator gRPC console vs scrcpy protocol.
-5. Per-worktree ports for Metro/Expo (M6): allocation and env injection strategy.
+5. ~~Per-worktree ports for Metro/Expo~~ — resolved (M6): 8100–8199 per workspace, saved in `settings`, must bind
+   on localhost; passed as `--port` and `RCT_METRO_PORT`, `adb reverse` on Android (spikes/m6-run-notes.md).
 6. Distribution: signing/notarisation implications of loading Xcode private frameworks.
 7. Terminal keys: what Shift-Enter sends (`\r`, `ESC \r`, kitty protocol); Option-as-Meta default.
 8. simctl fallback has no tap on Xcode 27 (no Simulator.app, needs Accessibility, moves the real pointer):
@@ -87,7 +88,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - [x] M4 Android device panel — emulator boot/shutdown, gRPC frames/input (adb fallback), run live 2026-10-05
 - [x] M5 iOS device panel — headless boot/shutdown, hardware buttons, keyboard (no rotation on Xcode 27)
 - [x] UI v0.1 — design system + views, merged into main 2026-10-05
-- [ ] M6 Mobile run loop
+- [x] M6 Mobile run loop (first cut) — detection, ports, Run ⌘R in terminal tabs, native install/launch
 - [ ] M7 ACP structured agents
 - [ ] M8 MCP device tools
 
@@ -126,6 +127,19 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Device logs: `Device::logs` stream (adb logcat, simctl log stream) and a logs pane in the device panel
   (spikes/device-logs-notes.md).
 
+## M6 run loop (first cut)
+- `hangar-runner`: `detect` (Expo, React Native, Flutter, Xcode, Gradle at the root, `ios/`, `android/`),
+  `pick_stack` by device platform, `allocate_port`, `plan` (command lines + install/launch steps), `setup`
+  (JS dependency install), `resolve_artifact` (xcodebuild build settings, AGP `output-metadata.json`).
+- App: Run (⌘R, pane tab bar, palette) builds the focused workspace for the device open in the panel; Stop
+  (⌘.), Restart dev server (palette). Build, install and dev-server terminals are tabs next to the agent;
+  native builds install and launch through the device; the status bar shows the run state.
+- Live: Xcode on the simulator, Gradle on the emulator, Expo on the simulator (spikes/m6-run-notes.md).
+  React Native CLI and Flutter are unit-tested only.
+- Gaps: no device pool or per-workspace target (Run uses the panel's device); several Xcode schemes need a
+  saved choice but there is no picker yet (the error lists them); no parsed build progress or crash overlay;
+  `expo run` prebuild output lands in the worktree; the JDK/Gradle setup is the user's.
+
 ## UI v0.1 (design/Hangar.dc.html)
 - Design system in `crates/app/src/ui`: tokens (dark/light, `cx.tokens()`), gpui-component theme mapping,
   Geist/Geist Mono, metrics, type scale, components; `ui_gallery` example. `AgentState` in `core`.
@@ -136,8 +150,8 @@ Git access is the `git` CLI with porcelain output, not a library.
 - PTY agents only report running/exited: Working = terminal output in the last 3 s; Review = exited 0 with
   changes; Failed = exited non-zero.
 - Deferred until backed (not rendered, no placeholders): chat stream, tool-call cards, permission prompts and
-  the Approval/Input states (M7); build progress, crash and "in use" device overlays, Run/Reload (M6); status bar
-  build/RAM; per-workspace target device; Clone repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
+  the Approval/Input states (M7); parsed build progress, crash and "in use" device overlays; status bar RAM;
+  per-workspace target device and device pool; Clone repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
 - Visual pass 2026-10-05 (Claude, screenshots through `HANGAR_DEV_SHOW`): every screen in dark and light, plus
   the device panel on the iOS simulator and the Pixel_10_Pro emulator, compared with design/Hangar.dc.html.
   Fixed: title bar ⌘K search field and button order, changes/review footer (commit box and actions under the
@@ -157,4 +171,4 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Visual pass over every UI v0.1 screen and the device panel (both platforms), then M6 mobile run loop.
+- Owner checks the visual pass and M6 branches, then M7 (ACP structured agents) or the M6 gaps above.

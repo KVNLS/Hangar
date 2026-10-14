@@ -84,6 +84,9 @@ pub struct RunPlan {
     pub before: Vec<Step>,
     /// The build (and, for the JS and Flutter CLIs, the install and launch too).
     pub build: Command,
+    /// The build command keeps running as the dev server once the app is up (`expo run`,
+    /// `flutter run`): its tab is the place for reload keys.
+    pub build_serves: bool,
     pub after: Vec<Step>,
 }
 
@@ -132,28 +135,19 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
                 &target.id
             };
             let run = if android { "run:android" } else { "run:ios" };
+            // `expo run` refuses `--port` with `--no-bundler`, so it starts Metro itself.
             RunPlan {
-                server: Some(
-                    Command::new("npx", &["expo", "start", "--port", &port_str], dir)
-                        .env("RCT_METRO_PORT", &port_str),
-                ),
+                server: None,
                 before: js_before,
                 build: with_target_env(
                     Command::new(
                         "npx",
-                        &[
-                            "expo",
-                            run,
-                            "--device",
-                            device,
-                            "--port",
-                            &port_str,
-                            "--no-bundler",
-                        ],
+                        &["expo", run, "--device", device, "--port", &port_str],
                         dir,
                     )
                     .env("RCT_METRO_PORT", &port_str),
                 ),
+                build_serves: true,
                 after: Vec::new(),
             }
         }
@@ -184,6 +178,7 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
                         .arg("--no-packager")
                         .env("RCT_METRO_PORT", &port_str),
                 ),
+                build_serves: false,
                 after: Vec::new(),
             }
         }
@@ -191,6 +186,7 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
             server: None,
             before: Vec::new(),
             build: with_target_env(Command::new("flutter", &["run", "-d", &target.id], dir)),
+            build_serves: true,
             after: Vec::new(),
         },
         Stack::Xcode { container } => {
@@ -215,6 +211,7 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
                     .arg("-derivedDataPath")
                     .arg(&build_dir)
                     .arg("build"),
+                build_serves: false,
                 after: vec![Step::InstallAndLaunch(Artifact::Xcode {
                     container: container.clone(),
                     scheme: scheme.to_owned(),
@@ -235,6 +232,7 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
                     &[&format!(":{module}:assembleDebug")],
                     dir,
                 )),
+                build_serves: false,
                 after: vec![Step::InstallAndLaunch(Artifact::Gradle {
                     dir: dir.clone(),
                     module: module.clone(),
@@ -243,6 +241,32 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
         }
     };
     Ok(plan)
+}
+
+/// Dependency install a JS stack needs before Metro or the build can start: worktrees are fresh
+/// checkouts without `node_modules`. The lockfile picks the package manager.
+pub fn setup(stack: &Stack, root: &Path) -> Option<Command> {
+    let dir = match stack {
+        Stack::Expo { dir } | Stack::ReactNative { dir } => dir,
+        Stack::Flutter { .. } | Stack::Xcode { .. } | Stack::Gradle { .. } => return None,
+    };
+    let abs = root.join(dir);
+    if abs.join("node_modules").is_dir() {
+        return None;
+    }
+    let has = |file: &str| abs.join(file).is_file();
+    let (program, args): (&str, &[&str]) = if has("bun.lock") || has("bun.lockb") {
+        ("bun", &["install"])
+    } else if has("pnpm-lock.yaml") {
+        ("pnpm", &["install"])
+    } else if has("yarn.lock") {
+        ("yarn", &["install"])
+    } else if has("package-lock.json") {
+        ("npm", &["ci"])
+    } else {
+        ("npm", &["install"])
+    };
+    Some(Command::new(program, args, dir))
 }
 
 pub(crate) fn container_flag(container: &Path) -> &'static str {
@@ -311,18 +335,18 @@ mod tests {
     }
 
     #[test]
-    fn expo_on_ios_runs_metro_then_a_dev_build() {
+    fn expo_on_ios_builds_and_serves_on_the_workspace_port() {
         let plan = run(&Stack::Expo { dir: root() }, &ios(), None).unwrap();
-        let server = plan.server.unwrap();
-        assert_eq!(server.shell_line(), "npx expo start --port 8100");
-        assert!(
-            server
-                .env
-                .contains(&("RCT_METRO_PORT".into(), "8100".into()))
-        );
+        assert!(plan.server.is_none());
+        assert!(plan.build_serves);
         assert_eq!(
             plan.build.shell_line(),
-            "npx expo run:ios --device UDID-1 --port 8100 --no-bundler"
+            "npx expo run:ios --device UDID-1 --port 8100"
+        );
+        assert!(
+            plan.build
+                .env
+                .contains(&("RCT_METRO_PORT".into(), "8100".into()))
         );
         assert!(plan.before.is_empty());
         assert!(plan.after.is_empty());
@@ -333,7 +357,7 @@ mod tests {
         let plan = run(&Stack::Expo { dir: root() }, &android(), None).unwrap();
         assert_eq!(
             plan.build.shell_line(),
-            "npx expo run:android --device Pixel_10_Pro --port 8100 --no-bundler"
+            "npx expo run:android --device Pixel_10_Pro --port 8100"
         );
         assert_eq!(plan.before, vec![Step::AdbReverse(8100)]);
         assert!(
@@ -429,6 +453,41 @@ mod tests {
             run(&stack, &ios(), None),
             Err(Error::Mismatch { .. })
         ));
+    }
+
+    #[test]
+    fn js_stacks_install_dependencies_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let expo = Stack::Expo { dir: root() };
+        assert_eq!(
+            setup(&expo, tmp.path()).unwrap().shell_line(),
+            "npm install"
+        );
+        std::fs::write(tmp.path().join("yarn.lock"), "").unwrap();
+        assert_eq!(
+            setup(&expo, tmp.path()).unwrap().shell_line(),
+            "yarn install"
+        );
+        std::fs::write(tmp.path().join("bun.lock"), "").unwrap();
+        assert_eq!(
+            setup(&expo, tmp.path()).unwrap().shell_line(),
+            "bun install"
+        );
+        std::fs::create_dir(tmp.path().join("node_modules")).unwrap();
+        assert!(setup(&expo, tmp.path()).is_none());
+        let gradle = Stack::Gradle {
+            dir: root(),
+            module: "app".into(),
+        };
+        assert!(setup(&gradle, Path::new("/nowhere")).is_none());
+    }
+
+    #[test]
+    fn npm_ci_with_a_package_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package-lock.json"), "{}").unwrap();
+        let rn = Stack::ReactNative { dir: root() };
+        assert_eq!(setup(&rn, tmp.path()).unwrap().shell_line(), "npm ci");
     }
 
     #[test]

@@ -70,9 +70,14 @@ impl RunTab {
 pub(super) struct WorkspaceRun {
     pub(super) stack: &'static str,
     pub(super) port: u16,
+    /// The build tab keeps running as the dev server (`expo run`, `flutter run`).
+    build_serves: bool,
     pub(super) server: Option<RunTab>,
     pub(super) build: Option<RunTab>,
     root: PathBuf,
+    env: Vec<(String, String)>,
+    /// Server and build waiting for the dependency install in the build tab.
+    pending: Option<(Option<hangar_runner::Command>, hangar_runner::Command)>,
     after: Vec<Step>,
     device: SharedString,
     handle: Option<DeviceHandle>,
@@ -99,6 +104,16 @@ impl WorkspaceRun {
     pub(super) fn summary(&self) -> (String, AgentState) {
         let build = self.build.as_ref();
         match (build.map(RunTab::state), &self.phase) {
+            (Some(AgentState::Working), _) if self.pending.is_some() => {
+                ("Installing dependencies".to_owned(), AgentState::Working)
+            }
+            (Some(AgentState::Failed), _) if self.pending.is_some() => {
+                ("Install failed".to_owned(), AgentState::Failed)
+            }
+            (Some(AgentState::Working), _) if self.build_serves => (
+                format!("{} :{}", self.stack, self.port),
+                AgentState::Working,
+            ),
             (Some(AgentState::Working), _) => {
                 (format!("Building · {}", self.stack), AgentState::Working)
             }
@@ -116,6 +131,7 @@ impl WorkspaceRun {
 /// Everything worked out off the main thread before the tabs start.
 struct Prepared {
     plan: RunPlan,
+    setup: Option<hangar_runner::Command>,
     stack: &'static str,
     port: u16,
     scheme: Option<String>,
@@ -173,6 +189,7 @@ fn prepare(
         scheme: scheme.as_deref(),
         build_dir,
     })?;
+    let setup = hangar_runner::setup(stack, root);
     let sdk = hangar_devices::android::AndroidSdk::locate().ok();
     let mut path_dirs: Vec<String> = Vec::new();
     let mut env = Vec::new();
@@ -186,6 +203,7 @@ fn prepare(
     env.push(("PATH".to_owned(), path_dirs.join(":")));
     Ok(Prepared {
         plan,
+        setup,
         stack: stack.label(),
         port,
         scheme,
@@ -317,6 +335,7 @@ impl HangarApp {
         }
         let Prepared {
             plan,
+            setup,
             stack,
             port,
             env,
@@ -334,52 +353,89 @@ impl HangarApp {
         let keep_server = server
             .as_ref()
             .is_some_and(|s| s.running() && s.title.ends_with(&format!(":{port}")));
-        if !keep_server {
-            if let Some(old) = server.take() {
-                old.kill();
-            }
-            if let Some(command) = &plan.server {
-                server = self.spawn_tab(
-                    id,
-                    PaneTab::Server,
-                    format!("Metro :{port}"),
-                    command,
-                    &root,
-                    &env,
-                    window,
-                    cx,
-                );
-            }
+        if !keep_server && let Some(old) = server.take() {
+            old.kill();
         }
+        let server_command = if keep_server { None } else { plan.server };
+        let mut run = WorkspaceRun {
+            stack,
+            port,
+            build_serves: plan.build_serves,
+            server,
+            build: None,
+            root,
+            env,
+            pending: Some((server_command, plan.build)),
+            after: plan.after,
+            device,
+            handle: Some(handle),
+            phase: AfterPhase::Pending,
+        };
+        if let Some(setup) = setup {
+            let title = format!("Install · {}", setup.program);
+            run.build = self.spawn_tab(
+                id,
+                PaneTab::Build,
+                title,
+                &setup,
+                &run.root,
+                &run.env,
+                window,
+                cx,
+            );
+            self.runs.insert(id, run);
+        } else {
+            self.runs.insert(id, run);
+            self.launch_tabs(id, window, cx);
+        }
+        self.pane_tabs.insert(id, PaneTab::Build);
+        self.focus_terminal(window, cx);
+        cx.notify();
+    }
+
+    /// Starts the pending dev server and build of `id`.
+    fn launch_tabs(&mut self, id: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(run) = self.runs.get_mut(&id) else {
+            return;
+        };
+        let Some((server_command, build_command)) = run.pending.take() else {
+            return;
+        };
+        let (root, env, port, stack) = (run.root.clone(), run.env.clone(), run.port, run.stack);
+        let build_title = if run.build_serves {
+            format!("{stack} :{port}")
+        } else {
+            format!("Build · {stack}")
+        };
+        let server = server_command.and_then(|command| {
+            self.spawn_tab(
+                id,
+                PaneTab::Server,
+                format!("Metro :{port}"),
+                &command,
+                &root,
+                &env,
+                window,
+                cx,
+            )
+        });
         let build = self.spawn_tab(
             id,
             PaneTab::Build,
-            format!("Build · {stack}"),
-            &plan.build,
+            build_title,
+            &build_command,
             &root,
             &env,
             window,
             cx,
         );
-        let started = build.is_some();
-        self.runs.insert(
-            id,
-            WorkspaceRun {
-                stack,
-                port,
-                server,
-                build,
-                root,
-                after: plan.after,
-                device,
-                handle: Some(handle),
-                phase: AfterPhase::Pending,
-            },
-        );
-        if started {
-            self.pane_tabs.insert(id, PaneTab::Build);
-            self.focus_terminal(window, cx);
+        if let Some(run) = self.runs.get_mut(&id) {
+            if server.is_some() {
+                run.server = server;
+            }
+            run.build = build;
         }
+        self.focus_terminal(window, cx);
         cx.notify();
     }
 
@@ -446,7 +502,11 @@ impl HangarApp {
         tab.exit = Some(status.clone());
         cx.notify();
         if kind == PaneTab::Build && status == (SessionStatus::Exited { code: 0 }) {
-            self.after_build(id, window, cx);
+            if run.pending.is_some() {
+                self.launch_tabs(id, window, cx);
+            } else {
+                self.after_build(id, window, cx);
+            }
         }
     }
 
