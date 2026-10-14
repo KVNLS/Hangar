@@ -222,6 +222,20 @@ impl LiveSession {
         }
     }
 
+    /// Types `text` into a terminal agent, or into a chat agent's composer, without sending.
+    fn prefill(&self, text: &str, window: &mut Window, cx: &mut App) -> anyhow::Result<()> {
+        match &self.surface {
+            AgentSurface::Terminal { handle, .. } => {
+                handle.session().write(text.to_owned())?;
+                Ok(())
+            }
+            AgentSurface::Chat { view, .. } => {
+                view.update(cx, |chat, cx| chat.prefill(text, window, cx));
+                Ok(())
+            }
+        }
+    }
+
     fn exit_waiter(&self) -> ExitWaiter {
         match &self.surface {
             AgentSurface::Terminal { handle, .. } => {
@@ -420,6 +434,9 @@ impl HangarApp {
             |this, _, event: &ChangesEvent, window, cx| match event {
                 ChangesEvent::ExitReview => this.set_screen(Screen::Workspace, window, cx),
                 ChangesEvent::OpenReview => this.set_screen(Screen::Review, window, cx),
+                ChangesEvent::AskAgent { workspace, text } => {
+                    this.prefill_agent(*workspace, text, window, cx)
+                }
             },
         );
         let device_pool = cx.new(DevicePool::new);
@@ -613,6 +630,37 @@ impl HangarApp {
             kind: live.session.agent.clone(),
             live: !live.session.status.is_terminal(),
         })
+    }
+
+    /// Shows the workspace's agent with `text` typed into its input, not sent.
+    fn prefill_agent(
+        &mut self,
+        ws: WorkspaceId,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_screen(Screen::Workspace, window, cx);
+        self.show_pane_tab(ws, run::PaneTab::Agent, window, cx);
+        let Some(live) = self
+            .live
+            .sessions
+            .get(&ws)
+            .filter(|l| !l.session.status.is_terminal())
+        else {
+            window.push_notification(
+                Notification::warning("The workspace's agent is not running"),
+                cx,
+            );
+            return;
+        };
+        if let Err(err) = live.prefill(text, window, cx) {
+            tracing::warn!(%err, workspace = %ws, "could not type into the agent");
+            window.push_notification(
+                Notification::error(format!("Could not type into the agent: {err:#}")),
+                cx,
+            );
+        }
     }
 
     fn save_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {

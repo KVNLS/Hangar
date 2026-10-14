@@ -143,6 +143,11 @@ pub enum ChangesEvent {
     ExitReview,
     /// The side panel's "Full review" button.
     OpenReview,
+    /// Put `text` in the workspace agent's input (not sent) and focus it.
+    AskAgent {
+        workspace: WorkspaceId,
+        text: String,
+    },
 }
 
 impl EventEmitter<ChangesEvent> for ChangesPanel {}
@@ -762,6 +767,39 @@ impl ChangesPanel {
         cx.notify();
     }
 
+    /// A button that starts a message to the workspace's agent with `text`; disabled, with the
+    /// reason, when no agent runs.
+    fn ask_agent_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: Lucide,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> UiButton {
+        let agent = self.workspace_agent(cx);
+        let tooltip = match &agent {
+            None => "No agent runs in this workspace".to_owned(),
+            Some(agent) if !agent.live => format!("{} is no longer running", agent.name),
+            Some(agent) => format!("Write to {}", agent.name),
+        };
+        let workspace = self.workspace();
+        UiButton::new(id)
+            .icon(icon)
+            .label(label)
+            .small()
+            .tooltip(tooltip)
+            .disabled(!agent.is_some_and(|a| a.live))
+            .on_click(cx.listener(move |_, _, _, cx| {
+                if let Some(workspace) = workspace {
+                    cx.emit(ChangesEvent::AskAgent {
+                        workspace,
+                        text: text.clone(),
+                    });
+                }
+            }))
+    }
+
     /// The full-width review screen: top bar, file column with commit/PR actions, diff.
     fn render_wide(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.tokens();
@@ -824,6 +862,13 @@ impl ChangesPanel {
                 .child(Delta::new(n(summary.insertions), n(summary.deletions)))
             })
             .child(div().flex_1())
+            .child(self.ask_agent_button(
+                "review-request-changes",
+                "Request changes",
+                Lucide::Pencil,
+                "Please change: ".to_owned(),
+                cx,
+            ))
             .child(
                 Segmented::new("review-mode", ["Split", "Inline"])
                     .selected(if self.split_view { 0 } else { 1 })
@@ -912,6 +957,13 @@ impl ChangesPanel {
             .child(div().min_w_0().truncate().child(file_title(file)))
             .child(counts(file, cx))
             .child(div().flex_1())
+            .child(self.ask_agent_button(
+                "review-ask-file",
+                "Ask agent about this file",
+                Lucide::MessageSquare,
+                format!("About {}: ", path.display()),
+                cx,
+            ))
             .child(
                 UiButton::new("review-viewed")
                     .icon(Lucide::Check)

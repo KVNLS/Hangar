@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use gpui_kit::component::input::{InputEvent, TextareaState};
+use gpui_kit::component::input::{InputEvent, Position, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use hangar_agents::acp::protocol::{
@@ -224,6 +224,24 @@ impl ChatView {
         cx.emit(ChatEvent::StateChanged);
         cx.notify();
         Ok(())
+    }
+
+    /// Puts `text` in the composer after any draft and focuses it, without sending.
+    pub fn prefill(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer.update(cx, |state, cx| {
+            let draft = state.value();
+            let value = match draft.trim_end() {
+                "" => text.to_owned(),
+                draft => format!("{draft}\n{text}"),
+            };
+            let last_line = value.split('\n').count().saturating_sub(1);
+            state.set_value(value, window, cx);
+            state.set_cursor_position(
+                Position::new(u32::try_from(last_line).unwrap_or(u32::MAX), u32::MAX),
+                window,
+                cx,
+            );
+        });
     }
 
     /// Asks the agent to stop the running turn; open permission requests are cancelled.
