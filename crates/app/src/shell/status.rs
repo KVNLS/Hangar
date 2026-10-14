@@ -37,6 +37,23 @@ pub(super) fn summary_line<I: DoubleEndedIterator<Item = String>>(rows: I) -> Op
     })
 }
 
+/// The workspace after `current` among those waiting on the user (approval, input, failed,
+/// review), in that order then sidebar order; wraps around. `items` is in sidebar order.
+pub(super) fn next_needing_you<T: Copy + PartialEq>(
+    items: &[(AgentState, T)],
+    current: Option<T>,
+) -> Option<T> {
+    let mut queue: Vec<(AgentState, T)> = items
+        .iter()
+        .copied()
+        .filter(|(state, _)| state.needs_you() || *state == AgentState::Review)
+        .collect();
+    queue.sort_by_key(|(state, _)| *state);
+    let at = current.and_then(|c| queue.iter().position(|(_, id)| *id == c));
+    let next = at.map_or(0, |at| (at + 1) % queue.len().max(1));
+    queue.get(next).map(|(_, id)| *id)
+}
+
 /// `now`, `42s`, `11m`, `3h`, `2d` since `then_ms` (Unix milliseconds).
 pub(super) fn age_label(then_ms: i64, now_ms: i64) -> String {
     let secs = (now_ms - then_ms).max(0) / 1000;
@@ -117,6 +134,27 @@ impl HangarApp {
         )
     }
 
+    /// Focuses the next workspace waiting on the user (⌘J).
+    pub(super) fn focus_next_needing_you(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let items: Vec<(AgentState, WorkspaceId)> = self
+            .projects
+            .entries()
+            .iter()
+            .flat_map(|e| e.active())
+            .map(|ws| (self.agent_state(ws.id, cx), ws.id))
+            .collect();
+        let current = self.panes.slot(self.panes.focused());
+        match next_needing_you(&items, current) {
+            Some(id) => {
+                self.set_screen(Screen::Workspace, window, cx);
+                self.select_workspace(id, window, cx);
+            }
+            None => {
+                window.push_notification("No workspace is waiting on you.", cx);
+            }
+        }
+    }
+
     /// Workspace count per state, in "needs you" order.
     pub(super) fn state_counts(&self, cx: &App) -> Vec<(AgentState, usize)> {
         let mut counts: HashMap<AgentState, usize> = HashMap::new();
@@ -135,7 +173,8 @@ impl HangarApp {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the shell glob-imports gpui, whose `test` macro would shadow `#[test]`.
-    use super::{age_label, summary_line};
+    use super::{age_label, next_needing_you, summary_line};
+    use hangar_core::AgentState::*;
 
     fn rows(lines: &[&str]) -> std::vec::IntoIter<String> {
         lines
@@ -164,6 +203,24 @@ mod tests {
             summary_line(rows(&["❯ npm test"])).as_deref(),
             Some("npm test")
         );
+    }
+
+    #[test]
+    fn next_needing_you_cycles_in_priority_order() {
+        let items = [
+            (Working, 1),
+            (Review, 2),
+            (Failed, 3),
+            (Idle, 4),
+            (Review, 5),
+        ];
+        assert_eq!(next_needing_you(&items, None), Some(3));
+        assert_eq!(next_needing_you(&items, Some(3)), Some(2));
+        assert_eq!(next_needing_you(&items, Some(2)), Some(5));
+        assert_eq!(next_needing_you(&items, Some(5)), Some(3));
+        // From a workspace that is not waiting: the first in line.
+        assert_eq!(next_needing_you(&items, Some(1)), Some(3));
+        assert_eq!(next_needing_you(&[(Working, 1), (Idle, 2)], Some(1)), None);
     }
 
     #[test]

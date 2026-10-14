@@ -289,6 +289,9 @@ pub(super) async fn run_dev_hooks(
         let _ = this.update_in(cx, |this, window, cx| {
             let counts = this.state_counts(cx);
             tracing::info!(?counts, screen = ?this.screen, "HANGAR_DEV_OVERVIEW");
+            this.focus_next_needing_you(window, cx);
+            let focused = this.focused_workspace().map(|(_, ws)| ws.slug.clone());
+            tracing::info!(?focused, screen = ?this.screen, "HANGAR_DEV_OVERVIEW next needing you");
             this.set_screen(Screen::Workspace, window, cx);
         });
     }

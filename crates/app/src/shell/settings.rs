@@ -51,6 +51,7 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Command palette", "cmd-k", "Global"),
     ("New workspace", "cmd-n", "Global"),
     ("Overview", "cmd-shift-o", "Global"),
+    ("Next workspace needing you", "cmd-j", "Global"),
     ("Settings", "cmd-,", "Global"),
     ("Filter workspaces", "cmd-p", "Global"),
     ("Add project", "cmd-o", "Global"),

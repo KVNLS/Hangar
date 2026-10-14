@@ -72,6 +72,9 @@ impl Render for HangarApp {
             .on_action(cx.listener(|this, _: &ShowChangesTab, window, cx| {
                 this.set_changes_open(true, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &NextNeedingYou, window, cx| {
+                this.focus_next_needing_you(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ShowFilesTab, window, cx| {
                 this.set_files_open(true, window, cx)
             }))

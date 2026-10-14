@@ -97,6 +97,11 @@ impl HangarApp {
                 Box::new(ShowChangesTab),
             ),
             command("Show files", Lucide::Folder, Box::new(ShowFilesTab)),
+            command(
+                "Next workspace needing you",
+                Lucide::ArrowRight,
+                Box::new(NextNeedingYou),
+            ),
             command("Toggle sidebar", Lucide::PanelLeft, Box::new(ToggleSidebar)),
             command(
                 "Filter workspaces",

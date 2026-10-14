@@ -84,7 +84,8 @@ actions!(
         OpenPalette,
         ToggleTheme,
         ToggleOverview,
-        OpenSettings
+        OpenSettings,
+        NextNeedingYou
     ]
 );
 
@@ -97,6 +98,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-n", NewWorkspace, None),
         KeyBinding::new("cmd-k", OpenPalette, None),
         KeyBinding::new("cmd-shift-o", ToggleOverview, None),
+        KeyBinding::new("cmd-j", NextNeedingYou, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-p", FilterWorkspaces, None),
         KeyBinding::new("cmd-o", AddProject, None),
