@@ -4,7 +4,7 @@ use std::time::Instant;
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, TermMode, point_to_viewport};
 use alacritty_terminal::vte::ansi::{self, CursorShape as AnsiCursorShape, Processor};
@@ -12,6 +12,7 @@ use alacritty_terminal::vte::ansi::{self, CursorShape as AnsiCursorShape, Proces
 use crate::error::{Result, TerminalError};
 use crate::keys::KeyMode;
 use crate::lock;
+use crate::mouse::{MouseEncoding, MouseMode, MouseTracking};
 use crate::palette::Palette;
 use crate::snapshot::{CellFlags, CursorShape, CursorState, Snapshot, SnapshotCell, TermModes};
 
@@ -81,7 +82,7 @@ struct ListenerState {
 }
 
 #[derive(Clone, Default)]
-struct Listener(Arc<Mutex<ListenerState>>);
+pub(crate) struct Listener(Arc<Mutex<ListenerState>>);
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
@@ -112,7 +113,7 @@ impl EventListener for Listener {
 /// program (device status reports, colour queries) are collected and returned by
 /// [`Terminal::take_replies`].
 pub struct Terminal {
-    term: Term<Listener>,
+    pub(crate) term: Term<Listener>,
     parser: Processor,
     listener: Listener,
     palette: Palette,
@@ -139,7 +140,11 @@ impl Terminal {
 
     /// Feeds program output into the emulator.
     pub fn advance(&mut self, bytes: &[u8]) {
+        let selection = self.selection_fingerprint();
         self.parser.advance(&mut self.term, bytes);
+        if let Some(selection) = selection {
+            self.drop_overwritten_selection(selection);
+        }
         self.answer_queries();
     }
 
@@ -152,7 +157,11 @@ impl Terminal {
     /// Applies a synchronized update whose deadline has passed.
     pub fn flush_expired_sync(&mut self) {
         if self.sync_deadline().is_some_and(|d| d <= Instant::now()) {
+            let selection = self.selection_fingerprint();
             self.parser.stop_sync(&mut self.term);
+            if let Some(selection) = selection {
+                self.drop_overwritten_selection(selection);
+            }
             self.answer_queries();
         }
     }
@@ -192,6 +201,11 @@ impl Terminal {
 
     pub fn modes(&self) -> TermModes {
         modes_from(*self.term.mode())
+    }
+
+    /// Mouse tracking requested by the program.
+    pub fn mouse_mode(&self) -> MouseMode {
+        mouse_mode_from(*self.term.mode())
     }
 
     pub fn key_mode(&self) -> KeyMode {
@@ -238,12 +252,19 @@ impl Terminal {
             palette.resolve(ansi::Color::Named(ansi::NamedColor::Foreground), overrides);
         let cursor_color = palette.resolve(ansi::Color::Named(ansi::NamedColor::Cursor), overrides);
 
+        let selection = self.selection_range();
         let mut cells = Vec::with_capacity(cols * rows);
         for row in 0..rows {
             let line = Line(row as i32 - display_offset as i32);
             let grid_row = &grid[line];
             for col in 0..cols {
                 let cell = &grid_row[Column(col)];
+                let selected = selection.is_some_and(|range| {
+                    let at = |c: usize| range.contains(Point::new(line, Column(c)));
+                    at(col)
+                        || (cell.flags.contains(Flags::WIDE_CHAR) && at(col + 1))
+                        || (cell.flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0 && at(col - 1))
+                });
                 let mut fg = if cell.flags.contains(Flags::DIM) {
                     palette.resolve_dim(cell.fg, overrides)
                 } else {
@@ -261,7 +282,7 @@ impl Terminal {
                     zerowidth: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
                     fg,
                     bg,
-                    flags: cell_flags(cell.flags),
+                    flags: cell_flags(cell.flags, selected),
                 });
             }
         }
@@ -318,8 +339,11 @@ impl Terminal {
     }
 }
 
-fn cell_flags(flags: Flags) -> CellFlags {
+fn cell_flags(flags: Flags, selected: bool) -> CellFlags {
     let mut out = CellFlags::empty();
+    if selected {
+        out.insert(CellFlags::SELECTED);
+    }
     let map = [
         (Flags::BOLD, CellFlags::BOLD),
         (Flags::ITALIC, CellFlags::ITALIC),
@@ -360,7 +384,28 @@ fn modes_from(mode: TermMode) -> TermModes {
         alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
         mouse_reporting: mode.intersects(TermMode::MOUSE_MODE),
         focus_reporting: mode.contains(TermMode::FOCUS_IN_OUT),
+        mouse: mouse_mode_from(mode),
     }
+}
+
+fn mouse_mode_from(mode: TermMode) -> MouseMode {
+    let tracking = if mode.contains(TermMode::MOUSE_MOTION) {
+        MouseTracking::Motion
+    } else if mode.contains(TermMode::MOUSE_DRAG) {
+        MouseTracking::Drag
+    } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+        MouseTracking::Click
+    } else {
+        MouseTracking::Off
+    };
+    let encoding = if mode.contains(TermMode::SGR_MOUSE) {
+        MouseEncoding::Sgr
+    } else if mode.contains(TermMode::UTF8_MOUSE) {
+        MouseEncoding::Utf8
+    } else {
+        MouseEncoding::X10
+    };
+    MouseMode { tracking, encoding }
 }
 
 #[cfg(test)]
@@ -507,6 +552,37 @@ mod tests {
         assert!(s.cursor.is_none());
         t.advance(b"\x1b[?1049h");
         assert!(t.modes().alt_screen);
+    }
+
+    #[test]
+    fn mouse_and_focus_modes() {
+        let mut t = term(10, 3);
+        assert_eq!(t.mouse_mode(), MouseMode::default());
+        t.advance(b"\x1b[?1000h");
+        assert_eq!(t.mouse_mode().tracking, MouseTracking::Click);
+        assert_eq!(t.mouse_mode().encoding, MouseEncoding::X10);
+        t.advance(b"\x1b[?1002h\x1b[?1006h");
+        assert_eq!(
+            t.mouse_mode(),
+            MouseMode {
+                tracking: MouseTracking::Drag,
+                encoding: MouseEncoding::Sgr
+            }
+        );
+        t.advance(b"\x1b[?1003h\x1b[?1005h");
+        assert_eq!(
+            t.mouse_mode(),
+            MouseMode {
+                tracking: MouseTracking::Motion,
+                encoding: MouseEncoding::Utf8
+            }
+        );
+        assert!(t.modes().mouse_reporting);
+        t.advance(b"\x1b[?1003l\x1b[?1005l");
+        assert_eq!(t.mouse_mode(), MouseMode::default());
+        assert!(!t.modes().focus_reporting);
+        t.advance(b"\x1b[?1004h");
+        assert!(t.modes().focus_reporting);
     }
 
     #[test]
