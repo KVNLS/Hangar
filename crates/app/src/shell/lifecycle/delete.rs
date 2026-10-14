@@ -83,7 +83,7 @@ impl HangarApp {
         let (session, terminal) = self.close_session(workspace_id);
         self.drain_agent_queue(window, cx);
         self.close_run(workspace_id);
-        self.close_mcp(workspace_id);
+        self.close_mcp(workspace_id, cx);
         // Stop watching before the worktree disappears.
         self.sync_diffs(cx);
         cx.notify();
