@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use gpui_kit::*;
 use hangar_terminal::{
-    GridSize, Key, SpawnOptions, TerminalConfig, TerminalError, TerminalSession, encode_key,
-    encode_paste,
+    ExitInfo, GridSize, Key, SpawnOptions, TerminalConfig, TerminalError, TerminalSession,
+    encode_key, encode_paste,
 };
 
 use element::TerminalElement;
@@ -81,34 +81,73 @@ pub struct TerminalView {
     _tasks: Vec<Task<()>>,
 }
 
+/// Wakes a [`TerminalView`] from the terminal pump thread. Pass [`TerminalWaker::hook`] as the
+/// session's update callback and the waker itself to [`TerminalView::attach`].
+#[derive(Clone, Default)]
+pub struct TerminalWaker(Arc<tokio::sync::Notify>);
+
+impl TerminalWaker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Callback for the pump thread; cheap and non-blocking.
+    pub fn hook(&self) -> Arc<dyn Fn() + Send + Sync> {
+        let notify = Arc::clone(&self.0);
+        Arc::new(move || notify.notify_one())
+    }
+}
+
+/// Emitted by [`TerminalView`].
+#[derive(Clone, Debug)]
+pub enum TerminalEvent {
+    /// The program exited and all of its output was drawn.
+    Exited(Result<ExitInfo, String>),
+}
+
 /// A started program, ready to be attached to a [`TerminalView`]. Spawning is separate from
 /// view creation so failures (e.g. command not found) surface before a window opens.
 pub struct StartedTerminal {
     session: Arc<TerminalSession>,
-    wake: Arc<tokio::sync::Notify>,
+    waker: TerminalWaker,
 }
 
 impl StartedTerminal {
     pub fn spawn(spawn: &SpawnOptions) -> Result<Self, TerminalError> {
-        let wake = Arc::new(tokio::sync::Notify::new());
-        let notifier = Arc::clone(&wake);
+        let waker = TerminalWaker::new();
+        let hook = waker.hook();
         let session = Arc::new(TerminalSession::spawn(
             spawn,
             TerminalConfig::default(),
-            move || notifier.notify_one(),
+            move || hook(),
         )?);
-        Ok(Self { session, wake })
+        Ok(Self { session, waker })
     }
 }
 
 impl TerminalView {
+    /// Creates a view for a program started with [`StartedTerminal::spawn`] and focuses it.
     pub fn new(
         started: StartedTerminal,
         options: TerminalViewOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let StartedTerminal { session, wake } = started;
+        let StartedTerminal { session, waker } = started;
+        let view = Self::attach(session, waker, options, cx);
+        window.focus(&view.focus_handle, cx);
+        view
+    }
+
+    /// Creates a view for an already running session (e.g. an agent's), whose update callback
+    /// is `waker.hook()`. The view does not take focus.
+    pub fn attach(
+        session: Arc<TerminalSession>,
+        waker: TerminalWaker,
+        options: TerminalViewOptions,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let wake = waker.0;
         // The program starts at the spawn size; the first layout resizes PTY and grid.
         let grid = session.terminal().size();
 
@@ -119,7 +158,7 @@ impl TerminalView {
                     if let Some(stats) = view.stats.as_mut() {
                         stats.woke();
                     }
-                    view.on_output();
+                    view.on_output(cx);
                     cx.notify();
                 });
                 if alive.is_err() {
@@ -153,8 +192,6 @@ impl TerminalView {
         }
 
         let focus_handle = cx.focus_handle();
-        window.focus(&focus_handle, cx);
-
         let font = font(options.font_family.clone());
         Self {
             session,
@@ -177,13 +214,13 @@ impl TerminalView {
         &self.session
     }
 
-    fn on_output(&mut self) {
+    fn on_output(&mut self, cx: &mut Context<Self>) {
         if self.exit_message.is_none()
             && let Some(status) = self.session.exit_status()
         {
-            let message = match status {
+            let message = match &status {
                 Ok(exit) if exit.success() => "[process exited]".to_owned(),
-                Ok(exit) => match exit.signal {
+                Ok(exit) => match &exit.signal {
                     Some(signal) => format!("[process killed by {signal}]"),
                     None => format!("[process exited with code {}]", exit.code),
                 },
@@ -191,6 +228,7 @@ impl TerminalView {
             };
             tracing::info!("{message}");
             self.exit_message = Some(message);
+            cx.emit(TerminalEvent::Exited(status));
         }
     }
 
@@ -321,6 +359,8 @@ fn single_char(key: &str) -> Option<char> {
     let c = chars.next()?;
     chars.next().is_none().then_some(c)
 }
+
+impl EventEmitter<TerminalEvent> for TerminalView {}
 
 impl Focusable for TerminalView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
