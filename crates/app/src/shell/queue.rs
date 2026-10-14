@@ -5,7 +5,7 @@ use gpui_kit::assets::IconName as Lucide;
 
 use super::toast::ToastKind;
 use super::*;
-use crate::agent_queue::Admission;
+use crate::agent_queue::{Admission, DEFAULT_MAX_AGENTS, MAX_AGENTS_RANGE, clamp_limit};
 use crate::ui::components::{EmptyState, UiButton};
 
 /// What to start in a workspace, kept while it waits for a slot.
@@ -99,6 +99,61 @@ impl HangarApp {
 
     pub(super) fn max_agents(&self) -> u32 {
         self.live.agent_queue.limit()
+    }
+
+    /// Applies a saved or chosen limit. Running agents keep running; a higher one starts
+    /// queued workspaces.
+    pub(super) fn set_max_agents(
+        &mut self,
+        limit: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let limit = clamp_limit(limit);
+        if limit == self.live.agent_queue.limit() {
+            return;
+        }
+        self.live.agent_queue.set_limit(limit);
+        self.persist(window, cx, move |store| ops::save_max_agents(store, limit));
+        self.drain_agent_queue(window, cx);
+    }
+
+    /// The Settings field for the limit: typed values in range apply at once, anything else
+    /// is put back on blur.
+    pub(super) fn max_agents_input(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<InputState>, Subscription) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(DEFAULT_MAX_AGENTS.to_string())
+                .min(f64::from(*MAX_AGENTS_RANGE.start()))
+                .max(f64::from(*MAX_AGENTS_RANGE.end()))
+        });
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let typed = input.read(cx).value().trim().parse::<u32>().ok();
+                    if let Some(limit) = typed.filter(|n| MAX_AGENTS_RANGE.contains(n)) {
+                        this.set_max_agents(limit, window, cx);
+                    }
+                }
+                InputEvent::Blur => this.sync_max_agents_input(window, cx),
+                _ => {}
+            },
+        );
+        (input, sub)
+    }
+
+    /// Shows the current limit in the Settings field.
+    pub(super) fn sync_max_agents_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let limit = self.max_agents().to_string();
+        let input = self.settings_ui.max_agents.clone();
+        if input.read(cx).value() != limit {
+            input.update(cx, |input, cx| input.set_value(limit, window, cx));
+        }
     }
 
     /// The pane of a queued workspace: its place and a way to skip or leave the queue.

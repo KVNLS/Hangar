@@ -768,6 +768,7 @@ impl HangarApp {
                     self.live
                         .agent_queue
                         .set_limit(crate::agent_queue::clamp_limit(limit));
+                    self.sync_max_agents_input(window, cx);
                 }
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
