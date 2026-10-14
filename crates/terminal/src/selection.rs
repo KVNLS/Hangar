@@ -95,6 +95,7 @@ impl Terminal {
     /// The selected text: soft-wrapped lines joined, wide glyphs once, trailing blanks of each
     /// line removed. `None` without a selection or when it holds no text.
     pub fn selection_text(&self) -> Option<String> {
+        self.selection_range()?;
         let text = self.term.selection_to_string()?;
         let trimmed = text
             .split('\n')
@@ -105,7 +106,11 @@ impl Terminal {
     }
 
     pub(crate) fn selection_range(&self) -> Option<SelectionRange> {
-        self.term.selection.as_ref()?.to_range(&self.term)
+        let range = self.term.selection.as_ref()?.to_range(&self.term)?;
+        // alacritty trims half-covered edge cells of a block after ordering its corners, which
+        // can leave start past end (even past the last column); `selection_to_string` would
+        // then index out of bounds.
+        (!range.is_block || range.start.column <= range.end.column).then_some(range)
     }
 
     fn grid_point(&self, point: ViewportPoint) -> Point {
