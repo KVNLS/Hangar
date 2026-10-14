@@ -105,3 +105,35 @@ fn seq_one_million_parse_only() {
         data.len() as f64 / 1_000_000.0 / elapsed.as_secs_f64(),
     );
 }
+
+/// A consumer that stalls (loaded machine, busy UI thread) must not lose the tail of the output
+/// once the child has exited.
+#[test]
+fn stalled_consumer_still_receives_all_output() {
+    use hangar_terminal::{PtyEvent, PtySession};
+
+    let pty = PtySession::spawn(&SpawnOptions::command("seq", ["1", "1000000"])).unwrap();
+    let output = pty.take_output().unwrap();
+    let mut bytes = 0usize;
+    let mut closed = false;
+    let mut stalled = false;
+    while let Ok(event) = output.recv_timeout(Duration::from_secs(60)) {
+        match event {
+            PtyEvent::Output(chunk) => {
+                bytes += chunk.len();
+                // Stall once only a few KB remain: the child can then finish writing and exit while
+                // output is still unread.
+                if !stalled && bytes >= 7_888_890 - 3_000 {
+                    stalled = true;
+                    std::thread::sleep(Duration::from_millis(3_500));
+                }
+            }
+            PtyEvent::Closed => {
+                closed = true;
+                break;
+            }
+        }
+    }
+    assert!(closed, "channel ended without Closed");
+    assert!(bytes >= 6_888_890 + 1_000_000, "{bytes}");
+}

@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -167,9 +168,14 @@ impl PtySession {
             .map_err(|e| TerminalError::PtyIo(format!("{e:#}")))?;
 
         let (out_tx, out_rx) = mpsc::sync_channel(OUTPUT_QUEUE);
+        let reader_done = Arc::new(AtomicBool::new(false));
+        let reader_flag = Arc::clone(&reader_done);
         thread::Builder::new()
             .name("hangar-pty-reader".into())
-            .spawn(move || read_loop(reader, out_tx))
+            .spawn(move || {
+                read_loop(reader, out_tx);
+                reader_flag.store(true, Ordering::Release);
+            })
             .map_err(|e| TerminalError::Thread("PTY reader", e))?;
 
         let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>();
@@ -191,7 +197,7 @@ impl PtySession {
             let slave = pty.slave;
             thread::Builder::new()
                 .name("hangar-pty-waiter".into())
-                .spawn(move || wait_loop(child, slave, &master, &exit))
+                .spawn(move || wait_loop(child, slave, &master, &exit, &reader_done))
                 .map_err(|e| TerminalError::Thread("PTY waiter", e))?;
         }
 
@@ -321,7 +327,8 @@ impl PtySession {
 /// it. The program leads its own session, so the watchdog cannot join its group the way the
 /// ACP one does (and macOS `pkill` has no `-s`, and its `-t` matches nothing); it lists the
 /// terminal's processes with `ps -t` once, while they still hold it, so a
-/// terminal reused afterwards is never touched. It leaves quietly once `leader` exits.
+/// terminal reused afterwards is never touched. It leaves quietly once `leader` exits, even if the owner died first (its
+/// terminal may already belong to a new session by then).
 fn spawn_watchdog(owner: u32, leader: u32, tty: &std::path::Path) {
     let Some(tty) = tty.file_name().and_then(|n| n.to_str()) else {
         return;
@@ -331,7 +338,8 @@ fn spawn_watchdog(owner: u32, leader: u32, tty: &std::path::Path) {
     }
     let script = format!(
         "while kill -0 {owner} 2>/dev/null && kill -0 {leader} 2>/dev/null; do sleep 2; done; \
-         kill -0 {owner} 2>/dev/null && exit 0; pids=$(ps -t {tty} -o pid=); [ -n \"$pids\" ] || exit 0; \
+         kill -0 {owner} 2>/dev/null && exit 0; \
+         kill -0 {leader} 2>/dev/null || exit 0; pids=$(ps -t {tty} -o pid=); [ -n \"$pids\" ] || exit 0; \
          kill -HUP $pids 2>/dev/null; kill -CONT $pids 2>/dev/null; sleep 2; \
          kill -KILL $pids 2>/dev/null; exit 0"
     );
@@ -401,19 +409,19 @@ fn wait_loop(
     slave: Box<dyn SlavePty + Send>,
     master: &SharedMaster,
     exit: &ExitSlot,
+    reader_done: &AtomicBool,
 ) {
     let status = child.wait().map(ExitInfo::from).map_err(|e| e.to_string());
     *lock(&exit.status) = Some(status);
     exit.cond.notify_all();
 
-    let deadline = Instant::now() + DRAIN_TIMEOUT;
-    while pending_output(master) > 0 && Instant::now() < deadline {
+    // No timeout: a consumer that is slow (loaded machine) must still get the tail. The wait ends
+    // when the kernel queue is empty or the reader has stopped (consumer dropped).
+    while pending_output(master) > 0 && !reader_done.load(Ordering::Acquire) {
         thread::sleep(Duration::from_millis(1));
     }
     drop(slave);
 }
-
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[cfg(unix)]
 fn pending_output(master: &SharedMaster) -> usize {
