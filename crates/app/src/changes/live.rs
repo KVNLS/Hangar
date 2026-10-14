@@ -19,6 +19,12 @@ pub struct WorkspaceDiff {
     _task: Task<()>,
 }
 
+impl Drop for WorkspaceDiff {
+    fn drop(&mut self) {
+        tracing::info!(workspace = %self.workspace, "live diff stopped");
+    }
+}
+
 impl WorkspaceDiff {
     /// Starts watching off the main thread (the watcher setup runs git) and applies every
     /// update as it arrives.
