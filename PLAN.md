@@ -90,7 +90,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - [x] UI v0.1 — design system + views, merged into main 2026-10-05
 - [x] M6 Mobile run loop (first cut) — detection, ports, Run ⌘R in terminal tabs, native install/launch
 - [x] M7 ACP structured agents (first cut) — Claude Code over `claude-agent-acp`, chat pane, Approval state
-- [x] M8 MCP device tools (first cut) — per-workspace devices, capacity guard, tools over `hangar mcp-bridge`
+- [x] M8 MCP device tools (first cut) — per-workspace devices, capacity guard, tools over `Hangar mcp-bridge`
 
 ## Done since M2 first cut
 - Terminal: selection (drag/word/line/shift-extend, auto-scroll), Cmd-C/Cmd-A, mouse reporting (1000/1002/1003,
@@ -156,13 +156,13 @@ Git access is the `git` CLI with porcelain output, not a library.
   Limit 1 = single-device mode: workspaces share the base device through FIFO leases ("Waiting for the device");
   Auto detecting 1 alerts once. Runtime guard: no boot under memory pressure or low free memory (falls back to
   a running device), and at critical pressure idle unfocused devices are shut down.
-- MCP (`crates/mcp` + `app::mcp_host`): agents start `hangar mcp-bridge`, which relays MCP stdio to the app's
+- MCP (`crates/mcp` + `app::mcp_host`): agents start `Hangar mcp-bridge`, which relays MCP stdio to the app's
   0700/0600 Unix socket with a per-workspace session secret (`HANGAR_MCP_SESSION`, in the agent's env only).
   Tools: device_info, screenshot, tap, swipe, type_text, press, logs, build_and_run, launch_app. Wiring:
   Claude Code `--mcp-config` (inline), OpenCode `OPENCODE_CONFIG_CONTENT`, Codex `-c mcp_servers.hangar=…`
   (`env_vars`), Gemini `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` + `--skip-trust` (owner decision). Nothing is written
   in the worktree. Agents also get `HANGAR_DEVICE_PLATFORM`, `HANGAR_DEVICE_ID`, `ANDROID_SERIAL`.
-- Live (2026-10-05, scratch repo): a shell agent in a workspace ran `hangar mcp-bridge` with only its own env:
+- Live (2026-10-05, scratch repo): a shell agent in a workspace ran `Hangar mcp-bridge` with only its own env:
   initialize, tools/list, build_and_run (built and launched on the workspace's own new simulator), device_info,
   screenshot, tap (the counter went 0 → 1), screenshot; a wrong session got -32001.
 - Not verified live: Codex and Gemini wiring (not installed), OpenCode's MCP permission default, a real agent

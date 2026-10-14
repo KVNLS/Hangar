@@ -17,7 +17,7 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
   `HANGAR_DEV_AGENT=opencode-acp` runs `opencode acp` (`curl -fsSL https://opencode.ai/install | bash`),
   `codex-acp` runs `codex-acp` (npm `@zed-industries/codex-acp`), `gemini-acp` runs `gemini --acp --skip-trust`.
   Protocol tests: `cargo test -p hangar-agents acp`.
-- MCP bridge: `hangar mcp-bridge` (agents start it as their `hangar` MCP server; needs `HANGAR_MCP_SOCKET` and
+- MCP bridge: `Hangar mcp-bridge` (agents start it as their `hangar` MCP server; needs `HANGAR_MCP_SOCKET` and
   `HANGAR_MCP_SESSION`, set by the app on each agent). End-to-end test: `cargo test -p hangar-app --test mcp_bridge`.
 
 ## Toolchain

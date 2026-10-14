@@ -794,6 +794,15 @@ fn tool_body(content: &[ToolContent], root: &std::path::Path, cx: &App) -> Optio
     )
 }
 
+/// Model and effort values speak for themselves ("Opus 5.5", "High"); other options need their
+/// name ("Fast mode: Off").
+fn config_label(option: &ConfigOption) -> String {
+    match option.category.as_deref() {
+        Some("model" | "thought_level") => option.current_name().to_owned(),
+        _ => format!("{}: {}", option.name, option.current_name()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{diff_lines, without_verb};
@@ -814,14 +823,5 @@ mod tests {
         );
         assert_eq!(diff_lines("", "x\ny"), vec![('+', "x"), ('+', "y")]);
         assert!(diff_lines("same", "same").is_empty());
-    }
-}
-
-/// Model and effort values speak for themselves ("Opus 5.5", "High"); other options need their
-/// name ("Fast mode: Off").
-fn config_label(option: &ConfigOption) -> String {
-    match option.category.as_deref() {
-        Some("model" | "thought_level") => option.current_name().to_owned(),
-        _ => format!("{}: {}", option.name, option.current_name()),
     }
 }

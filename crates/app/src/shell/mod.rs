@@ -324,7 +324,7 @@ pub struct HangarApp {
     device: DeviceLayout,
     /// Every workspace's device.
     device_pool: Entity<DevicePool>,
-    /// Serves the MCP device tools of `hangar mcp-bridge`; `None` if the socket could not be bound.
+    /// Serves the MCP device tools of `Hangar mcp-bridge`; `None` if the socket could not be bound.
     mcp: Option<crate::mcp_host::McpHandle>,
     /// `HANGAR_DEV_DEVICE_LIMIT`, applied when the pool loads.
     device_limit_override: Option<crate::device_pool::policy::Limit>,

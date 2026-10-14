@@ -1,4 +1,4 @@
-//! MCP device tools for agents: the app end of `hangar mcp-bridge`. Each request from the host
+//! MCP device tools for agents: the app end of `Hangar mcp-bridge`. Each request from the host
 //! (`crate::mcp_host`) is routed to the device API of its workspace; device I/O stays off the UI
 //! thread and every reply goes back through its oneshot.
 

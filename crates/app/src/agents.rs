@@ -118,7 +118,7 @@ pub struct AgentExtras {
     pub mcp_servers: Vec<McpServer>,
 }
 
-/// How an agent reaches the app's MCP server through `hangar mcp-bridge`.
+/// How an agent reaches the app's MCP server through `Hangar mcp-bridge`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BridgeLaunch {
     /// The Hangar executable (`std::env::current_exe()`).
@@ -291,7 +291,7 @@ mod tests {
         }
     }
 
-    const EXE: &str = "/Applications/Hangar.app/Contents/MacOS/hangar";
+    const EXE: &str = "/Applications/Hangar.app/Contents/MacOS/Hangar";
 
     fn bridge(exe: &str) -> BridgeLaunch {
         BridgeLaunch {
@@ -395,11 +395,11 @@ mod tests {
         );
         assert_bridge_env(&x.env);
 
-        let odd = r#"/Users/me/My "Apps"\bin/hangar"#;
+        let odd = r#"/Users/me/My "Apps"\bin/Hangar"#;
         let x = mcp_launch("codex", &bridge(odd), &[]).unwrap();
         assert!(
             x.args[1]
-                .starts_with(r#"mcp_servers.hangar={command="/Users/me/My \"Apps\"\\bin/hangar","#),
+                .starts_with(r#"mcp_servers.hangar={command="/Users/me/My \"Apps\"\\bin/Hangar","#),
             "{}",
             x.args[1]
         );

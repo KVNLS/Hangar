@@ -1,4 +1,4 @@
-//! End to end: the built `hangar` binary in `mcp-bridge` mode talking to an `McpHost` whose
+//! End to end: the built `Hangar` binary in `mcp-bridge` mode talking to an `McpHost` whose
 //! requests are answered by a fake GPUI side.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -40,7 +40,7 @@ fn fake_gpui_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>) {
 }
 
 fn bridge(socket: &std::path::Path, session: &str, input: &str) -> (Vec<Value>, String, bool) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hangar"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_Hangar"))
         .arg("mcp-bridge")
         .env("HANGAR_MCP_SOCKET", socket)
         .env("HANGAR_MCP_SESSION", session)

@@ -4,7 +4,7 @@
 //! # Architecture
 //!
 //! ```text
-//! agent ──stdio (MCP, JSON lines)──▶ `hangar mcp-bridge` ──Unix socket──▶ Hangar app
+//! agent ──stdio (MCP, JSON lines)──▶ `Hangar mcp-bridge` ──Unix socket──▶ Hangar app
 //!                                      run_bridge()        {session, message}   serve() → handle()
 //!                                                                              → ToolHost::call()
 //! ```
