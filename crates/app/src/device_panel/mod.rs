@@ -2,6 +2,7 @@
 //! active backend and the platform's hardware controls. One panel per window; the device is
 //! shared by every workspace.
 
+mod logs;
 mod picker;
 mod platform;
 
@@ -17,7 +18,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_devices::Input;
 
+use logs::{LogsEvent, LogsPane};
+
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent, InputResult};
+pub use logs::LogsSettings;
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
 pub use platform::{
     BackendReason, Control, Listing, Opened, Platform, list_all, open_with_fallback,
@@ -29,6 +33,8 @@ pub enum DevicePanelEvent {
     Selected(Option<DeviceKey>),
     /// The stats overlay was toggled (save it).
     Stats(bool),
+    /// The logs pane was opened/closed or its level changed (save it).
+    Logs(LogsSettings),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,7 +69,9 @@ enum Connection {
         view: Entity<DeviceView>,
         /// Why the default backend is not in use.
         reason: Option<BackendReason>,
+        logs: Entity<LogsPane>,
         _events: Subscription,
+        _logs_events: Subscription,
     },
     Failed {
         name: SharedString,
@@ -97,6 +105,7 @@ pub struct DevicePanel {
     select_after_list: Option<DeviceKey>,
     shutting_down: bool,
     stats: bool,
+    logs_settings: LogsSettings,
     /// `HANGAR_DEVICE_BACKEND` (`private`, `simctl`, `grpc` or `adb`): no automatic fallback.
     forced_backend: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -134,6 +143,7 @@ impl DevicePanel {
             select_after_list: None,
             shutting_down: false,
             stats: stats_forced(),
+            logs_settings: LogsSettings::default(),
             forced_backend,
             _subscriptions: vec![select_sub],
         }
@@ -424,11 +434,14 @@ impl DevicePanel {
                         cx.notify();
                     },
                 );
+                let (logs, logs_events) = self.new_logs(&key, &view, window, cx);
                 self.connection = Connection::Open {
                     key,
                     view,
                     reason,
+                    logs,
                     _events: events,
+                    _logs_events: logs_events,
                 };
             }
             Err(err) => {
@@ -441,6 +454,38 @@ impl DevicePanel {
             }
         }
         cx.notify();
+    }
+
+    /// Applies saved logs pane settings; call before the panel is first shown.
+    pub fn restore_logs(&mut self, settings: LogsSettings) {
+        self.logs_settings = settings;
+    }
+
+    /// Opens or closes the logs pane (now, or when the device opens).
+    pub fn set_logs_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.logs_settings.open = open;
+        if let Connection::Open { logs, .. } = &self.connection {
+            logs.update(cx, |logs, cx| logs.set_open(open, cx));
+        }
+    }
+
+    fn new_logs(
+        &self,
+        key: &DeviceKey,
+        view: &Entity<DeviceView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<LogsPane>, Subscription) {
+        let source = view.read(cx).log_source();
+        let history = key.platform == Platform::Android;
+        let settings = self.logs_settings;
+        let logs = cx.new(|cx| LogsPane::new(source, history, settings, window, cx));
+        let sub = cx.subscribe(&logs, |this, _, event: &LogsEvent, cx| {
+            let LogsEvent::Settings(settings) = event;
+            this.logs_settings = *settings;
+            cx.emit(DevicePanelEvent::Logs(*settings));
+        });
+        (logs, sub)
     }
 
     pub fn stats(&self) -> bool {
@@ -796,6 +841,10 @@ impl Render for DevicePanel {
         let backend = self.render_backend(cx);
         let body = self.render_body(cx);
         let controls = self.render_controls(cx);
+        let logs = match &self.connection {
+            Connection::Open { logs, .. } => Some(logs.clone()),
+            _ => None,
+        };
         v_flex()
             .size_full()
             .bg(cx.theme().background)
@@ -803,6 +852,7 @@ impl Render for DevicePanel {
             .child(picker)
             .children(backend)
             .child(body)
+            .children(logs)
             .children(controls)
     }
 }

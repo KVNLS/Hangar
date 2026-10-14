@@ -94,6 +94,8 @@ pub struct DevOptions {
     pub device_text: Option<String>,
     /// Boot the device first when it is a shut-down virtual device (Android AVD id).
     pub device_boot: bool,
+    /// Open the logs pane under the device screen.
+    pub device_logs: bool,
 }
 
 impl DevOptions {
@@ -127,6 +129,7 @@ impl DevOptions {
             device_home: flag("HANGAR_DEV_DEVICE_HOME"),
             device_text: var("HANGAR_DEV_DEVICE_TEXT"),
             device_boot: flag("HANGAR_DEV_DEVICE_BOOT"),
+            device_logs: flag("HANGAR_DEV_DEVICE_LOGS"),
             device_tap: var("HANGAR_DEV_DEVICE_TAP").and_then(|v| {
                 let parsed = v
                     .split_once(',')
@@ -313,6 +316,11 @@ impl HangarApp {
                 }
                 DevicePanelEvent::Stats(stats) => {
                     this.device.stats = *stats;
+                    this.save_device_layout(window, cx);
+                }
+                DevicePanelEvent::Logs(logs) => {
+                    this.device.logs = logs.open;
+                    this.device.log_level = Some(logs.min_level.as_str().to_owned());
                     this.save_device_layout(window, cx);
                 }
             },
@@ -606,7 +614,9 @@ impl HangarApp {
                     self.device = device.sanitized();
                     let (selected, stats) = (self.device.selected.clone(), self.device.stats);
                     let open = self.device.open;
+                    let logs = self.device.logs_settings();
                     self.device_panel.update(cx, |panel, cx| {
+                        panel.restore_logs(logs);
                         panel.restore(selected, stats, cx);
                         if open {
                             panel.set_visible(true, window, cx);
@@ -1693,9 +1703,10 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
             inputs.push(("HANGAR_DEV_DEVICE_TEXT", DevAction::Text(text)));
         }
         let boot = dev.device_boot;
+        let logs = dev.device_logs;
         let this = this.clone();
         // Runs alongside the other hooks: waiting for frames must not hold them up.
-        cx.spawn(async move |cx| dev_device(this, id, boot, inputs, cx).await)
+        cx.spawn(async move |cx| dev_device(this, id, boot, logs, inputs, cx).await)
             .detach();
     }
     if let Some(repo) = dev.open.clone() {
@@ -1780,12 +1791,13 @@ enum DevAction {
     Text(String),
 }
 
-/// `HANGAR_DEV_DEVICE` (+ `_BOOT`, `_HOME`, `_TAP`, `_TEXT`): opens the device panel on the device, waits for a
+/// `HANGAR_DEV_DEVICE` (+ `_BOOT`, `_LOGS`, `_HOME`, `_TAP`, `_TEXT`): opens the device panel on the device, waits for a
 /// painted frame, then sends each input and logs whether a later painted frame differs.
 async fn dev_device(
     this: WeakEntity<HangarApp>,
     id: String,
     boot: bool,
+    logs: bool,
     inputs: Vec<(&'static str, DevAction)>,
     cx: &mut AsyncWindowContext,
 ) {
@@ -1796,6 +1808,9 @@ async fn dev_device(
     }) else {
         return;
     };
+    if logs {
+        panel.update(cx, |panel, cx| panel.set_logs_open(true, cx));
+    }
     let deadline = std::time::Instant::now() + DEV_DEVICE_TIMEOUT;
     let wait = |cx: &AsyncWindowContext| cx.background_executor().timer(DEV_POLL);
     // Wait for a listing that knows the device.

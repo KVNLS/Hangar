@@ -19,7 +19,7 @@ use hangar_devices::{DeviceInfo, Frame, Input};
 
 use geometry::{Gesture, Rect};
 use session::Outcome;
-pub use session::{DeviceSession, InputResult, TextResult};
+pub use session::{DeviceSession, InputResult, LogSource, TextResult};
 
 pub enum DeviceViewEvent {
     /// An input was delivered (or failed). Successful `TouchMove`s are not reported.
@@ -118,6 +118,10 @@ impl DeviceView {
 
     pub fn backend(&self) -> &'static str {
         self.session.backend()
+    }
+
+    pub fn log_source(&self) -> LogSource {
+        self.session.log_source()
     }
 
     /// Queues input for the device (hardware buttons, dev hooks).
