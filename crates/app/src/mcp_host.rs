@@ -620,7 +620,7 @@ impl Drop for McpHandle {
     }
 }
 
-/// Binds `socket` (its directory must already be private, see `paths::socket_path`) and serves
+/// Binds `socket` (its directory must already be private, see `paths::serve_on_socket`) and serves
 /// MCP on a background thread. The caller consumes the requests on the GPUI side.
 pub fn start(socket: &Path) -> anyhow::Result<(McpHandle, mpsc::UnboundedReceiver<McpRequest>)> {
     start_with(socket, Timeouts::default())

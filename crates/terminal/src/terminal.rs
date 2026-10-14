@@ -71,6 +71,11 @@ impl Default for TerminalConfig {
 type ColorFormatter = Arc<dyn Fn(ansi::Rgb) -> String + Sync + Send + 'static>;
 type SizeFormatter = Arc<dyn Fn(WindowSize) -> String + Sync + Send + 'static>;
 
+/// Longest window title a program may set (OSC 0/2), in characters.
+pub const MAX_TITLE_CHARS: usize = 256;
+/// Largest clipboard write a program may ask for (OSC 52), in bytes.
+pub const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
+
 #[derive(Default)]
 struct ListenerState {
     replies: Vec<u8>,
@@ -91,9 +96,19 @@ impl EventListener for Listener {
             Event::PtyWrite(text) => state.replies.extend_from_slice(text.as_bytes()),
             Event::ColorRequest(index, format) => state.color_requests.push((index, format)),
             Event::TextAreaSizeRequest(format) => state.size_requests.push(format),
-            Event::Title(title) => state.title = Some(title),
+            Event::Title(title) => {
+                state.title = Some(title.chars().take(MAX_TITLE_CHARS).collect());
+            }
             Event::ResetTitle => state.title = None,
-            Event::ClipboardStore(_, text) => state.clipboard_store = Some(text),
+            Event::ClipboardStore(_, text) if text.len() <= MAX_CLIPBOARD_BYTES => {
+                state.clipboard_store = Some(text);
+            }
+            Event::ClipboardStore(_, text) => {
+                tracing::warn!(
+                    bytes = text.len(),
+                    "ignored an oversized clipboard write (OSC 52)"
+                );
+            }
             Event::Bell => state.bell = true,
             // ClipboardLoad is never emitted: OSC 52 paste is disabled by the default config.
             // The rest concern renderer state that is recomputed on every snapshot.

@@ -218,8 +218,35 @@ pub fn count_ios_runtimes(json: &str) -> Result<usize> {
 /// How many iOS simulator runtimes are installed.
 #[cfg(target_os = "macos")]
 pub fn ios_runtime_count() -> Result<usize> {
-    let json = run("xcrun", &["simctl", "list", "runtimes", "-j"])?;
+    let mut command = std::process::Command::new("xcrun");
+    command.args(["simctl", "list", "runtimes", "-j"]);
+    let out = crate::process::output_within(command, crate::process::QUERY_TIMEOUT)?;
+    if !out.status.success() {
+        return Err(Error::Command(format!(
+            "xcrun simctl list runtimes: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let json = out.stdout;
     count_ios_runtimes(&String::from_utf8_lossy(&json))
+}
+
+/// UDIDs of the simulators booted right now (a cheap liveness check; no screen geometry).
+#[cfg(target_os = "macos")]
+pub fn booted_udids() -> Result<Vec<String>> {
+    let mut command = std::process::Command::new("xcrun");
+    command.args(["simctl", "list", "devices", "booted", "-j"]);
+    let out = crate::process::output_within(command, crate::process::QUERY_TIMEOUT)?;
+    if !out.status.success() {
+        return Err(Error::Command(format!(
+            "xcrun simctl list devices booted: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(parse_booted(&String::from_utf8_lossy(&out.stdout))?
+        .into_iter()
+        .map(|d| d.udid)
+        .collect())
 }
 
 /// Lists booted simulators with their screen geometry filled in when available.

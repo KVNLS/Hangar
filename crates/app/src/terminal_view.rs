@@ -53,6 +53,8 @@ pub struct TerminalViewOptions {
     pub line_height: f32,
     /// Treat Option as Meta (send ESC-prefixed keys) instead of composing characters.
     pub option_as_meta: bool,
+    /// Let the program write the clipboard (OSC 52); its requests are dropped otherwise.
+    pub clipboard_write: bool,
     /// Log frame/byte/latency statistics to stderr once per second.
     pub stats: bool,
     /// Program shown in the footer (a path or a name); `None` means the login shell.
@@ -76,6 +78,7 @@ impl Default for TerminalViewOptions {
             font_size: px(12.),
             line_height: 1.5,
             option_as_meta: false,
+            clipboard_write: false,
             stats: std::env::var_os("HANGAR_TERM_STATS").is_some_and(|v| v == "1"),
             program: None,
         }
@@ -179,6 +182,12 @@ impl TerminalView {
 
     /// Creates a view for an already running session (e.g. an agent's), whose update callback
     /// is `waker.hook()`. The view does not take focus.
+    /// Applies the Settings › Appearance terminal switches to an open terminal.
+    pub fn set_input_options(&mut self, option_as_meta: bool, clipboard_write: bool) {
+        self.options.option_as_meta = option_as_meta;
+        self.options.clipboard_write = clipboard_write;
+    }
+
     pub fn attach(
         session: Arc<TerminalSession>,
         waker: TerminalWaker,

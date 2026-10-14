@@ -282,6 +282,46 @@ fn reports_precise_validation_errors() {
 }
 
 #[test]
+fn long_texts_are_refused() {
+    let long = |n: usize| "a".repeat(n + 1);
+    assert!(
+        message(parse(
+            "type_text",
+            json!({"text": long(MAX_TYPE_TEXT_CHARS)})
+        ))
+        .contains("at most 10000 characters")
+    );
+    assert!(
+        parse(
+            "type_text",
+            json!({"text": "a".repeat(MAX_TYPE_TEXT_CHARS)})
+        )
+        .is_ok()
+    );
+    assert!(
+        message(parse(
+            "agent_prompt",
+            json!({"workspace": "w", "text": long(MAX_PROMPT_CHARS)})
+        ))
+        .contains("\"text\" must have at most")
+    );
+    assert!(
+        message(parse(
+            "workspace_create",
+            json!({"task": long(MAX_PROMPT_CHARS)})
+        ))
+        .contains("\"task\" must have at most")
+    );
+    assert!(
+        message(parse(
+            "workspace_create",
+            json!({"task": "t", "name": long(MAX_NAME_CHARS)})
+        ))
+        .contains("\"name\" must have at most")
+    );
+}
+
+#[test]
 fn screenshot_caption_maps_pixels_to_points() {
     let shot = Screenshot {
         png: vec![1, 2, 3],

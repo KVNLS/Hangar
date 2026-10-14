@@ -157,6 +157,15 @@ impl From<Error> for ReviewError {
             },
             Error::NoUpstream(branch) => Self::NoUpstream(branch),
             Error::RebaseConflicts { onto, paths } => Self::RebaseConflicts { onto, paths },
+            Error::PulledWithConflicts {
+                onto,
+                pulled,
+                paths,
+            } => Self::PulledWithConflicts {
+                onto,
+                pulled,
+                paths,
+            },
             Error::BaseNotReady { reason } => Self::BaseNotReady { reason },
             Error::MergeConflicts {
                 branch,
@@ -169,6 +178,7 @@ impl From<Error> for ReviewError {
             },
             Error::AlreadyMerged { branch, base } => Self::AlreadyMerged { branch, base },
             Error::GhMissing => Self::GhMissing,
+            Error::GhTimeout { .. } => Self::GhNotAnswering,
             other => Self::Other(PortError::new(other)),
         }
     }

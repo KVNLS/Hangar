@@ -156,6 +156,52 @@ impl DevicePool {
         self.enforce_limit(cx);
     }
 
+    /// UDIDs of the simulators the pool has open, to check they are still booted.
+    pub(super) fn open_simulators(&self) -> Vec<String> {
+        self.devices
+            .values()
+            .filter(|d| d.platform == Platform::Ios)
+            .filter_map(|d| match &d.state {
+                State::Open { session, .. } => Some(session.info().udid.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Closes the open simulators missing from `booted`: something outside Hangar shut them
+    /// down, and their session would keep serving its last frame. The next lease boots them.
+    pub(super) fn close_gone_simulators(&mut self, booted: &[String], cx: &mut Context<Self>) {
+        let mut gone = Vec::new();
+        for (key, device) in &mut self.devices {
+            if device.platform != Platform::Ios {
+                continue;
+            }
+            let State::Open { session, .. } = &device.state else {
+                continue;
+            };
+            if booted.contains(&session.info().udid) {
+                continue;
+            }
+            tracing::warn!(target: "device_pool", ?key, name = %device.name, "simulator shut down outside Hangar");
+            device.state = State::Closed;
+            device.running = false;
+            device.error = Some("shut down outside Hangar".to_owned());
+            gone.push(device.name.clone());
+        }
+        for name in &gone {
+            cx.emit(PoolEvent::Notice(
+                NoticeLevel::Warning,
+                format!(
+                    "{name} was shut down outside Hangar. It boots again the next time a \
+                     workspace needs it."
+                ),
+            ));
+        }
+        if !gone.is_empty() {
+            cx.notify();
+        }
+    }
+
     /// The workspace is archived: its waiters give up and its own device shuts down.
     pub fn archive(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) -> Task<anyhow::Result<()>> {
         for device in self.devices.values_mut() {
@@ -260,7 +306,12 @@ impl DevicePool {
             })?;
             cx.background_executor()
                 .spawn(async move {
+                    let mut assignment = assignment;
                     if let Some(store) = store {
+                        // Archived workspaces are not loaded into the pool: read theirs.
+                        if assignment.is_none() {
+                            assignment = store.get_setting(&setting_keys::device_assignment(ws))?;
+                        }
                         store.delete_setting(&setting_keys::device_assignment(ws))?;
                     }
                     match assignment {

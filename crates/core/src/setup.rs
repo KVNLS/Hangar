@@ -11,6 +11,9 @@ use crate::review::GhStatus;
 pub struct ToolFacts {
     /// Why the login shell's `PATH` could not be read; `None` when it was.
     pub path_error: Option<String>,
+    /// Tools that did not answer before their deadline (`gh`, `xcode-select`...): what they
+    /// would have reported is unknown, so their checks are replaced by one saying so.
+    pub not_answering: Vec<String>,
     pub homebrew: bool,
     pub git: GitFact,
     pub gh: GhStatus,
@@ -314,9 +317,28 @@ fn agents(facts: &ToolFacts, out: &mut Vec<SetupCheck>) {
     }
 }
 
+fn not_answering(facts: &ToolFacts, tool: &str) -> bool {
+    facts.not_answering.iter().any(|t| t == tool)
+}
+
+fn no_answer(id: &str, group: SetupGroup, title: &str, tool: &str) -> SetupCheck {
+    check(
+        id,
+        group,
+        title,
+        CheckState::NeedsAction,
+        format!("`{tool}` did not answer in time; Re-check once it responds."),
+        None,
+    )
+}
+
 fn github(facts: &ToolFacts, out: &mut Vec<SetupCheck>) {
     use CheckState::*;
     use SetupGroup::GitHub as G;
+    if not_answering(facts, "gh") {
+        out.push(no_answer("gh", G, "GitHub CLI", "gh"));
+        return;
+    }
     match &facts.gh {
         GhStatus::Missing => out.push(check(
             "gh",
@@ -357,6 +379,10 @@ fn github(facts: &ToolFacts, out: &mut Vec<SetupCheck>) {
 fn ios(facts: &ToolFacts, out: &mut Vec<SetupCheck>) {
     use CheckState::*;
     use SetupGroup::Ios as G;
+    if not_answering(facts, "xcode-select") {
+        out.push(no_answer("xcode", G, "Xcode", "xcode-select"));
+        return;
+    }
     match &facts.xcode {
         XcodeFact::Missing => out.push(check(
             "xcode",

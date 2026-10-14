@@ -106,6 +106,28 @@ INSERT INTO usage (session_id, at, model, local, cost_amount, cost_currency)
 SELECT id, COALESCE(ended_at, created_at), NULL, 0, cost_amount, cost_currency
 FROM sessions WHERE cost_amount IS NOT NULL AND cost_currency IS NOT NULL;
 "#,
+    // v9: the ledger outlives the sessions it books (deleting a workspace or a project kept
+    // erasing what was spent), so `usage.session_id` loses its cascading foreign key.
+    r#"
+CREATE TABLE usage_v9 (
+    session_id    TEXT NOT NULL,
+    at            INTEGER NOT NULL,
+    model         TEXT,
+    local         INTEGER NOT NULL,
+    cost_amount   REAL,
+    cost_currency TEXT,
+    input         INTEGER,
+    output        INTEGER,
+    cache_read    INTEGER,
+    cache_write   INTEGER
+);
+
+INSERT INTO usage_v9 SELECT session_id, at, model, local, cost_amount, cost_currency, input,
+    output, cache_read, cache_write FROM usage ORDER BY rowid;
+DROP TABLE usage;
+ALTER TABLE usage_v9 RENAME TO usage;
+CREATE INDEX usage_at ON usage(at);
+"#,
 ];
 
 /// Latest schema version this build understands.
@@ -209,7 +231,7 @@ impl Store {
              FROM projects ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([], project_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "project")?)
     }
 
     pub fn get_project(&self, id: ProjectId) -> Result<Project> {
@@ -277,7 +299,7 @@ impl Store {
              FROM workspaces WHERE project_id = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([project_id.0.to_string()], workspace_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "workspace")?)
     }
 
     pub fn get_workspace(&self, id: WorkspaceId) -> Result<Workspace> {
@@ -353,7 +375,7 @@ impl Store {
              ORDER BY created_at, rowid"
         ))?;
         let rows = stmt.query_map([workspace_id.0.to_string()], session_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "session")?)
     }
 
     /// Sessions of every workspace that ended at or after `since`, the latest ended first.
@@ -364,7 +386,7 @@ impl Store {
              ORDER BY ended_at DESC, rowid DESC"
         ))?;
         let rows = stmt.query_map([since.0], session_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "session")?)
     }
 
     pub fn get_session(&self, id: SessionId) -> Result<Session> {
@@ -421,36 +443,30 @@ impl Store {
         ensure_changed(changed, "session", id)
     }
 
-    /// Appends a row to the usage ledger.
+    /// Appends a row to the usage ledger, for a session that exists. The row stays when the
+    /// session, its workspace or its project is deleted later.
     pub fn record_usage(&self, entry: &UsageEntry) -> Result<()> {
         let tokens = entry.tokens;
-        self.conn()
-            .execute(
-                "INSERT INTO usage
-                 (session_id, at, model, local, cost_amount, cost_currency, input, output,
-                  cache_read, cache_write)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    entry.session_id.0.to_string(),
-                    entry.at.0,
-                    entry.model,
-                    entry.local,
-                    entry.cost.as_ref().map(|c| c.amount),
-                    entry.cost.as_ref().map(|c| c.currency.as_str()),
-                    tokens.map(|t| sql_count(t.input)),
-                    tokens.map(|t| sql_count(t.output)),
-                    tokens.map(|t| sql_count(t.cache_read)),
-                    tokens.map(|t| sql_count(t.cache_write)),
-                ],
-            )
-            .map_err(|e| {
-                map_write_error(
-                    e,
-                    || "usage row already exists".to_owned(),
-                    Some(not_found("session", entry.session_id)),
-                )
-            })?;
-        Ok(())
+        let changed = self.conn().execute(
+            "INSERT INTO usage
+             (session_id, at, model, local, cost_amount, cost_currency, input, output,
+              cache_read, cache_write)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+             WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?1)",
+            params![
+                entry.session_id.0.to_string(),
+                entry.at.0,
+                entry.model,
+                entry.local,
+                entry.cost.as_ref().map(|c| c.amount),
+                entry.cost.as_ref().map(|c| c.currency.as_str()),
+                tokens.map(|t| sql_count(t.input)),
+                tokens.map(|t| sql_count(t.output)),
+                tokens.map(|t| sql_count(t.cache_read)),
+                tokens.map(|t| sql_count(t.cache_write)),
+            ],
+        )?;
+        ensure_changed(changed, "session", entry.session_id)
     }
 
     /// Ledger rows at or after `since`, oldest first.
@@ -462,7 +478,7 @@ impl Store {
              FROM usage WHERE at >= ?1 ORDER BY at, rowid",
         )?;
         let rows = stmt.query_map([since.0], usage_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "usage")?)
     }
 
     /// The raw JSON stored under `key`; `None` when it was never set.
@@ -628,6 +644,27 @@ fn json_at<T: serde::de::DeserializeOwned>(row: &Row<'_>, index: usize) -> rusql
 #[derive(Debug, thiserror::Error)]
 #[error("unknown workspace status `{0}`")]
 struct UnknownStatus(String);
+
+/// The rows that decode. A row this build cannot read (a value written by a newer Hangar, or
+/// edited by hand) is logged and skipped so the rest still loads; database errors still fail.
+fn readable<T>(
+    rows: impl Iterator<Item = rusqlite::Result<T>>,
+    what: &str,
+) -> rusqlite::Result<Vec<T>> {
+    let mut out = Vec::new();
+    for row in rows {
+        match row {
+            Ok(row) => out.push(row),
+            Err(
+                err @ (rusqlite::Error::FromSqlConversionFailure(..)
+                | rusqlite::Error::IntegralValueOutOfRange(..)
+                | rusqlite::Error::InvalidColumnType(..)),
+            ) => tracing::warn!("skipping an unreadable {what} row: {err}"),
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(out)
+}
 
 fn project_from_row(row: &Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {

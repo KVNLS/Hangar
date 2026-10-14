@@ -176,6 +176,12 @@ impl<W: Write + Send + 'static> AcpConnection<W> {
         })
     }
 
+    /// Forgets the running prompt turn: the agent never answered its cancel. A late answer is
+    /// then a protocol error and cannot end a later turn.
+    pub fn abandon_prompts(&self) {
+        lock(&self.shared.pending).retain(|_, p| !matches!(p, Pending::Prompt));
+    }
+
     pub fn notify(&self, method: &str, params: Value) -> Result<()> {
         let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
         Ok(self.shared.write(&message)?)
@@ -217,14 +223,21 @@ impl<W: Write + Send + 'static> AcpConnection<W> {
 }
 
 fn read_loop<R: Read, W: Write>(reader: R, shared: &Shared<W>, on_close: OnClose) {
-    for line in BufReader::new(reader).lines() {
-        let line = match line {
-            Ok(line) => line,
+    let mut reader = BufReader::new(reader);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        match reader.read_until(b'\n', &mut bytes) {
+            Ok(0) => break,
+            Ok(_) => {}
             Err(e) => {
                 tracing::debug!("acp: read failed: {e}");
                 break;
             }
-        };
+        }
+        // Bytes that are not UTF-8 make this line unreadable (a protocol error below), not the
+        // stream: only its end or an I/O error closes the connection.
+        let line = String::from_utf8_lossy(&bytes);
         let line = line.trim();
         if line.is_empty() {
             continue;

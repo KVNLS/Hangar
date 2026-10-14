@@ -329,7 +329,92 @@ fn pull_rebase_conflict_is_aborted() {
     assert!(status(&fx.wt).unwrap().is_clean());
 
     git(&fx.wt, &["branch", "--unset-upstream"]);
+    git(&fx.origin, &["branch", "-D", "hangar/task"]);
     assert!(matches!(pull_rebase(&fx.wt), Err(Error::NoUpstream(_))));
+}
+
+/// `other`, a clone of origin on `hangar/task` with one commit of `path` pushed.
+fn push_from_other(fx: &Fixture, from: &str, path: &str, text: &str) {
+    let other = fx.root.join("other");
+    git(
+        &fx.root,
+        &[
+            "clone",
+            "-q",
+            "-b",
+            from,
+            fx.origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    configure(&other, &fx.hooks);
+    git(&other, &["checkout", "-q", "-B", "hangar/task"]);
+    fx.write(&other, path, text);
+    git(&other, &["add", "-A"]);
+    git(&other, &["commit", "-q", "-m", "theirs"]);
+    git(&other, &["push", "-q", "origin", "hangar/task"]);
+}
+
+#[test]
+fn pull_rebase_after_a_rejected_first_push_uses_the_same_named_branch() {
+    let fx = Fixture::new();
+    // The branch already exists on the remote (a deleted and recreated workspace).
+    push_from_other(&fx, "main", "theirs.txt", "t\n");
+    fx.commit_in_wt("a.txt", "a\n", "a");
+    assert!(matches!(
+        push(&fx.wt, None),
+        Err(Error::PushRejected {
+            non_fast_forward: true,
+            ..
+        })
+    ));
+    assert_eq!(upstream(&fx.wt).unwrap(), None);
+
+    let pulled = pull_rebase(&fx.wt).unwrap();
+    assert_eq!(
+        (pulled.upstream.as_str(), pulled.pulled),
+        ("origin/hangar/task", 1)
+    );
+    assert_eq!(
+        upstream(&fx.wt).unwrap().unwrap().name,
+        "origin/hangar/task"
+    );
+    assert!(fx.wt.join("theirs.txt").exists());
+    assert!(!push(&fx.wt, None).unwrap().up_to_date);
+}
+
+#[test]
+fn pull_rebase_reports_conflicts_left_by_uncommitted_changes() {
+    let fx = Fixture::new();
+    fx.commit_in_wt("a.txt", "a\n", "a");
+    push(&fx.wt, None).unwrap();
+    push_from_other(&fx, "hangar/task", "a.txt", "theirs\n");
+    fx.write(&fx.wt, "a.txt", "mine, not committed\n");
+
+    match pull_rebase(&fx.wt) {
+        Err(Error::PulledWithConflicts { pulled, paths, .. }) => {
+            assert_eq!(pulled, 1);
+            assert_eq!(paths, [PathBuf::from("a.txt")]);
+        }
+        other => panic!("expected PulledWithConflicts, got {other:?}"),
+    }
+}
+
+#[test]
+fn pull_rebase_conflict_is_aborted_with_the_apply_backend() {
+    let fx = Fixture::new();
+    git(&fx.wt, &["config", "rebase.backend", "apply"]);
+    fx.commit_in_wt("a.txt", "a\n", "a");
+    push(&fx.wt, None).unwrap();
+    push_from_other(&fx, "hangar/task", "a.txt", "theirs\n");
+    let ours = fx.commit_in_wt("a.txt", "ours\n", "ours");
+
+    assert!(matches!(
+        pull_rebase(&fx.wt),
+        Err(Error::RebaseConflicts { .. })
+    ));
+    assert_eq!(fx.head(&fx.wt), ours);
+    assert!(status(&fx.wt).unwrap().is_clean());
 }
 
 #[test]

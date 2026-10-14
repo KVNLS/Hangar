@@ -189,6 +189,7 @@ impl HangarApp {
                 .ok_or_else(|| anyhow!("this agent's workspace is no longer open"))?;
             let in_flight = self.work.child_creates.get(&ws).copied().unwrap_or(0);
             orchestration::check_create(self.every_workspace(), ws, in_flight)?;
+            let task = orchestration::prompt_text(&task);
             let spec = orchestration::child_workspace(&parent, &task, name.as_deref())?;
             let agent_id = match agent {
                 Some(id) => self.check_agent(&id)?,
@@ -296,8 +297,9 @@ impl HangarApp {
     ) -> anyhow::Result<String> {
         self.ensure_orchestration()?;
         let child = orchestration::find_child(self.every_workspace(), ws, query)?.clone();
+        orchestration::check_prompt(&child.name, self.agent_state(child.id, cx))?;
         let live = self.live_agent(&child)?;
-        live.send_text(text, cx)?;
+        live.send_text(&orchestration::prompt_text(text), cx)?;
         tracing::info!(parent = %ws, child = %child.id, "agent prompted a workspace");
         self.tell_parent(ws, false, format!("Prompted “{}”", child.name), window, cx);
         Ok(child.name)

@@ -12,9 +12,10 @@ use crate::mcp_host::{self, McpHandle, McpRequest, ScreenFrame};
 use super::device_api::DeviceStatusInfo;
 use super::*;
 
-/// Starts the host on the private socket. Agents simply get no device tools if this fails.
+/// Starts the host on the private socket. If no socket works, agents get no device tools,
+/// `ask_user`, orchestration or hook state, and an error that stays on screen says why.
 pub(super) fn start(window: &mut Window, cx: &mut Context<HangarApp>) -> Option<McpHandle> {
-    let started = paths::socket_path().and_then(|socket| mcp_host::start(&socket));
+    let started = paths::serve_on_socket(mcp_host::start);
     match started {
         Ok((handle, mut requests)) => {
             tracing::info!(socket = %handle.socket_path().display(), "mcp host listening");
@@ -35,6 +36,15 @@ pub(super) fn start(window: &mut Window, cx: &mut Context<HangarApp>) -> Option<
         }
         Err(err) => {
             tracing::error!("mcp host not started, agents get no device tools: {err:#}");
+            window.push_notification(
+                Notification::error(format!(
+                    "Agents get no device tools, questions or orchestration this session: \
+                     Hangar could not open its MCP socket ({err:#})."
+                ))
+                .title("Agent tools unavailable")
+                .autohide(false),
+                cx,
+            );
             None
         }
     }

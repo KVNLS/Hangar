@@ -1,6 +1,7 @@
 //! `ask_user`: an agent's question to the user. The workspace reads "Needs input" until it is
 //! answered from the answer sheet (overview card, pane banner, palette or ⌘J); the agent's tool
-//! call waits for it. A question is withdrawn when its agent stops or the workspace closes.
+//! call waits for it. A question is withdrawn when its agent stops, the workspace closes, or
+//! nobody waits for the answer any more (the bridge died or the call timed out).
 
 use anyhow::anyhow;
 use gpui_kit::component::input::{Textarea, TextareaState};
@@ -10,6 +11,9 @@ use super::*;
 use crate::mcp_host::Reply;
 use crate::ui::components::{UiButton, card};
 use crate::ui::{ActiveTokens as _, RADIUS_SHEET, TITLEBAR_HEIGHT, TypeScale as _, overlay_shadow};
+
+/// How often an open question checks that its agent still waits for the answer.
+const QUESTION_POLL: Duration = Duration::from_secs(2);
 
 /// A question an agent waits on.
 pub(super) struct PendingQuestion {
@@ -93,7 +97,35 @@ impl HangarApp {
         }
         self.mark_asking(ws, true, cx);
         self.sync_attention(cx);
+        self.watch_question(ws, window, cx);
         cx.notify();
+    }
+
+    /// Withdraws `ws`'s question once its tool call stopped waiting for the answer.
+    fn watch_question(&self, ws: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(QUESTION_POLL).await;
+                let open = this.update_in(cx, |this, _, cx| {
+                    let Some(question) = this.live.questions.get(&ws) else {
+                        return false;
+                    };
+                    if question.reply.is_closed() {
+                        tracing::info!(workspace = %ws, "agent stopped waiting for its answer");
+                        this.withdraw_question(ws, "the agent stopped waiting");
+                        this.mark_asking(ws, false, cx);
+                        this.sync_attention(cx);
+                        cx.notify();
+                        return false;
+                    }
+                    true
+                });
+                if !matches!(open, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     pub(super) fn question(&self, ws: WorkspaceId) -> Option<&PendingQuestion> {

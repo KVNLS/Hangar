@@ -588,7 +588,7 @@ impl HangarApp {
             return;
         }
         let terminal = Arc::clone(handle.session());
-        let options = TerminalViewOptions::for_program(handle.program());
+        let options = self.terminal_options(handle.program());
         let view = cx.new(|cx| TerminalView::attach(terminal, waker, options, cx));
         let exit = cx.subscribe_in(
             &view,
@@ -966,6 +966,16 @@ impl HangarApp {
                         for ws in removed.iter().flat_map(|e| &e.workspaces) {
                             this.close_session(ws.id);
                             cleared |= this.layout.panes.clear(ws.id);
+                            // Its simulator clone and assignment go with it, as on delete.
+                            let id = ws.id;
+                            let deleted =
+                                this.device_pool.update(cx, |pool, cx| pool.delete(id, cx));
+                            cx.spawn(async move |_, _| {
+                                if let Err(err) = deleted.await {
+                                    tracing::warn!(workspace = %id, "device not deleted: {err:#}");
+                                }
+                            })
+                            .detach();
                         }
                         if cleared {
                             this.save_layout(window, cx);

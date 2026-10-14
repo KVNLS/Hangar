@@ -37,6 +37,16 @@ fn block_selection_takes_a_rectangle() {
 }
 
 #[test]
+fn block_selection_dragged_up_the_last_column_is_empty() {
+    let mut t = term(80, 24);
+    t.advance(b"x");
+    t.start_selection(SelectionKind::Block, p(5, 79), Side::Left);
+    t.update_selection(p(1, 79), Side::Right);
+    assert_eq!(t.selection_text(), None);
+    assert!(!t.has_selection());
+}
+
+#[test]
 fn click_without_drag_selects_nothing() {
     let mut t = term(20, 3);
     t.advance(b"hello");

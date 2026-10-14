@@ -17,7 +17,7 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 |----------|----------------------------------------------------------------------------------|----------------|
 | core     | domain: Project / Workspace / Session, AgentState, device, changes, review; ports | —              |
 | usecases | application services: workspaces, sessions, settings, review; pure policies: agent queue and attention, batch / best-of-N, orchestration guard rails, history | core |
-| store-sqlite | SQLite Store (projects, workspaces, sessions with history and cost, usage ledger, settings; schema v8) | core  |
+| store-sqlite | SQLite Store (projects, workspaces, sessions with history and cost, usage ledger, settings; schema v9) | core  |
 | worktree | git/gh CLI wrapper; `GitCli` and `Gh` implement the git and code-host ports      | core           |
 | agents   | AgentAdapter trait, PtyAdapter (a `Launch`); ACP client (`acp`); Ollama; Claude Code transcripts | — |
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |
@@ -126,6 +126,26 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   Claude Code.
 
 ## Known gaps
+- **QA sweep 2026-10, not fixed yet** (reports in the owner's notes, `qa-2026-10/`):
+  - Workspaces: a clean workspace can't be deleted in a repo with submodules; a detached-HEAD repo stores
+    the base as `HEAD` (empty diff); a linked worktree can be added as its own project; delete stops the
+    agent before checking the worktree can go; an empty repo is accepted, then every create fails; a branch
+    named `hangar` blocks creation; best-of-N has no rollback.
+  - Review: `.gitignore` edits leave ignored files in the live diff until a full refresh; non-GitHub
+    remotes show a permanent PR error; submodule edits, mode-only and CRLF changes are shown poorly.
+  - Run loop and devices: detection misses monorepos and nested projects and silently picks one of several
+    `.xcodeproj`; an Expo run waits for a log line only on the visible screen; Hangar clones orphaned
+    before 2026-10-09 are not swept (`list_clones` unused); Android and the memory-pressure guard unchecked.
+  - Agents: terminal agents without hooks (all but Claude Code) report state by output timing, so a lead's
+    `agent_prompt` can still land on their prompts; an `ask_user` whose bridge died while its agent lives
+    stays open until the 30-minute timeout (no MCP cancellation); a Hangar crash leaves a terminal agent
+    that ignores SIGHUP running (no watchdog for PTY agents); the chat shows only a long message's first
+    64 KB (no "show all"); resumed sessions may book their earlier cost again (unverified).
+  - UI: the title bar overflows at 1280 px on Review and Files; non-ASCII names lose their characters in
+    slugs; duplicate workspace names look alike; queued cards show Resume; dark palette selection contrast;
+    shortcut labels differ between palette, title bar and Keybindings.
+  - Persistence: a read-only database has no read-only mode (move aside, continue without saving or quit);
+    git version/identity probes have no deadline.
 - **Devices:** simctl and Android frames still copied into the atlas (question 3); log lines from several
   processes can arrive a few ms out of order; logs: no multi-line merging, level filter client-side (low lines still fill the ring buffer),
   follow-tail ignores scrollbar drags (no scrollbar); emulators started outside Hangar keep Gboard's stylus
@@ -181,6 +201,10 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - M10 is a hardening pass (2026-10-08).
 - System notifications through `notify-rust`, only while Hangar is in the background, for new waits and
   for any finished turn (Working → Review or Idle) (2026-10-08).
+- QA fix round (2026-10-09): one Hangar per database (`<db>.lock`); `agent_prompt` refused while the
+  child waits for approval or input, prompts stripped of control characters; programs may write the
+  clipboard (OSC 52) only when Settings › Appearance allows it (off by default); size limits on MCP
+  messages and tool texts, chat messages, the Files viewer, terminal titles and clipboard writes.
 
 ## Next
 1. Split the files over 800 lines (docs/ARCHITECTURE.md "Done when").

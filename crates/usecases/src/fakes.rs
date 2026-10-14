@@ -284,6 +284,7 @@ impl Default for FakeToolProbe {
         Self {
             facts: ToolFacts {
                 path_error: None,
+                not_answering: Vec::new(),
                 homebrew: true,
                 git: GitFact::Missing,
                 gh: GhStatus::Missing,

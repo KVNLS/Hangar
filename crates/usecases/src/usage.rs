@@ -75,7 +75,9 @@ pub fn book_turn(
             cost,
             tokens,
         };
-    let weight: u64 = models.iter().map(|(_, t)| t).sum();
+    let weight = models
+        .iter()
+        .fold(0u64, |sum, (_, t)| sum.saturating_add(*t));
     if models.len() < 2 || weight == 0 {
         let model = models
             .into_iter()
@@ -99,7 +101,9 @@ pub fn book_turn(
             let tokens = match (i == last, tokens.as_ref(), left.as_mut()) {
                 (true, _, _) => left,
                 (false, Some(all), Some(left)) => {
-                    let part = scale(all, fraction);
+                    // Rounding each share up can give out more than the turn has; earlier
+                    // rows take what is left, the last one the remainder.
+                    let part = at_most(scale(all, fraction), left);
                     left.input -= part.input;
                     left.output -= part.output;
                     left.cache_read -= part.cache_read;
@@ -111,6 +115,15 @@ pub fn book_turn(
             entry(Some(model), cost, tokens)
         })
         .collect()
+}
+
+fn at_most(tokens: TokenCount, max: &TokenCount) -> TokenCount {
+    TokenCount {
+        input: tokens.input.min(max.input),
+        output: tokens.output.min(max.output),
+        cache_read: tokens.cache_read.min(max.cache_read),
+        cache_write: tokens.cache_write.min(max.cache_write),
+    }
 }
 
 fn scale(tokens: &TokenCount, fraction: f64) -> TokenCount {

@@ -11,6 +11,7 @@ pub mod device_pool;
 pub mod device_view;
 pub mod dock;
 pub mod files_view;
+pub mod instance;
 pub mod login_env;
 pub mod mcp_host;
 pub mod notify;

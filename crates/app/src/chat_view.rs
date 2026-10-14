@@ -1,6 +1,7 @@
 //! The pane of a structured (ACP) agent: messages, tool calls, plan and permission prompts as a
 //! transcript, and a composer.
 
+mod cap;
 mod render;
 mod rows;
 mod subagent;
@@ -37,6 +38,8 @@ use rows::{Rows, touch};
 const CONTEXT: &str = "ChatView";
 /// Events arriving within one frame are applied together.
 const REDRAW_INTERVAL: Duration = Duration::from_millis(8);
+/// How long a stopped turn waits for the agent to confirm before it ends on this side.
+const CANCEL_GRACE: Duration = Duration::from_secs(10);
 /// Transcript rows measured beyond the viewport, so scrolling does not pop items in.
 const OVERDRAW: Pixels = px(800.);
 
@@ -61,6 +64,8 @@ enum Item {
     Agent {
         text: String,
         view: Entity<TextViewState>,
+        /// Trailing bytes of `text` not given to `view` (see [`cap`]).
+        hidden: usize,
         parent: Option<String>,
     },
     Thought {
@@ -129,6 +134,8 @@ pub struct ChatView {
     /// The plan item of the current turn, updated in place.
     plan: Option<usize>,
     running: bool,
+    /// Counts prompts sent, so a stop timer knows whether its turn is still the running one.
+    turn_seq: u64,
     failed: bool,
     exited: bool,
     /// Display name of the session mode (Claude Code: Manual, Accept edits, Plan, …).
@@ -221,6 +228,7 @@ impl ChatView {
             tools: HashMap::new(),
             plan: None,
             running: false,
+            turn_seq: 0,
             failed: false,
             exited: false,
             mode: None,
@@ -499,6 +507,7 @@ impl ChatView {
         self.turn_start = self.items.len();
         self.items.push(Item::User(text.to_owned().into()));
         self.running = true;
+        self.turn_seq += 1;
         self.turn_done = false;
         self.failed = false;
         self.plan = None;
@@ -549,6 +558,21 @@ impl ChatView {
         if let Err(err) = self.session.cancel() {
             self.notice(true, format!("Could not stop the agent: {err}"));
         }
+        // An agent that ignores the cancel would keep the turn running for good.
+        let turn = self.turn_seq;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(CANCEL_GRACE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.running && !this.exited && this.turn_seq == turn {
+                    this.session.abandon_turn();
+                    this.running = false;
+                    this.notice(true, "Stopped: the agent did not answer the cancel");
+                    cx.emit(ChatEvent::StateChanged);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         for (i, item) in self.items.iter_mut().enumerate() {
             if let Item::Permission {
                 outcome: outcome @ None,
@@ -816,15 +840,24 @@ impl ChatView {
                 parent,
             } => match self.open_text(parent.as_deref(), false) {
                 Some(i) => {
-                    if let Some(Item::Agent { text, view, .. }) = self.items.get_mut(i) {
+                    if let Some(Item::Agent {
+                        text, view, hidden, ..
+                    }) = self.items.get_mut(i)
+                    {
+                        let shown = cap::shown_part(text.len() - *hidden, &chunk);
+                        if shown > 0 {
+                            view.update(cx, |state, cx| state.push_str(&chunk[..shown], cx));
+                        }
+                        *hidden += chunk.len() - shown;
                         text.push_str(&chunk);
-                        view.update(cx, |state, cx| state.push_str(&chunk, cx));
                         touch(&mut self.dirty, i);
                     }
                 }
                 None => {
-                    let view = cx.new(|cx| TextViewState::markdown(&chunk, cx));
+                    let shown = cap::shown_part(0, &chunk);
+                    let view = cx.new(|cx| TextViewState::markdown(&chunk[..shown], cx));
                     self.items.push(Item::Agent {
+                        hidden: chunk.len() - shown,
                         text: chunk,
                         view,
                         parent,

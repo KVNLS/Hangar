@@ -483,3 +483,41 @@ fn merge_conflict_is_reported() {
             .any(|(kind, text)| *kind == LineKind::Added && text.starts_with("<<<<<<<"))
     );
 }
+
+/// git compares stat times to the second here, so a same-size rewrite in the second its index
+/// entry was recorded looks unchanged; git then relies on the index file's own mtime (an entry
+/// as new as the index is checked by content). The scratch index used when there are untracked
+/// files must keep that mtime, or such an edit is missed once the diff runs a second later.
+#[test]
+fn same_second_same_size_edit_is_seen_with_untracked_files() {
+    use std::os::unix::fs::MetadataExt as _;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let next_second = || {
+        let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        std::thread::sleep(
+            Duration::from_millis(1_020) - Duration::from_nanos(since.subsec_nanos().into()),
+        );
+    };
+    // Everything up to the rewrite must fit in one second; a slow machine retries.
+    for _ in 0..5 {
+        let repo = Repo::new();
+        let file = repo.path.join("same.txt");
+        next_second();
+        repo.write("same.txt", "aaaa\n");
+        commit_all(&repo.path, "same");
+        git(&repo.path, &["branch", "-f", "main"]);
+        let written = fs::metadata(&file).unwrap().ctime();
+        repo.write("same.txt", "bbbb\n");
+        repo.write("untracked.txt", "new\n");
+        if fs::metadata(&file).unwrap().ctime() != written {
+            continue;
+        }
+        next_second();
+        let files = repo.diff();
+        assert!(
+            files.iter().any(|f| f.path == Path::new("same.txt")),
+            "same.txt missing: {files:#?}"
+        );
+        return;
+    }
+}

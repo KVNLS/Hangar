@@ -487,3 +487,39 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - Seen on screen: Settings › Setup on a set-up Mac (`HANGAR_DEV_SHOW=settings-setup`, probe ~0.7 s), and the
   welcome screen with `env -i … SHELL=/bin/false PATH=/usr/bin:/bin` (login PATH, Homebrew, agent and gh rows).
   The copy button, re-check on activation and the review/notification actions are not yet clicked through.
+
+## QA sweep and fix round (2026-10-09, branch `qa-fixes`)
+- Eight QA agents tested one area each (workspaces, review, terminal, ACP/chat, MCP, devices,
+  persistence, UI) with probe tests and the dev hooks on sandboxed databases; findings: 2 P0, 14 P1,
+  ~35 P2, ~45 P3. This round fixed every P0 and P1 and the P2s sharing their causes, each with a
+  regression test or a dev-hook run:
+  - Crashes and memory: block selection past the last column (alacritty panic); Files viewer on
+    `/dev/zero`, FIFOs and minified files; `book_turn` underflow; a 30 MB agent message (the chat lays out
+    the first 64 KB).
+  - MCP: messages capped at 8 MB, calls in flight capped (16 per connection, 64 overall), a write
+    timeout, `maxLength` on texts; socket candidates tried in turn and a persistent error when none works;
+    a timed-out `ask_user` is withdrawn; `agent_prompt` refused while the child waits for the user,
+    control characters dropped, bracketed paste.
+  - Agents: PTY kill signals the process groups and escalates to SIGKILL (and before quit); an invalid
+    UTF-8 byte no longer drops an ACP connection; exit 0 mid-turn reads Failed; a stopped turn the agent
+    never confirms ends after 10 s.
+  - Persistence: one Hangar per database (`flock`); unreadable rows skipped; unreadable database:
+    move aside / continue / quit; bad `usage` setting falls back; setup probes in parallel with 10 s
+    deadlines and their process groups killed ("did not answer in time" rows); custom prices typed one
+    field at a time and matched by prefix; the usage ledger survives deleting workspaces (schema v9).
+  - Run loop and devices: ports reserved on ⌘R and checked on every address; a simulator shut down
+    outside Hangar is closed within 10 s (seen live: 6 s); removing a project deletes its clones; simctl
+    input says view only without Simulator.app.
+  - Review: Pull and rebase after a rejected first push, conflicts left by the autostash reported,
+    merge backend forced.
+  - Terminal: bracketed-paste injection, Shift+Enter (ESC CR), Option as Meta and OSC 52 switches in
+    Settings › Appearance, title and clipboard caps.
+- Flaky `binary_crlf_mode_and_no_newline` was a live-diff bug: with untracked files the diff runs on a
+  scratch copy of the index, and the copy's new mtime turned off git's racy-entry check, so a
+  same-size edit in the same second as its index entry was missed once the diff ran a second later.
+  The copy now keeps the index's mtime (`same_second_same_size_edit_is_seen_with_untracked_files`).
+- Seen live with the dev hooks: second instance refused, corrupted database moved aside, 30 MB chat
+  message, hung `gh` in setup, archive of a SIGHUP-ignoring agent, external simulator shutdown, exit 0
+  mid-turn, the Terminal settings. Not driven live: the chat's stop timer (no dev hook presses Stop),
+  removing a project with a real clone.
+

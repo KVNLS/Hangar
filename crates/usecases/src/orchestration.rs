@@ -3,7 +3,7 @@
 //! nest at most [`MAX_DEPTH`] levels, and a workspace has at most [`MAX_LIVE_CHILDREN`] active
 //! children. Pure: the caller passes every workspace it knows.
 
-use hangar_core::{Workspace, WorkspaceId, WorkspaceStatus};
+use hangar_core::{AgentState, Workspace, WorkspaceId, WorkspaceStatus};
 
 use crate::batch::name_from_line;
 use crate::workspaces::NewWorkspace;
@@ -36,6 +36,8 @@ pub enum Refusal {
     Archived(String),
     #[error("several child workspaces are named {0:?}; pass the id instead")]
     Ambiguous(String),
+    #[error("“{name}” is waiting for the user to answer {what}; prompt it once they have")]
+    WaitingForUser { name: String, what: &'static str },
 }
 
 /// How many workspaces created `id`, walking up the parent links. A link to a deleted parent
@@ -130,6 +132,28 @@ pub fn find_child<'a>(
         return Err(Refusal::Archived(found.name.clone()));
     }
     Ok(found)
+}
+
+/// Refuses to prompt a child that waits for the user: text typed into it could answer its
+/// permission prompt or question in the user's place.
+pub fn check_prompt(name: &str, state: AgentState) -> Result<(), Refusal> {
+    let what = match state {
+        AgentState::Approval => "a permission request",
+        AgentState::Input => "a question",
+        _ => return Ok(()),
+    };
+    Err(Refusal::WaitingForUser {
+        name: name.to_owned(),
+        what,
+    })
+}
+
+/// `text` as one agent may send it to another: control characters other than tabs and line
+/// feeds are dropped, so it reaches the child as text and never as keystrokes.
+pub fn prompt_text(text: &str) -> String {
+    text.chars()
+        .filter(|&c| !c.is_control() || matches!(c, '\t' | '\n'))
+        .collect()
 }
 
 /// The workspace to create for `task` under `parent`. It starts from the parent's own base

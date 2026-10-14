@@ -206,6 +206,7 @@ impl Tool {
                 if text.is_empty() {
                     return Err(invalid("\"text\" must not be empty".into()));
                 }
+                at_most("text", &text, MAX_TYPE_TEXT_CHARS).map_err(invalid)?;
                 Self::TypeText { text }
             }
             "press" => {
@@ -253,7 +254,11 @@ impl Tool {
                 if task.trim().is_empty() {
                     return Err(invalid("\"task\" must not be empty".into()));
                 }
+                at_most("task", &task, MAX_PROMPT_CHARS).map_err(invalid)?;
                 let name = a.optional_string("name").map_err(invalid)?;
+                if let Some(name) = &name {
+                    at_most("name", name, MAX_NAME_CHARS).map_err(invalid)?;
+                }
                 let agent = a.optional_string("agent").map_err(invalid)?;
                 if agent.as_deref().is_some_and(|a| a.trim().is_empty()) {
                     return Err(invalid("\"agent\" must not be empty".into()));
@@ -303,6 +308,7 @@ impl Tool {
                 if text.trim().is_empty() {
                     return Err(invalid("\"text\" must not be empty".into()));
                 }
+                at_most("text", &text, MAX_PROMPT_CHARS).map_err(invalid)?;
                 Self::AgentPrompt { workspace, text }
             }
             "agent_transcript" => Self::AgentTranscript {
@@ -356,6 +362,13 @@ fn allowed_args(tool: &str) -> &'static [&'static str] {
         "agent_transcript" => &["workspace", "last"],
         _ => &[],
     }
+}
+
+fn at_most(name: &str, value: &str, max: usize) -> Result<(), String> {
+    if value.chars().count() > max {
+        return Err(format!("{name:?} must have at most {max} characters"));
+    }
+    Ok(())
 }
 
 fn kind(v: &Value) -> &'static str {
@@ -483,6 +496,12 @@ fn point_schema(description: &str) -> Value {
     json!({ "type": "number", "minimum": 0, "description": description })
 }
 
+/// Longest `type_text` text, in characters.
+pub const MAX_TYPE_TEXT_CHARS: usize = 10_000;
+/// Longest `agent_prompt` text or `workspace_create` task, in characters.
+pub const MAX_PROMPT_CHARS: usize = 100_000;
+/// Longest `workspace_create` name, in characters.
+pub const MAX_NAME_CHARS: usize = 100;
 /// Longest `ask_user` question, in characters.
 pub const MAX_QUESTION_CHARS: usize = 2000;
 /// Most `ask_user` choices, and the longest one.
@@ -586,7 +605,12 @@ fn device_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "text": { "type": "string", "minLength": 1, "description": "The text to type." },
+                    "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_TYPE_TEXT_CHARS,
+                        "description": "The text to type.",
+                    },
                 },
                 "required": ["text"],
                 "additionalProperties": false,
@@ -692,11 +716,13 @@ fn orchestration_definitions() -> Vec<Value> {
                     "task": {
                         "type": "string",
                         "minLength": 1,
+                        "maxLength": MAX_PROMPT_CHARS,
                         "description": "What the new agent should do; self-contained, it does not \
                             see this conversation.",
                     },
                     "name": {
                         "type": "string",
+                        "maxLength": MAX_NAME_CHARS,
                         "description": "Workspace name (default: the task's first line).",
                     },
                     "agent": {
@@ -718,7 +744,12 @@ fn orchestration_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": workspace_schema(),
-                    "text": { "type": "string", "minLength": 1, "description": "The message." },
+                    "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_PROMPT_CHARS,
+                        "description": "The message.",
+                    },
                 },
                 "required": ["workspace", "text"],
                 "additionalProperties": false,

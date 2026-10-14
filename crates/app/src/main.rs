@@ -147,6 +147,20 @@ fn run_app() {
         .with_writer(std::io::stderr)
         .init();
     let dev = DevOptions::from_env();
+    // Held until the process exits.
+    let (_instance, already_running) =
+        match hangar_app::paths::db_path().map(|db| hangar_app::instance::lock(&db)) {
+            Some(Ok(lock)) => (Some(lock), None),
+            Some(Err(err)) => match err.downcast::<hangar_app::instance::AlreadyRunning>() {
+                Ok(running) => (None, Some(running)),
+                Err(err) => {
+                    // The database next to it will fail to open the same way and say so.
+                    tracing::warn!("cannot take the instance lock: {err:#}");
+                    (None, None)
+                }
+            },
+            None => (None, None),
+        };
 
     gpui_kit::application()
         .with_assets(hangar_app::assets::Assets)
@@ -165,6 +179,10 @@ fn run_app() {
             hangar_app::device_view::init(cx);
             hangar_app::shell::init(cx);
             cx.on_window_closed(|cx, _| cx.quit()).detach();
+            if let Some(running) = already_running {
+                refuse_second_instance(&running, cx);
+                return;
+            }
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
@@ -186,4 +204,41 @@ fn run_app() {
                 }
             }
         });
+}
+
+/// Says another Hangar uses this database, then quits.
+fn refuse_second_instance(running: &hangar_app::instance::AlreadyRunning, cx: &mut App) {
+    tracing::error!("{running}");
+    let message = running.to_string();
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::centered(size(px(480.), px(200.)), cx)),
+        ..Default::default()
+    };
+    let opened = gpui_kit::open_window(options, cx, |window, cx| {
+        let answer = window.prompt(
+            PromptLevel::Critical,
+            &message,
+            Some("Switch to the Hangar that is already open. To run a second one, give it its own HANGAR_DB."),
+            &["Quit"],
+            cx,
+        );
+        cx.spawn(async move |cx| {
+            let _ = answer.await;
+            cx.update(|cx| cx.quit());
+        })
+        .detach();
+        cx.new(|_| Blank)
+    });
+    match opened {
+        Ok(_) => cx.activate(true),
+        Err(_) => cx.quit(),
+    }
+}
+
+struct Blank;
+
+impl Render for Blank {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
 }

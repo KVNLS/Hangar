@@ -13,4 +13,4 @@ pub use artifact::{Built, pick_scheme, resolve_artifact, xcode_schemes};
 pub use detect::{Stack, detect, pick_stack};
 pub use error::{Error, Result};
 pub use plan::{Artifact, Command, PlanInput, RunPlan, Step, Target, plan, setup, shell_quote};
-pub use port::{PORT_RANGE, allocate_port, allocate_port_with};
+pub use port::{PORT_RANGE, allocate_port, allocate_port_with, is_free, pick_port};

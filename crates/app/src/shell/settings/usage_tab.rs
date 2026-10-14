@@ -106,9 +106,15 @@ impl HangarApp {
                 .background_executor()
                 .spawn(async move {
                     let settings = if read_settings {
+                        // Unreadable settings fall back to the defaults; the history still shows.
                         store
                             .get_setting(&setting_keys::USAGE)
-                            .context("failed to read the usage settings")?
+                            .unwrap_or_else(|err| {
+                                tracing::warn!(
+                                    "usage settings unreadable, using defaults: {err:#}"
+                                );
+                                None
+                            })
                     } else {
                         None
                     };
@@ -232,19 +238,17 @@ impl HangarApp {
         let Some(model) = ui.summary().and_then(|s| s.reference) else {
             return;
         };
-        let parse = |input: &Entity<InputState>| {
-            input
-                .read(cx)
-                .value()
-                .trim()
-                .trim_start_matches('$')
-                .parse::<f64>()
-                .ok()
-                .filter(|v| v.is_finite() && *v >= 0.0)
-        };
-        let (Some(input), Some(output)) = (parse(&ui.input_price), parse(&ui.output_price)) else {
-            self.sync_usage_controls(window, cx);
-            return;
+        let (input, output) = match typed_price(
+            &ui.input_price.read(cx).value(),
+            &ui.output_price.read(cx).value(),
+        ) {
+            TypedPrice::Price(input, output) => (input, output),
+            TypedPrice::Empty => {
+                self.sync_usage_controls(window, cx);
+                return;
+            }
+            // Left as typed, so the user can correct it.
+            TypedPrice::Invalid => return,
         };
         let current = price_of(&model, &ui.settings.prices);
         if current.is_some_and(|p| p.input == input && p.output == output) {
@@ -741,9 +745,53 @@ fn money(amount: f64, currency: &str) -> String {
     })
 }
 
+/// What the two $/Mtok fields hold.
+#[derive(Debug, PartialEq)]
+enum TypedPrice {
+    /// Both blank.
+    Empty,
+    /// Something that is not a price.
+    Invalid,
+    /// Input and output $/Mtok; a blank field counts as 0, so an unpriced model can be priced
+    /// one field at a time.
+    Price(f64, f64),
+}
+
+fn typed_price(input: &str, output: &str) -> TypedPrice {
+    let parse = |text: &str| -> Result<Option<f64>, ()> {
+        let text = text.trim().trim_start_matches('$').trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        text.replace(',', ".")
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .map(Some)
+            .ok_or(())
+    };
+    match (parse(input), parse(output)) {
+        (Ok(None), Ok(None)) => TypedPrice::Empty,
+        (Ok(input), Ok(output)) => {
+            TypedPrice::Price(input.unwrap_or_default(), output.unwrap_or_default())
+        }
+        _ => TypedPrice::Invalid,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{percent, tokens_label};
+    use super::{TypedPrice, percent, tokens_label, typed_price};
+
+    #[test]
+    fn a_price_can_be_typed_one_field_at_a_time() {
+        assert_eq!(typed_price("1.25", ""), TypedPrice::Price(1.25, 0.0));
+        assert_eq!(typed_price("", "$10"), TypedPrice::Price(0.0, 10.0));
+        assert_eq!(typed_price("1,50", "3"), TypedPrice::Price(1.5, 3.0));
+        assert_eq!(typed_price(" ", ""), TypedPrice::Empty);
+        assert_eq!(typed_price("abc", "3"), TypedPrice::Invalid);
+        assert_eq!(typed_price("-1", "3"), TypedPrice::Invalid);
+    }
 
     #[test]
     fn labels() {
