@@ -497,7 +497,43 @@ pub struct AvailableCommand {
     pub description: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Cost as an agent reports it. Every agent seen so far sends the session's running total.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cost {
+    pub amount: f64,
+    /// ISO 4217 code (`USD`).
+    pub currency: String,
+}
+
+/// A `usage_update`: context window use and, from some agents, the session's cost so far.
+/// The protocol requires `used` and `size`; anything missing or malformed is `None`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Usage {
+    /// Tokens currently in the context window (`used`).
+    pub used_tokens: Option<u64>,
+    /// The context window's size in tokens (`size`).
+    pub context_size: Option<u64>,
+    /// Cumulative session cost (`cost`).
+    pub cost: Option<Cost>,
+}
+
+fn parse_usage(update: &Value) -> Usage {
+    let cost = &update["cost"];
+    Usage {
+        used_tokens: update["used"].as_u64(),
+        context_size: update["size"].as_u64(),
+        cost: cost["amount"]
+            .as_f64()
+            .filter(|a| a.is_finite() && *a >= 0.0)
+            .zip(cost["currency"].as_str().filter(|c| !c.is_empty()))
+            .map(|(amount, currency)| Cost {
+                amount,
+                currency: currency.to_owned(),
+            }),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum SessionUpdate {
     /// `parent`: the subagent launch it came from; `None` for the agent itself.
     AgentMessage {
@@ -517,6 +553,7 @@ pub enum SessionUpdate {
     CurrentMode(String),
     /// The complete list of config options; replaces the previous one.
     ConfigOptions(Vec<ConfigOption>),
+    Usage(Usage),
     /// An update kind this client does not know.
     Other {
         kind: String,
@@ -570,6 +607,7 @@ pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
         "config_option_update" => {
             SessionUpdate::ConfigOptions(parse_config_options(&update["configOptions"]))
         }
+        "usage_update" => SessionUpdate::Usage(parse_usage(update)),
         other => SessionUpdate::Other {
             kind: other.to_owned(),
         },
@@ -750,12 +788,55 @@ mod tests {
         };
         assert_eq!(plan[0].status, PlanStatus::Completed);
         assert_eq!(plan[1].priority, "low");
-        let u = json!({"sessionUpdate": "usage_update", "used": 3});
+        let u = json!({"sessionUpdate": "session_info_update", "title": "t"});
         assert_eq!(
             parse_update(&u),
             Some(SessionUpdate::Other {
-                kind: "usage_update".into()
+                kind: "session_info_update".into()
             })
+        );
+    }
+
+    #[test]
+    fn usage_updates_from_each_agent() {
+        // claude-agent-acp 0.85 at the end of a turn: running SDK cost, model in `_meta`.
+        let u = json!({"sessionUpdate": "usage_update", "used": 84000, "size": 200000,
+            "cost": {"amount": 0.3114, "currency": "USD"},
+            "_meta": {"_claude/model": "claude-opus-5-5"}});
+        assert_eq!(
+            parse_update(&u),
+            Some(SessionUpdate::Usage(Usage {
+                used_tokens: Some(84_000),
+                context_size: Some(200_000),
+                cost: Some(Cost {
+                    amount: 0.3114,
+                    currency: "USD".into()
+                }),
+            }))
+        );
+        // claude-agent-acp mid-stream and codex-acp 0.16: no cost.
+        let u = json!({"sessionUpdate": "usage_update", "used": 12, "size": 258400});
+        let Some(SessionUpdate::Usage(usage)) = parse_update(&u) else {
+            panic!("usage expected");
+        };
+        assert_eq!(usage.cost, None);
+        assert_eq!(usage.context_size, Some(258_400));
+        // OpenCode 1.18: the sum of its messages' costs, here an integer.
+        let u = json!({"sessionUpdate": "usage_update", "used": 9000, "size": 128000,
+            "cost": {"amount": 0, "currency": "USD"}});
+        let Some(SessionUpdate::Usage(usage)) = parse_update(&u) else {
+            panic!("usage expected");
+        };
+        assert_eq!(usage.cost.map(|c| c.amount), Some(0.0));
+        // Missing or malformed fields are dropped, not guessed.
+        let u = json!({"sessionUpdate": "usage_update", "used": 3, "size": -1,
+            "cost": {"amount": 1.5}});
+        assert_eq!(
+            parse_update(&u),
+            Some(SessionUpdate::Usage(Usage {
+                used_tokens: Some(3),
+                ..Usage::default()
+            }))
         );
     }
 

@@ -5,7 +5,7 @@ use hangar_core::Timestamp;
 
 use super::status::age_label;
 use super::*;
-use crate::chat_view::{ChatView, subagent_state};
+use crate::chat_view::{ChatView, subagent_state, usage_label};
 use crate::ui::components::{
     AgentMark, Delta, Segmented, StateGlyph, UiButton, card, state_colors,
 };
@@ -234,9 +234,12 @@ impl HangarApp {
                 }
             });
         let counts = self.diff_counts(id, cx);
-        let subagents = self
+        let (subagents, usage) = self
             .chat_view(id)
-            .map(|v| v.read(cx).subagents())
+            .map(|v| {
+                let chat = v.read(cx);
+                (chat.subagents(), usage_label(chat.usage()))
+            })
             .unwrap_or_default();
         let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
         let attempts = self.attempts_of(id);
@@ -333,6 +336,15 @@ impl HangarApp {
                         )
                     })
                     .child(div().flex_1())
+                    .when_some(usage, |this, usage| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .type_mono_small()
+                                .text_color(t.tx3)
+                                .child(usage),
+                        )
+                    })
                     .when_some(attempts, |this, (group, count)| {
                         this.child(
                             UiButton::new(SharedString::from(format!("overview-compare-{id}")))

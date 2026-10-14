@@ -13,7 +13,7 @@ use hangar_agents::acp::protocol::{ConfigOption, PlanStatus, ToolContent, ToolSt
 use hangar_agents::acp::subagents::SubagentStatus;
 use hangar_core::AgentState;
 
-use super::{ChatView, Item, Outcome};
+use super::{ChatView, Item, Outcome, usage_label};
 use crate::ui::components::{StateGlyph, UiButton};
 use crate::ui::{ActiveTokens as _, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TypeScale as _};
 
@@ -682,6 +682,9 @@ impl ChatView {
                         .text_color(t.tx2)
                         .when_some(self.render_mode_chip(cx), |d, chip| d.child(chip))
                         .children(self.render_config_chips(cx))
+                        .when_some(usage_label(&self.usage), |d, label| {
+                            d.child(div().px(px(6.)).text_color(t.tx3).child(label))
+                        })
                         .child(div().flex_1())
                         .child(div().text_color(t.tx3).child("⏎ send · ⇧⏎ newline"))
                         .child(action),

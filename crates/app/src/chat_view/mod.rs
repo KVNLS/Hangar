@@ -3,8 +3,10 @@
 
 mod render;
 mod subagent;
+mod usage;
 
 pub use subagent::subagent_state;
+pub use usage::{costs_label, usage_label};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ use hangar_agents::acp::protocol::{
     AvailableCommand, ConfigOption, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
 };
 use hangar_agents::acp::subagents::{PendingPermission, Subagent, owner, subagents};
+use hangar_agents::acp::usage::SessionUsage;
 use hangar_agents::acp::{AcpEvent, AcpSession, PermissionRequest};
 use hangar_core::AcpTurn;
 
@@ -81,7 +84,8 @@ struct Outcome {
 /// Emitted by [`ChatView`].
 #[derive(Clone, Debug)]
 pub enum ChatEvent {
-    /// The turn started or ended, or a permission request arrived or was answered.
+    /// The turn started or ended, a permission request arrived or was answered, or the usage
+    /// changed.
     StateChanged,
     /// The agent process ended. Always the last event.
     Exited {
@@ -119,6 +123,7 @@ pub struct ChatView {
     config: Vec<ConfigOption>,
     /// Slash commands the agent offers (`/name` at the start of a prompt).
     commands: Vec<AvailableCommand>,
+    usage: SessionUsage,
     composer: Entity<TextareaState>,
     /// The last turn ended normally: a "Ready for review" card follows it while the workspace
     /// has changes.
@@ -192,6 +197,7 @@ impl ChatView {
             mode_id: None,
             config: Vec::new(),
             commands: Vec::new(),
+            usage: SessionUsage::default(),
             composer,
             turn_done: false,
             diff: None,
@@ -219,6 +225,11 @@ impl ChatView {
 
     pub fn set_approval(&mut self, level: ApprovalLevel) {
         self.approval = level;
+    }
+
+    /// Context use and cost as the agent last reported them.
+    pub fn usage(&self) -> &SessionUsage {
+        &self.usage
     }
 
     /// The latest thing worth showing in a one-line summary (overview cards).
@@ -550,14 +561,14 @@ impl ChatView {
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
-        let before = self.turn();
+        let before = (self.turn(), self.usage.clone());
         let mut changed = false;
         while let Ok(event) = self.events.try_recv() {
             changed = true;
             self.apply(event, cx);
         }
         if changed {
-            if self.turn() != before {
+            if before.0 != self.turn() || before.1 != self.usage {
                 cx.emit(ChatEvent::StateChanged);
             }
             cx.notify();
@@ -724,6 +735,7 @@ impl ChatView {
             SessionUpdate::CurrentMode(mode) => self.set_mode(Some(mode)),
             SessionUpdate::ConfigOptions(list) => self.set_config(list),
             SessionUpdate::AvailableCommands(commands) => self.commands = commands,
+            SessionUpdate::Usage(usage) => self.usage.apply(&usage),
             SessionUpdate::Other { .. } => {}
         }
     }
