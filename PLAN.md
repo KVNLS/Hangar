@@ -127,10 +127,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 
 ## Known gaps
 - **QA sweep 2026-10, not fixed yet** (reports in the owner's notes, `qa-2026-10/`):
-  - Workspaces: a clean workspace can't be deleted in a repo with submodules; a detached-HEAD repo stores
-    the base as `HEAD` (empty diff); a linked worktree can be added as its own project; delete stops the
-    agent before checking the worktree can go; an empty repo is accepted, then every create fails; a branch
-    named `hangar` blocks creation; best-of-N has no rollback.
+  - Workspaces: a linked worktree can be added as its own project; delete stops the agent before
+    checking the worktree can go; best-of-N has no rollback.
   - Review: `.gitignore` edits leave ignored files in the live diff until a full refresh; non-GitHub
     remotes show a permanent PR error; submodule edits, mode-only and CRLF changes are shown poorly.
   - Run loop and devices: detection misses monorepos and nested projects and silently picks one of several
