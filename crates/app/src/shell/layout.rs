@@ -3,9 +3,31 @@
 use super::*;
 
 impl HangarApp {
+    /// Saves the pane layout once it has been quiet for [`SAVE_DEBOUNCE`] (pane drags and splits
+    /// come in bursts).
     pub(super) fn save_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let layout = self.panes.layout(&self.pane_shares);
-        self.persist(window, cx, move |store| ops::save_layout(store, &layout));
+        // Dropping the previous task cancels it: only the last layout is written.
+        self.save_panes = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(SAVE_DEBOUNCE).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.save_panes = None;
+                let layout = this.panes.layout(&this.pane_shares);
+                this.persist(window, cx, move |store| ops::save_layout(store, &layout));
+            });
+        }));
+    }
+
+    /// Writes a pending layout save now (the app is quitting).
+    pub(super) fn flush_layout(&mut self) {
+        if self.save_panes.take().is_none() {
+            return;
+        }
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        if let Err(err) = ops::save_layout(&store, &self.panes.layout(&self.pane_shares)) {
+            tracing::warn!("pane layout not saved on quit: {err:#}");
+        }
     }
 
     /// Saves the pane layout and starts/stops live diffs to match what the panes show.

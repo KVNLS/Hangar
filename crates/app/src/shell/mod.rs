@@ -330,6 +330,8 @@ pub struct HangarApp {
     device_limit_override: Option<crate::device_pool::policy::Limit>,
     device_panel: Entity<DevicePanel>,
     save_device: Option<Task<()>>,
+    /// The pending (debounced) pane layout save.
+    save_panes: Option<Task<()>>,
     focus: FocusHandle,
     sidebar_open: bool,
     screen: Screen,
@@ -502,6 +504,7 @@ impl HangarApp {
             device_limit_override,
             device_panel,
             save_device: None,
+            save_panes: None,
             focus,
             sidebar_open: true,
             screen: Screen::Workspace,
@@ -516,6 +519,7 @@ impl HangarApp {
                     for live in this.sessions.values() {
                         live.stop();
                     }
+                    this.flush_layout();
                     async {}
                 }),
                 select_sub,
