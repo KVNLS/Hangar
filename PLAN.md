@@ -37,7 +37,8 @@ Git access is the `git` CLI with porcelain output, not a library.
 - **M8 MCP device tools**: screenshot, tap, type, logs so agents verify their own UI work.
 
 ## Open questions
-1. Where do worktrees live? `<repo>/../.hangar-worktrees/<slug>` vs `~/Library/Application Support/Hangar/worktrees`.
+1. Where do worktrees live? Current default `~/Library/Application Support/Hangar/worktrees/<project>/<slug>`
+   (only in `hangar-app::paths::worktrees_root`) vs `<repo>/../.hangar-worktrees/<slug>`.
 2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (SPIKES.md).
    Keep `sim_probe` to re-check each Xcode release.
 3. Frame transport into GPUI: today BGRA copied twice (~12.6 MB/frame). Zero-copy via GPUI `paint_surface`
@@ -48,6 +49,9 @@ Git access is the `git` CLI with porcelain output, not a library.
 7. Terminal keys: what Shift-Enter sends (`\r`, `ESC \r`, kitty protocol); Option-as-Meta default.
 8. simctl fallback has no tap on Xcode 27 (no Simulator.app, needs Accessibility, moves the real pointer):
    ship it as view-only?
+9. Login PATH: `$SHELL -l -c` misses PATH set only in `.zshrc` (nvm, etc.); `-i -l` catches it but runs
+   interactive startup scripts.
+10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
 
 ## Explicitly unimplemented (return `Unsupported`)
 - `devices`: `boot`, `install`, `launch`, `logs`; simctl backend input on Xcode 27.
@@ -62,8 +66,15 @@ Git access is the `git` CLI with porcelain output, not a library.
 ## Status
 - [x] M1 Spike A — PTY terminal (SPIKES.md)
 - [x] M1 Spike B — iOS simulator, private backend; simctl view-only
-- [ ] M2 — core models + Store + EventBus, worktree CLI wrapper, agents PtyAdapter, sidebar + two tiled panes
+- [x] M2 (first cut) — core models + Store + EventBus, worktree CLI wrapper, agents PtyAdapter + presets,
+      sidebar (projects → workspaces, add project, new workspace) + two resizable terminal panes.
+      End-to-end flow verified headlessly; UI look and click paths still need a manual pass.
+
+## M2 gaps (next)
+- Delete/archive workspaces and projects, worktree removal from the UI.
+- More than one session per workspace; pane layout persisted across restarts; Escape to cancel inputs.
+- Store errors during session bookkeeping are only logged.
+- Terminal selection/copy and mouse reporting (from Spike A).
 
 ## Next
-- Finish M2 (above), then terminal selection/copy and mouse reporting.
-- M3 live changes and review.
+- Close the M2 gaps above, then M3 live changes and review (`files` crate: notify + diff view).

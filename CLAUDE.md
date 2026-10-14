@@ -9,7 +9,9 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 - Test: `cargo test --workspace`
 - Spike A: `cargo run -p hangar-examples --example spike_terminal -- [command]` (examples live in `examples/examples/`) (default `$SHELL`, try `claude`)
 - Spike B: `cargo run -p hangar-examples --example spike_sim -- [--backend private|simctl] [--udid <UDID>]`
-- App: `cargo run -p hangar-app`
+- App: `cargo run -p hangar-app`. Dev env: `HANGAR_DB`, `HANGAR_WORKTREES` override storage paths;
+  `HANGAR_DEV_OPEN=<repo>` (+ `HANGAR_DEV_AGENT`, `HANGAR_DEV_INPUT`) drives the add-project → workspace →
+  agent flow without clicks (see `crates/app/src/main.rs`). Never point these at real data in tests.
 
 ## Toolchain
 - Rust 1.99.0 pinned in `rust-toolchain.toml`, edition 2024, one Cargo workspace.
@@ -19,7 +21,7 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 
 ## Rules
 - Only `app` (and `examples`) may depend on GPUI. Library crates are headless.
-- Errors: `thiserror` in libraries, `anyhow` in binaries/examples. No `unwrap`/`expect` outside tests.
+- Errors: `thiserror` in libraries, `anyhow` in binaries/examples and inside `app` (the binary's crate). No `unwrap`/`expect` outside tests.
 - Async on tokio. Never block the GPUI main thread: PTY reads, git, simctl and frame capture run on background
   threads/tasks and push results through channels.
 - Git access goes through the `git` CLI in `worktree` (porcelain output only).
@@ -35,4 +37,6 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 - Code, comments, logs and UI copy in English. Minimal comments: only the non-obvious why.
 
 ## Workflow
+- In agent worktrees (`.claude/worktrees/`) the rtk hook refuses plain `git`/`cargo`: use `/usr/bin/git` and
+  `~/.cargo/bin/cargo`.
 - Plan each step, keep it small, commit after fmt + clippy + tests pass.
