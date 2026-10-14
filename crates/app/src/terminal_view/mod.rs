@@ -67,7 +67,8 @@ impl Default for TerminalViewOptions {
     }
 }
 
-const PADDING: Pixels = px(4.);
+const PADDING_X: Pixels = px(16.);
+const PADDING_Y: Pixels = px(10.);
 /// Minimum spacing between redraw requests caused by program output (~one 120 Hz frame).
 const REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
 
@@ -430,7 +431,8 @@ impl Render for TerminalView {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .size_full()
-            .p(PADDING)
+            .px(PADDING_X)
+            .py(PADDING_Y)
             .bg(rgb(background.to_hex()))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::copy_selection))

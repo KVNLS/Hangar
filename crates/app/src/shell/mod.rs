@@ -15,21 +15,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::resizable::{ResizablePanelEvent, ResizableState};
 use gpui_kit::component::select::{SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, h_resizable,
-    resizable_panel, v_flex,
+    ActiveTheme as _, IconName, WindowExt as _, h_flex, h_resizable, resizable_panel, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_agents::AgentHandle;
 use hangar_core::{
-    AgentState, Project, ProjectId, Session, SessionStatus, Store, Workspace, WorkspaceId,
-    WorkspaceStatus,
+    AgentState, Project, ProjectId, Session, Store, Workspace, WorkspaceId, WorkspaceStatus,
 };
 use hangar_terminal::ExitInfo;
 use hangar_worktree::MergeStrategy;

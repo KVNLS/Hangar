@@ -1,6 +1,10 @@
 //! Rendering of the main window.
 
+use gpui_kit::assets::IconName as Lucide;
+
 use super::*;
+use crate::ui::components::{EmptyState, StateGlyph, TabStyle, UiButton, UiTab};
+use crate::ui::{ActiveTokens as _, FONT_MONO, PANE_TAB_HEIGHT};
 
 impl Render for HangarApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -125,92 +129,87 @@ pub(super) fn agent_options(choices: &[AgentChoice]) -> Vec<AgentOption> {
 
 impl HangarApp {
     pub(super) fn render_pane(&self, pane: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let t = cx.tokens();
         let focused = self.panes.focused() == pane;
         let workspace_id = self.panes.slot(pane);
         let workspace = workspace_id.and_then(|id| self.projects.workspace(id));
         let live = workspace_id.and_then(|id| self.sessions.get(&id));
-
-        let header = h_flex()
-            .h_8()
-            .px_2()
-            .gap_3()
-            .flex_shrink_0()
-            .items_center()
-            .text_xs()
-            .border_b_1()
-            .border_color(theme.border)
-            .when(focused, |this| this.bg(theme.secondary))
-            .text_color(theme.muted_foreground);
         let changes_open = self.changes.open && focused;
-        let toggle = Button::new(("changes-toggle", pane))
-            .ghost()
-            .xsmall()
-            .icon(if changes_open {
-                IconName::PanelRightClose
-            } else {
-                IconName::PanelRightOpen
-            })
-            .tooltip(if changes_open {
-                "Hide changes (⌘⇧D)"
-            } else {
-                "Show changes (⌘⇧D)"
-            })
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.toggle_changes_for(pane, window, cx)),
-            );
-        let header = match workspace {
-            None => header.child("Empty pane").child(div().flex_1()),
+
+        let tab = match workspace {
+            None => UiTab::new(("pane-tab", pane), TabStyle::Pane, "Empty pane")
+                .icon(Lucide::Terminal)
+                .active(focused),
             Some(ws) => {
-                let (agent, status, color) = match live {
-                    Some(live) => (
-                        live.agent_name.clone(),
-                        status_label(&live.session.status),
-                        match live.session.status {
-                            SessionStatus::Running | SessionStatus::Starting => theme.success,
-                            SessionStatus::Exited { code: 0 } => theme.muted_foreground,
-                            _ => theme.danger,
-                        },
-                    ),
-                    None => (
-                        "no agent".into(),
-                        "not running".to_owned(),
-                        theme.muted_foreground,
-                    ),
-                };
-                let can_start = !self.busy.contains(&ws.id)
-                    && live.is_none_or(|l| l.session.status.is_terminal());
-                let ws_id = ws.id;
-                let label = if live.is_some() { "Restart" } else { "Start" };
-                header
-                    .child(
-                        div()
-                            .font_semibold()
-                            .text_color(theme.foreground)
-                            .child(ws.name.clone()),
-                    )
-                    .child(ws.branch.clone())
-                    .child(agent)
-                    .child(div().text_color(color).child(status))
-                    .child(div().flex_1())
-                    .when(can_start, |this| {
-                        this.child(
-                            Button::new(("start", pane))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Play)
-                                .label(format!("{label} {}", self.agent_display_name()))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let agent = this.agent.to_string();
-                                    this.panes.show(ws_id);
-                                    this.panes_changed(window, cx);
-                                    this.start_session(ws_id, agent, window, cx).detach();
-                                })),
-                        )
-                    })
+                let agent = live.map_or_else(|| "No agent".into(), |l| l.agent_name.clone());
+                UiTab::new(
+                    ("pane-tab", pane),
+                    TabStyle::Pane,
+                    format!("{agent} · {}", ws.name),
+                )
+                .leading(StateGlyph::new(self.agent_state(ws.id, cx)))
+                .active(focused)
             }
         };
-        let header = header.child(toggle);
+        let start = workspace.and_then(|ws| {
+            let can_start =
+                !self.busy.contains(&ws.id) && live.is_none_or(|l| l.session.status.is_terminal());
+            let ws_id = ws.id;
+            let label = if live.is_some() { "Restart" } else { "Start" };
+            can_start.then(|| {
+                UiButton::new(("start", pane))
+                    .icon(Lucide::Play)
+                    .label(format!("{label} {}", self.agent_display_name()))
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let agent = this.agent.to_string();
+                        this.panes.show(ws_id);
+                        this.panes_changed(window, cx);
+                        this.start_session(ws_id, agent, window, cx).detach();
+                    }))
+            })
+        });
+        let status = live
+            .filter(|l| l.session.status.is_terminal())
+            .map(|l| status_label(&l.session.status));
+        let tab_bar = h_flex()
+            .flex_none()
+            .h(PANE_TAB_HEIGHT)
+            .items_center()
+            .bg(t.panel)
+            .border_b_1()
+            .border_color(t.line)
+            .child(tab)
+            .child(div().flex_1())
+            .when_some(status, |this, status| {
+                this.child(
+                    div()
+                        .px_2()
+                        .font_family(FONT_MONO)
+                        .text_size(px(11.))
+                        .text_color(t.tx3)
+                        .child(status),
+                )
+            })
+            .children(start)
+            .child(
+                div().px_1p5().child(
+                    UiButton::new(("changes-toggle", pane))
+                        .icon(Lucide::FileDiff)
+                        .ghost()
+                        .small()
+                        .selected(changes_open)
+                        .tooltip(if changes_open {
+                            "Hide changes ⌘⇧D"
+                        } else {
+                            "Show changes ⌘⇧D"
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.toggle_changes_for(pane, window, cx)
+                        })),
+                ),
+            );
 
         let body = div().flex_1().min_h_0().w_full();
         let body = match live {
@@ -219,27 +218,26 @@ impl HangarApp {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(if workspace.is_some() {
-                    "No agent running in this workspace."
-                } else {
-                    "Select a workspace in the sidebar to show it here."
+                .bg(t.term)
+                .child(match workspace {
+                    Some(_) => EmptyState::new(Lucide::Terminal, "No agent running")
+                        .hint("Start an agent to work in this workspace."),
+                    None => EmptyState::new(Lucide::Terminal, "Empty pane")
+                        .hint("Select a workspace in the sidebar to show it here."),
                 }),
         };
 
         v_flex()
             .id(("pane", pane))
             .size_full()
-            .border_1()
-            .border_color(if focused { theme.ring } else { theme.border })
+            .bg(t.term)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _: &MouseDownEvent, window, cx| {
                     this.focus_pane(pane, window, cx);
                 }),
             )
-            .child(header)
+            .child(tab_bar)
             .child(body)
     }
 
