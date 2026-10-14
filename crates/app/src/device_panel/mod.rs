@@ -6,7 +6,8 @@ mod logs;
 mod picker;
 mod platform;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -79,12 +80,29 @@ enum Connection {
     },
 }
 
+const BOOT_TICK: Duration = Duration::from_secs(1);
+
 /// An AVD being booted from the panel. Kept apart from [`Connection`]: the boot continues
 /// when the user looks at another device.
 struct Booting {
     key: DeviceKey,
     name: SharedString,
+    /// Latest stage reported by the boot thread.
+    stage: Arc<Mutex<String>>,
+    started: Instant,
     _task: Task<()>,
+    _tick: Task<()>,
+}
+
+impl Booting {
+    fn status(&self) -> String {
+        let stage = self.stage.lock().map(|s| s.clone()).unwrap_or_default();
+        format!(
+            "{}: {stage}… {} s",
+            self.name,
+            self.started.elapsed().as_secs()
+        )
+    }
 }
 
 /// Last input outcome shown under the controls.
@@ -248,9 +266,15 @@ impl DevicePanel {
         self.boot_error = None;
         let name: SharedString = entry.info.name.clone().into();
         let platform = key.platform;
-        let task = cx
-            .background_executor()
-            .spawn(async move { platform.boot(&entry.info) });
+        let stage = Arc::new(Mutex::new("booting".to_owned()));
+        let reported = stage.clone();
+        let task = cx.background_executor().spawn(async move {
+            platform.boot(&entry.info, &|s| {
+                if let Ok(mut stage) = reported.lock() {
+                    *stage = s;
+                }
+            })
+        });
         let task_key = key.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -258,10 +282,22 @@ impl DevicePanel {
                 this.on_booted(task_key, result, window, cx)
             });
         });
+        // Redraws the stage and elapsed time; dropped with `Booting` when the boot ends.
+        let tick = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BOOT_TICK).await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        });
         self.booting = Some(Booting {
             key,
             name,
+            stage,
+            started: Instant::now(),
             _task: task,
+            _tick: tick,
         });
         cx.notify();
     }
@@ -678,7 +714,7 @@ impl DevicePanel {
             return Some(
                 centered()
                     .text_color(theme.muted_foreground)
-                    .child(format!("Booting {}… this can take a minute.", booting.name))
+                    .child(booting.status())
                     .into_any_element(),
             );
         }

@@ -196,12 +196,19 @@ impl Platform {
         }
     }
 
-    /// Boots a shut-down device and returns it as listed once it is up. Blocks for the whole
-    /// boot (seconds to minutes).
-    pub fn boot(self, info: &DeviceInfo) -> anyhow::Result<DeviceInfo> {
+    /// Boots a shut-down device and returns it as listed once it is up, reporting each stage
+    /// (`booting Android`) to `progress`. Blocks for the whole boot (seconds to minutes).
+    pub fn boot(self, info: &DeviceInfo, progress: &dyn Fn(String)) -> anyhow::Result<DeviceInfo> {
         match self {
-            Self::Android => Ok(hangar_devices::android::boot(&info.udid)?),
-            Self::Ios => boot_ios(info),
+            Self::Android => Ok(hangar_devices::android::boot_with_progress(
+                &info.udid,
+                &|stage| progress(stage.to_string()),
+            )?),
+            Self::Ios => {
+                // `simctl boot` reports nothing until it returns.
+                progress("booting the simulator".to_owned());
+                boot_ios(info)
+            }
         }
     }
 }

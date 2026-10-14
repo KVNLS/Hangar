@@ -177,6 +177,24 @@ impl Default for BootOptions {
     }
 }
 
+/// Where an [`boot`] is, reported as it moves on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootStage {
+    /// Emulator process spawned, not advertising itself yet.
+    Launching,
+    /// Emulator running; Android is starting (`sys.boot_completed` not set yet).
+    BootingAndroid,
+}
+
+impl std::fmt::Display for BootStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Launching => "starting the emulator",
+            Self::BootingAndroid => "booting Android",
+        })
+    }
+}
+
 /// Emulator command line for `avd_id` (pure, for tests).
 pub fn boot_args(avd_id: &str, grpc_port: u16, opts: &BootOptions) -> Vec<String> {
     let mut args: Vec<String> = vec![
@@ -210,9 +228,14 @@ fn free_grpc_port(taken: &[u16]) -> Result<u16> {
         .ok_or_else(|| Error::Command("no free gRPC port in 8554..8754".into()))
 }
 
-/// Launches `avd_id` detached from our process group and waits until Android has booted.
-/// Blocking: call it from a background thread.
-pub fn boot(sdk: &AndroidSdk, avd_id: &str, opts: &BootOptions) -> Result<RunningEmulator> {
+/// Launches `avd_id` detached from our process group and waits until Android has booted,
+/// calling `progress` at each [`BootStage`]. Blocking: call it from a background thread.
+pub fn boot(
+    sdk: &AndroidSdk,
+    avd_id: &str,
+    opts: &BootOptions,
+    progress: &dyn Fn(BootStage),
+) -> Result<RunningEmulator> {
     let running = discovery::scan();
     if let Some(d) = running.iter().find(|d| d.avd_id == avd_id) {
         return Err(Error::Command(format!(
@@ -246,6 +269,7 @@ pub fn boot(sdk: &AndroidSdk, avd_id: &str, opts: &BootOptions) -> Result<Runnin
         .spawn()
         .map_err(|e| Error::Command(format!("{}: {e}", sdk.emulator.display())))?;
     tracing::info!(avd_id, port, log = %log_path.display(), "emulator launched");
+    progress(BootStage::Launching);
 
     let log_tail = || {
         let text = std::fs::read_to_string(&log_path).unwrap_or_default();
@@ -284,6 +308,7 @@ pub fn boot(sdk: &AndroidSdk, avd_id: &str, opts: &BootOptions) -> Result<Runnin
             let _ = child.wait();
         });
 
+    progress(BootStage::BootingAndroid);
     let adb = Adb::new(sdk.adb.clone());
     let serial = found.serial();
     loop {

@@ -19,7 +19,9 @@ pub mod sdk;
 
 pub use adb_backend::{AdbDevice, Capture};
 pub use avd::Avd;
-pub use emulator::{BootOptions, RunningEmulator, WindowMode, find_running, list_running, state};
+pub use emulator::{
+    BootOptions, BootStage, RunningEmulator, WindowMode, find_running, list_running, state,
+};
 pub use grpc_backend::{FrameSize, GrpcEmulator};
 pub use logcat::logcat;
 pub use sdk::AndroidSdk;
@@ -129,12 +131,17 @@ pub fn open_adb(info: &DeviceInfo) -> Result<Box<dyn Device>> {
 /// Boots an AVD with [`BootOptions::default`] and returns it as listed by [`list`] once Android
 /// has booted. Blocks for the whole boot (seconds to minutes).
 pub fn boot(avd_id: &str) -> Result<DeviceInfo> {
+    boot_with_progress(avd_id, &|_| {})
+}
+
+/// [`boot`], calling `progress` at each [`BootStage`].
+pub fn boot_with_progress(avd_id: &str, progress: &dyn Fn(BootStage)) -> Result<DeviceInfo> {
     let sdk = AndroidSdk::locate()?;
-    Ok(boot_with(&sdk, avd_id, &BootOptions::default())?.info)
+    Ok(emulator::boot(&sdk, avd_id, &BootOptions::default(), progress)?.info)
 }
 
 pub fn boot_with(sdk: &AndroidSdk, avd_id: &str, options: &BootOptions) -> Result<RunningEmulator> {
-    emulator::boot(sdk, avd_id, options)
+    emulator::boot(sdk, avd_id, options, &|_| {})
 }
 
 pub fn open_with(
