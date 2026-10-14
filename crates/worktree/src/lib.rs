@@ -19,7 +19,7 @@ pub use git::{Git, GitVersion, MIN_GIT_VERSION, git_version};
 pub use ignore::{GitDirs, check_ignored, git_dirs};
 pub use patch::{DiffLine, DiffOptions, FileDiff, FileStatus, Hunk, LineKind, parse_patch};
 pub use repo::{branch_exists, current_branch, default_branch, repo_root};
-pub use status::{ChangeKind, ChangedPath, Status, parse_status, status};
+pub use status::{ChangeKind, ChangedPath, Status, parse_status, status, status_paths};
 pub use worktree::{
     CreateOptions, Worktree, create, delete_branch, list, parse_list, prune, remove,
 };

@@ -397,6 +397,35 @@ fn git_dirs_of_linked_worktree() {
 }
 
 #[test]
+fn partial_status_merges_into_full() {
+    let repo = Repo::new();
+    repo.write("README.md", "changed\n");
+    repo.write("src/a.rs", "a\n");
+    let mut full = hangar_worktree::status(&repo.path).unwrap();
+    assert_eq!((full.unstaged, full.untracked), (1, 1));
+
+    repo.write("src/b.rs", "b\n");
+    fs::remove_file(repo.path.join("src/a.rs")).unwrap();
+    git(&repo.path, &["checkout", "--", "README.md"]);
+    let paths = [PathBuf::from("src")];
+    let partial = hangar_worktree::status_paths(&repo.path, &paths).unwrap();
+    assert_eq!(partial.changes.len(), 1);
+    assert_eq!(partial.branch.as_deref(), Some("feature"));
+    full.merge_partial(partial, &paths);
+    // README.md is outside the paths, so its stale entry stays until it is refreshed too.
+    let names: Vec<_> = full.changes.iter().map(|c| c.path.clone()).collect();
+    assert_eq!(names, ["README.md", "src/b.rs"].map(PathBuf::from));
+    assert_eq!((full.unstaged, full.untracked), (1, 1));
+
+    let paths = [PathBuf::from("README.md")];
+    full.merge_partial(
+        hangar_worktree::status_paths(&repo.path, &paths).unwrap(),
+        &paths,
+    );
+    assert_eq!(full, hangar_worktree::status(&repo.path).unwrap());
+}
+
+#[test]
 fn merge_conflict_is_reported() {
     let repo = Repo::new();
     repo.write("README.md", "feature\n");
