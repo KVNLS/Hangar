@@ -17,7 +17,7 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 |----------|----------------------------------------------------------------------------------|----------------|
 | core     | domain: Project / Workspace / Session, AgentState, device, changes, review; ports | —              |
 | usecases | application services: workspaces, sessions, settings, review; pure policies: agent queue and attention, batch / best-of-N, orchestration guard rails, history | core |
-| store-sqlite | SQLite Store (projects, workspaces, sessions with history and cost, settings; schema v7) | core  |
+| store-sqlite | SQLite Store (projects, workspaces, sessions with history and cost, usage ledger, settings; schema v8) | core  |
 | worktree | git/gh CLI wrapper; `GitCli` and `Gh` implement the git and code-host ports      | core           |
 | agents   | AgentAdapter trait, PtyAdapter (a `Launch`); ACP client (`acp`); Ollama; Claude Code transcripts | — |
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |
@@ -139,9 +139,14 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - **Subagents:** no per-subagent diff counts or device on overview rows, and no device banner in the
   subagent view (the updated mockup shows both); only Claude Code reports parent links; nested subagents
   show inside their top-level one.
-- **Usage and history:** no per-turn `PromptResponse.usage`; no cost for PTY agents; no history beyond
-  today; no diff when a workspace's live diff never ran; sessions stopped at startup count as ended then;
-  a session started yesterday counts fully today.
+- **Usage and history:** no cost or tokens for PTY agents; no session history beyond today (the usage
+  ledger keeps cost per model for any period); no diff when a workspace's live diff never ran; sessions
+  stopped at startup count as ended then; the status bar's "today" counts a session started yesterday
+  fully. Usage dashboard: a turn's cost is split across its models by token share (agents give no cost
+  per model); OpenCode's `PromptResponse.usage` is unverified, so its local tokens (and the saving) may be
+  unknown; savings are estimates at list prices (built-in table: Claude models only, others need a price
+  typed in Settings); bars use the current UTC offset (off by an hour across a DST change); rows from
+  before schema v8 have no model.
 - **MCP:** no cancellation, resources or prompts; `claude-agent-acp` puts the session secret in its child's
   argv (visible to the same user in `ps`).
 - **Ollama:** OpenCode only (Codex `--oss`, Claude Code `ANTHROPIC_BASE_URL` not done); models without tool

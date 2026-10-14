@@ -44,7 +44,7 @@
 //! review hooks below), logs its row counts, renders the inline mode, then goes back.
 //!
 //! `HANGAR_DEV_SHOW=<screen>` runs last and leaves the window on `workspace`, `review` (split),
-//! `review-inline`, `overview`, `compare` (the focused workspace's attempts), `settings-{agents,permissions,devices,appearance,keybindings}`, `palette` or
+//! `review-inline`, `overview`, `compare` (the focused workspace's attempts), `settings-{agents,permissions,devices,usage,appearance,keybindings}`, `palette` or
 //! `sheet` (New workspace) or `device` (device panel), for screenshots.
 //! `HANGAR_DEV_SCREENSHOT=1` then waits for the workspace device's first frame and takes the
 //! device panel's ⌘S screenshot for the agent.
