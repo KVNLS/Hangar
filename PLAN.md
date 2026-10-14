@@ -135,9 +135,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   - Agents: an `ask_user` whose bridge died while its agent lives stays open until the 30-minute timeout
     (no MCP cancellation); the chat shows only a long message's first 64 KB (no "show all"); resumed
     sessions may book their earlier cost again (unverified).
-  - UI: the title bar overflows at 1280 px on Review and Files; non-ASCII names lose their characters in
-    slugs; duplicate workspace names look alike; queued cards show Resume; dark palette selection contrast;
-    shortcut labels differ between palette, title bar and Keybindings.
+  - UI: dark palette selection contrast; shortcut labels differ between palette, title bar and
+    Keybindings; a long name's " 2" suffix is cut off by truncation in the sidebar.
   - Persistence: a read-only database has no read-only mode (move aside, continue without saving or quit);
     git version/identity probes have no deadline.
 - **Devices:** simctl and Android frames still copied into the atlas (question 3); log lines from several

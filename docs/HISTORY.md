@@ -555,3 +555,11 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - A missing or non-executable `gradlew` is reported before the build; Expo's launch line is found in the
   scrollback, not only on screen.
 
+## UI fixes (2026-10-12, branch `ui-fixes`)
+- Title bar: crumbs have a zero basis (the bar sized itself to their content), the project crumb and
+  branch chip truncate, the search box shrinks to 160 px, and the buttons never shrink. Seen live with a
+  long project, workspace and branch name.
+- Slugs fold accented Latin letters (é→e, ß→ss); names with no Latin letters get `ws-` and a stable hash.
+- A repeated workspace name in a project gets a number (`dev 2`), like its slug.
+- Queued overview cards offer "Cancel start" instead of Resume.
+
