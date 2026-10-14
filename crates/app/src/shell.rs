@@ -83,6 +83,8 @@ pub use run::RunConfig;
 
 /// How long a killed agent gets to exit before its worktree is removed.
 const KILL_GRACE: Duration = Duration::from_secs(3);
+/// How long quitting waits for terminal agents to exit after their hang-up before killing them.
+const QUIT_GRACE: Duration = Duration::from_millis(500);
 /// The panes keep at least this much width when the right panel is dragged wider.
 const MIN_PANES_WIDTH: f32 = 320.;
 /// Quiet time after a panel resize before the width is saved.
@@ -682,6 +684,16 @@ impl HangarApp {
                 cx.on_app_quit(|this, _| {
                     for live in this.live.sessions.values() {
                         live.stop();
+                    }
+                    // The app exits right after this, before a terminal agent that ignored
+                    // the hang-up would be killed in the background: wait for them here.
+                    let deadline = std::time::Instant::now() + QUIT_GRACE;
+                    for live in this.live.sessions.values() {
+                        if let AgentSurface::Terminal { handle, .. } = &live.surface {
+                            let left =
+                                deadline.saturating_duration_since(std::time::Instant::now());
+                            handle.session().kill_now(left);
+                        }
                     }
                     this.flush_layout();
                     async {}

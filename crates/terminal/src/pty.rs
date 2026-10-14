@@ -247,9 +247,85 @@ impl PtySession {
         }
     }
 
+    /// Hangs up the child and the terminal's foreground job, then kills whatever ignored it
+    /// once [`KILL_GRACE`] has passed (on a background thread; this returns at once).
     pub fn kill(&self) -> Result<()> {
-        lock(&self.killer).kill().map_err(TerminalError::Kill)
+        let groups = self.hang_up()?;
+        let exit = Arc::clone(&self.exit);
+        thread::Builder::new()
+            .name("hangar-pty-kill".into())
+            .spawn(move || {
+                thread::sleep(KILL_GRACE);
+                if lock(&exit.status).is_none() || groups.iter().any(|&g| group_alive(g)) {
+                    signal_groups(&groups, libc::SIGKILL);
+                }
+            })
+            .map_err(|e| TerminalError::Thread("PTY kill", e))?;
+        Ok(())
     }
+
+    /// As [`Self::kill`], but blocks: what is still running after `grace` is killed before it
+    /// returns. For app quit, where a background thread would not get the chance.
+    pub fn kill_now(&self, grace: Duration) {
+        let groups = match self.hang_up() {
+            Ok(groups) => groups,
+            Err(err) => {
+                tracing::debug!(%err, "failed to hang up PTY child");
+                self.groups()
+            }
+        };
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline
+            && (lock(&self.exit.status).is_none() || groups.iter().any(|&g| group_alive(g)))
+        {
+            thread::sleep(Duration::from_millis(20));
+        }
+        signal_groups(&groups, libc::SIGKILL);
+    }
+
+    /// Sends SIGHUP (then SIGCONT, for stopped jobs) to the child's process group and to the
+    /// terminal's foreground one; returns the groups.
+    fn hang_up(&self) -> Result<Vec<libc::pid_t>> {
+        let groups = self.groups();
+        signal_groups(&groups, libc::SIGHUP);
+        signal_groups(&groups, libc::SIGCONT);
+        if groups.is_empty() {
+            lock(&self.killer).kill().map_err(TerminalError::Kill)?;
+        }
+        Ok(groups)
+    }
+
+    /// The child leads its own session and group (portable-pty calls `setsid`); an interactive
+    /// shell runs its foreground job in another group of that session.
+    fn groups(&self) -> Vec<libc::pid_t> {
+        let mut groups: Vec<libc::pid_t> = self
+            .pid
+            .and_then(|pid| libc::pid_t::try_from(pid).ok())
+            .into_iter()
+            .collect();
+        if let Some(foreground) = lock(&self.master).process_group_leader()
+            && foreground > 0
+            && !groups.contains(&foreground)
+        {
+            groups.push(foreground);
+        }
+        groups
+    }
+}
+
+/// How long a hung-up agent gets to exit before it is killed.
+pub const KILL_GRACE: Duration = Duration::from_secs(2);
+
+fn signal_groups(groups: &[libc::pid_t], signal: libc::c_int) {
+    for &group in groups {
+        // SAFETY: plain syscall on a process group of this terminal's session.
+        unsafe { libc::killpg(group, signal) };
+    }
+}
+
+fn group_alive(group: libc::pid_t) -> bool {
+    // SAFETY: signal 0 only checks that the group still has members.
+    unsafe { libc::killpg(group, 0) == 0 }
 }
 
 impl Drop for PtySession {
@@ -407,6 +483,60 @@ mod tests {
             String::from_utf8_lossy(&collect_output(&rx, Duration::from_secs(10))).into_owned();
         assert!(out.contains("got:ping"), "{out:?}");
         assert!(out.contains("11 70"), "{out:?}");
+    }
+
+    fn alive(pid: libc::pid_t) -> bool {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// A child that ignores SIGHUP plus a background job of it, both ignoring SIGHUP; the job's
+    /// pid is printed so the test can check it is gone too.
+    fn stubborn() -> (PtySession, Receiver<PtyEvent>, libc::pid_t) {
+        let session = PtySession::spawn(&SpawnOptions::command(
+            "/bin/sh",
+            ["-c", "trap '' HUP; sleep 60 & echo job:$!; exec sleep 61"],
+        ))
+        .unwrap();
+        let rx = session.take_output().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut out = String::new();
+        let job = loop {
+            if let Ok(PtyEvent::Output(bytes)) = rx.recv_timeout(Duration::from_millis(100)) {
+                out.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            if let Some(pid) = out
+                .split("job:")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next()?.parse().ok())
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "no job pid in {out:?}");
+        };
+        (session, rx, job)
+    }
+
+    #[test]
+    fn kill_ends_a_child_that_ignores_sighup_and_its_jobs() {
+        let (session, _rx, job) = stubborn();
+        session.kill().unwrap();
+        let deadline = Instant::now() + KILL_GRACE + Duration::from_secs(5);
+        while session.try_wait().unwrap().is_none() || alive(job) {
+            assert!(Instant::now() < deadline, "child or job survived kill");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn kill_now_ends_everything_before_returning() {
+        let (session, _rx, job) = stubborn();
+        let started = Instant::now();
+        session.kill_now(Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!alive(job), "job survived kill_now");
+        assert!(session.wait().is_ok());
     }
 
     #[test]

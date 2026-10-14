@@ -130,6 +130,12 @@ impl TerminalSession {
     pub fn kill(&self) -> Result<()> {
         self.pty.kill()
     }
+
+    /// Kills the program, blocking until what ignored the hang-up is killed (see
+    /// [`PtySession::kill_now`]).
+    pub fn kill_now(&self, grace: Duration) {
+        self.pty.kill_now(grace)
+    }
 }
 
 struct Pump {
