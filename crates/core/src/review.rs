@@ -137,6 +137,10 @@ pub enum ReviewError {
     AlreadyMerged { branch: String, base: String },
     #[error("the GitHub CLI (`gh`) is not installed or not on PATH")]
     GhMissing,
+    #[error("pull requests need a GitHub remote: none of this repository's remotes is on GitHub")]
+    NotGitHub,
+    #[error("the GitHub CLI (`gh`) is not signed in: run `gh auth login`")]
+    GhSignedOut,
     #[error("the GitHub CLI (`gh`) did not answer in time (offline?)")]
     GhNotAnswering,
     #[error("the pull request title is empty")]

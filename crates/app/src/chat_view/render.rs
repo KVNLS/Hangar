@@ -188,7 +188,7 @@ impl ChatView {
                                 .primary()
                                 .icon(Lucide::FileDiff)
                                 .label("Review changes")
-                                .kbd("⌘⇧R")
+                                .kbd("⇧⌘R")
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(crate::shell::OpenReview), cx)
                                 }),

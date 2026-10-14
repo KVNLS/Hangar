@@ -563,3 +563,14 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - A repeated workspace name in a project gets a number (`dev 2`), like its slug.
 - Queued overview cards offer "Cancel start" instead of Resume.
 
+## Small fixes (2026-10-12, branch `small-fixes`)
+- A changed `.gitignore` (or `info/exclude`) refreshes the whole live diff.
+- Non-GitHub remotes: `gh`'s "no GitHub host" answer is `NotGitHub`, Create PR is blocked with the
+  reason instead of a lookup error note, and `create_pr` checks `gh` before pushing anything (a signed-out
+  `gh` has its own error). Seen live with a local bare origin.
+- Palette selection uses the accent tint; shortcut labels follow macOS order (⇧⌘O) everywhere and the
+  palette shows ⌘D for Split pane right; a numbered name keeps its number visible in the sidebar; the
+  project crumb keeps its width. Seen live.
+- Not done: resumed sessions possibly booking their earlier cost again needs OpenCode's real behaviour
+  checked first.
+

@@ -62,7 +62,7 @@ impl ChangesPanel {
                 this.child(
                     UiButton::new("changes-full-review")
                         .label("Full review")
-                        .kbd("⌘⇧R")
+                        .kbd("⇧⌘R")
                         .ghost()
                         .small()
                         .tooltip("Review every change full width")

@@ -11,7 +11,16 @@ use super::*;
 struct Fake {
     upstream: Option<Upstream>,
     gh: Option<GhStatus>,
+    /// `gh` answers that no remote is on GitHub.
+    not_github: bool,
     calls: Mutex<Vec<String>>,
+}
+
+fn signed_in() -> Option<GhStatus> {
+    Some(GhStatus::Installed {
+        authenticated: true,
+        account: None,
+    })
 }
 
 impl Fake {
@@ -79,6 +88,9 @@ impl CodeHost for Fake {
     }
     fn pr_for_branch(&self, _: &Path, branch: &str) -> Result<Option<PrInfo>, ReviewError> {
         self.record(format!("pr view {branch}"));
+        if self.not_github {
+            return Err(ReviewError::NotGitHub);
+        }
         Ok(None)
     }
     fn create_pr(&self, _: &Path, request: &CreatePr) -> Result<String, ReviewError> {
@@ -131,24 +143,72 @@ fn upstream(ahead: u32) -> Upstream {
 
 #[test]
 fn a_pull_request_publishes_the_branch_first_when_needed() {
-    let fake = Fake::default();
+    let fake = Fake {
+        gh: signed_in(),
+        ..Fake::default()
+    };
     let url = Reviews::new(&fake, &fake)
         .create_pr(&target(), &request(" Fix login "))
         .unwrap();
     assert_eq!(url, "https://example.invalid/pr/1");
     assert_eq!(
         fake.calls(),
-        ["push", "pr create hangar/x -> main: Fix login"]
+        [
+            "pr view hangar/x",
+            "push",
+            "pr create hangar/x -> main: Fix login"
+        ]
     );
 
     let published = Fake {
         upstream: Some(upstream(0)),
+        gh: signed_in(),
         ..Fake::default()
     };
     Reviews::new(&published, &published)
         .create_pr(&target(), &request("t"))
         .unwrap();
-    assert_eq!(published.calls(), ["pr create hangar/x -> main: t"]);
+    assert_eq!(
+        published.calls(),
+        ["pr view hangar/x", "pr create hangar/x -> main: t"]
+    );
+}
+
+#[test]
+fn nothing_is_pushed_when_no_pull_request_can_be_opened() {
+    for fake in [
+        Fake::default(),
+        Fake {
+            gh: signed_in(),
+            not_github: true,
+            ..Fake::default()
+        },
+    ] {
+        let err = Reviews::new(&fake, &fake)
+            .create_pr(&target(), &request("t"))
+            .unwrap_err();
+        assert!(
+            matches!(err, ReviewError::GhMissing | ReviewError::NotGitHub),
+            "{err}"
+        );
+        assert!(
+            !fake.calls().iter().any(|c| c == "push"),
+            "{:?}",
+            fake.calls()
+        );
+    }
+}
+
+#[test]
+fn info_tells_a_non_github_remote_apart_from_a_lookup_failure() {
+    let fake = Fake {
+        gh: signed_in(),
+        not_github: true,
+        ..Fake::default()
+    };
+    let info = Reviews::new(&fake, &fake).load_info(&target());
+    assert!(!info.github);
+    assert_eq!(info.pr_error, None);
 }
 
 #[test]

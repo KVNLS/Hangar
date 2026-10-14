@@ -311,7 +311,9 @@ fn git_meta_class(rel: &Path, own_git_dir: bool) -> Class {
     if is_lock {
         return Class::Ignored;
     }
-    let shared = first == "refs" || first == "packed-refs";
+    // `info/exclude` holds ignore rules for every worktree.
+    let exclude = first == "info" && rel.file_name().is_some_and(|n| n == "exclude");
+    let shared = first == "refs" || first == "packed-refs" || exclude;
     let own = components.next().is_none()
         && [
             "HEAD",
@@ -369,6 +371,7 @@ mod tests {
         assert_eq!(class("/repo/.git/refs/heads/main"), "meta");
         assert_eq!(class("/repo/.git/refs/heads/main.lock"), "ignored");
         assert_eq!(class("/repo/.git/packed-refs"), "meta");
+        assert_eq!(class("/repo/.git/info/exclude"), "meta");
         assert_eq!(class("/repo/.git/HEAD"), "ignored");
         assert_eq!(class("/repo/.git/index"), "ignored");
         assert_eq!(class("/repo/.git/objects/ab/cdef"), "ignored");

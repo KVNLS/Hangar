@@ -80,6 +80,8 @@ pub enum Error {
     },
     #[error("`git {}` did not finish within {secs} s (waiting for a password or network?)", .args.join(" "))]
     Timeout { args: Vec<String>, secs: u64 },
+    #[error("pull requests need a GitHub remote: none of this repository's remotes is on GitHub")]
+    NotGitHub,
     #[error("`gh` did not answer within {secs} s")]
     GhTimeout { secs: u64 },
     #[error("unexpected git output: {0}")]

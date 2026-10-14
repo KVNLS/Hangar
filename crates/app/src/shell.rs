@@ -150,9 +150,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-e", OpenFiles, None),
         KeyBinding::new("cmd-r", Run, None),
         KeyBinding::new("cmd-.", StopRun, None),
-        KeyBinding::new("cmd-d", SplitPane, None),
+        // The last binding is the one menus and the palette show.
         KeyBinding::new("cmd-\\", SplitPane, None),
-        // macOS reports ⌘⇧\ as ⌘| (shift folded into the character).
+        KeyBinding::new("cmd-d", SplitPane, None),
+        // macOS reports ⇧⌘\ as ⌘| (shift folded into the character).
         KeyBinding::new("cmd-|", SplitPaneDown, None),
         KeyBinding::new("cmd-alt-1", FocusPane1, None),
         KeyBinding::new("cmd-alt-2", FocusPane2, None),
@@ -384,11 +385,11 @@ impl Render for PanelResize {
 enum Screen {
     /// Sidebar, panes and the right panel.
     Workspace,
-    /// Full-width diff review of the focused workspace (⌘⇧R).
+    /// Full-width diff review of the focused workspace (⇧⌘R).
     Review,
-    /// Full-width file browser of the focused workspace (⌘⇧E).
+    /// Full-width file browser of the focused workspace (⇧⌘E).
     Files,
-    /// Every workspace as a card, grouped by state (⌘⇧O).
+    /// Every workspace as a card, grouped by state (⇧⌘O).
     Overview,
     /// Settings (⌘,).
     Settings,

@@ -384,3 +384,27 @@ async fn live_diff_refresh_and_bad_base() {
     assert!(live.summary().is_some());
     live.refresh().unwrap();
 }
+
+#[tokio::test]
+async fn ignoring_files_removes_them_from_the_live_diff() {
+    let repo = Repo::new();
+    git(&repo.path, &["checkout", "-q", "-b", "feature"]);
+    let (live, mut rx) =
+        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
+    next_update(&mut rx).await;
+
+    repo.write("gen/out.bin", "generated\n");
+    update_where(&mut rx, |u| {
+        u.changed.iter().any(|f| f.path == Path::new("gen/out.bin"))
+    })
+    .await;
+
+    // Only `.gitignore` changes, yet the now-ignored file must leave the diff.
+    let ignore = fs::read_to_string(repo.path.join(".gitignore")).unwrap_or_default();
+    repo.write(".gitignore", &format!("{ignore}gen/\n"));
+    update_where(&mut rx, |u| {
+        u.removed.iter().any(|p| p == Path::new("gen/out.bin"))
+    })
+    .await;
+    assert!(live.file(Path::new("gen/out.bin")).is_none());
+}

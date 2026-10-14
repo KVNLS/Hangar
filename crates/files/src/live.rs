@@ -158,7 +158,12 @@ impl Job {
     fn add(&mut self, input: Input, base: &mut String) {
         match input {
             Input::Batch(batch) => {
-                self.full |= batch.git_meta_changed || batch.rescan;
+                // An ignore file changes which files count, not just itself.
+                let ignore_rules = batch
+                    .paths
+                    .iter()
+                    .any(|p| p.file_name().is_some_and(|n| n == ".gitignore"));
+                self.full |= batch.git_meta_changed || batch.rescan || ignore_rules;
                 self.paths.extend(batch.paths);
                 self.trigger = Some(self.trigger.map_or(batch.at, |t| t.min(batch.at)));
             }

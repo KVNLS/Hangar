@@ -49,6 +49,8 @@ pub struct ReviewInfo {
     pub last_subject: Option<String>,
     /// The repository has at least one remote (push and pull requests need one).
     pub remote: bool,
+    /// `false` once `gh` said none of the remotes is on GitHub (pull requests cannot open).
+    pub github: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,9 +84,14 @@ impl<'a> Reviews<'a> {
             tracing::warn!(%err, "gh auth status failed");
             GhStatus::Missing
         });
+        let mut github = true;
         let (pr, pr_error) = if remote && can_open_prs(&gh) {
             match self.host.pr_for_branch(&ws.worktree_path, &ws.branch) {
                 Ok(pr) => (pr, None),
+                Err(ReviewError::NotGitHub) => {
+                    github = false;
+                    (None, None)
+                }
                 Err(err) => {
                     tracing::warn!(%err, branch = %ws.branch, "gh pr view failed");
                     (None, Some(err.to_string()))
@@ -99,6 +106,7 @@ impl<'a> Reviews<'a> {
             pr_error,
             last_subject,
             remote,
+            github,
         }
     }
 
@@ -112,6 +120,14 @@ impl<'a> Reviews<'a> {
         if request.title.trim().is_empty() {
             return Err(ReviewError::EmptyPrTitle);
         }
+        // Nothing is pushed for a pull request that cannot be opened: `gh` must be signed in
+        // and see a GitHub remote.
+        match self.host.status()? {
+            GhStatus::Missing => return Err(ReviewError::GhMissing),
+            gh if !can_open_prs(&gh) => return Err(ReviewError::GhSignedOut),
+            _ => {}
+        }
+        self.host.pr_for_branch(&ws.worktree_path, &ws.branch)?;
         let upstream = self.git.upstream(&ws.worktree_path)?;
         if upstream.as_ref().is_none_or(|u| u.ahead > 0 || u.gone) {
             self.git
