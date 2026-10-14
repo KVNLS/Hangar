@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use hangar_devices::capacity::{BootRefusal, DeviceCost, HostResources, MAX_SLOTS};
+use hangar_core::device::capacity::{BootRefusal, DeviceCost, HostResources, MAX_SLOTS};
 use serde::{Deserialize, Serialize};
 
 use hangar_core::device::Platform;
@@ -145,7 +145,7 @@ pub fn over_limit<K: Clone>(slots: &[Slot<K>], limit: u32) -> Vec<K> {
 /// (the caller logs why).
 pub fn guard(host: Option<&HostResources>, cost: &DeviceCost) -> Result<(), BootRefusal> {
     match host {
-        Some(host) => hangar_devices::capacity::can_boot_another(host, cost),
+        Some(host) => hangar_core::device::capacity::can_boot_another(host, cost),
         None => Ok(()),
     }
 }
@@ -284,6 +284,11 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
             self.waiting.drain(..).partition(|w| &w.holder == who);
         self.waiting = rest;
         cancelled.into_iter().map(|w| w.payload).collect()
+    }
+
+    /// Removes every waiter (the device leaves the pool).
+    pub fn take_waiting(&mut self) -> Vec<T> {
+        self.waiting.drain(..).map(|w| w.payload).collect()
     }
 }
 

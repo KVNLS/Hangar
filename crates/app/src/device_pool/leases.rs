@@ -5,15 +5,13 @@ use std::time::Instant;
 use anyhow::anyhow;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
+use hangar_usecases::device_pool::LeaseStart;
 use tokio::sync::oneshot;
 
 use crate::device_panel::Platform;
 use crate::device_view::DeviceSession;
 
-use super::policy::Acquire;
-use super::{
-    Acquired, DevicePool, Lease, LeaseReply, NoticeLevel, OpenError, PoolEvent, PoolKey, State,
-};
+use super::{Acquired, DevicePool, Lease, NoticeLevel, OpenError, PoolEvent, PoolKey};
 
 impl DevicePool {
     /// Opens the workspace's device (booting it if needed) for the panel, without a lease.
@@ -26,7 +24,7 @@ impl DevicePool {
         cx.spawn(async move |this, cx| {
             let a = assignment.await?;
             Self::wait_host(&this, cx).await;
-            let key = this.update(cx, |pool, _| pool.key_of(ws, &a))?;
+            let key = this.update(cx, |pool, _| pool.machine.key_of(ws, &a))?;
             Self::open(this, key, cx)
                 .await
                 .map_err(|e| anyhow!(e.message().to_owned()))
@@ -45,7 +43,7 @@ impl DevicePool {
         cx.spawn(async move |this, cx| {
             let a = assignment.await?;
             Self::wait_host(&this, cx).await;
-            let key = this.update(cx, |pool, _| pool.key_of(ws, &a))?;
+            let key = this.update(cx, |pool, _| pool.machine.key_of(ws, &a))?;
             let lease = Self::lease(this.clone(), key.clone(), ws, cx).await?;
             let avd = (a.platform == Platform::Android).then(|| a.base.clone());
             let refused = match Self::open(this.clone(), key.clone(), cx).await {
@@ -63,8 +61,8 @@ impl DevicePool {
             };
             drop(lease);
             let fallback = this.update(cx, |pool, cx| {
-                let other = pool.borrowable(a.platform, &key)?;
-                let name = pool.devices.get(&other).map(|d| d.name.clone());
+                let other = pool.machine.borrowable(a.platform, &key)?;
+                let name = pool.machine.name_of(&other).map(str::to_owned);
                 cx.emit(PoolEvent::Notice(
                     NoticeLevel::Warning,
                     format!(
@@ -95,66 +93,34 @@ impl DevicePool {
         })
     }
 
-    /// A running device of `platform` other than `key`, the one with the shortest queue.
-    /// Open ones first, then ones opening or left running (which need no boot).
-    fn borrowable(&self, platform: Platform, key: &PoolKey) -> Option<PoolKey> {
-        self.devices
-            .iter()
-            .filter(|(k, d)| *k != key && d.platform == platform)
-            .filter_map(|(k, d)| {
-                let rank = match d.state {
-                    State::Open { .. } => 0,
-                    State::Opening { .. } => 1,
-                    State::Closed if d.running => 2,
-                    _ => return None,
-                };
-                Some(((rank, d.leases.waiting_len()), k))
-            })
-            .min_by_key(|(rank, _)| *rank)
-            .map(|(_, k)| k.clone())
-    }
-
     async fn lease(
         this: WeakEntity<Self>,
         key: PoolKey,
         ws: WorkspaceId,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<Lease> {
-        let (tx, rx) = oneshot::channel();
-        let granted = this.update(cx, |pool, cx| pool.request_lease(&key, ws, tx, cx))??;
-        match granted {
-            Some(lease) => Ok(lease),
-            None => rx.await.map_err(|_| anyhow!("the device pool stopped"))?,
-        }
-    }
-
-    fn request_lease(
-        &mut self,
-        key: &PoolKey,
-        ws: WorkspaceId,
-        reply: LeaseReply,
-        cx: &mut Context<Self>,
-    ) -> anyhow::Result<Option<Lease>> {
-        let release = self.release.clone();
-        let device = self
-            .entry(key)
-            .ok_or_else(|| anyhow!("no device assigned to this workspace"))?;
-        let name = device.name.clone();
-        let outcome = device.leases.acquire(ws, Instant::now(), reply);
-        cx.notify();
-        match outcome {
-            Acquire::Granted(_) => {
-                self.touch(key);
-                Ok(Some(Lease {
+        let granted = this.update(cx, |pool, cx| {
+            let start = pool
+                .machine
+                .request_lease(&key, ws, Instant::now())
+                .map_err(anyhow::Error::msg);
+            cx.notify();
+            anyhow::Ok(match start? {
+                LeaseStart::Granted => Ok(Lease {
                     key: key.clone(),
                     holder: ws,
-                    release,
-                }))
-            }
-            Acquire::Queued { position } => {
-                tracing::info!(target: "device_pool", workspace = %ws, device = %name, position, "waiting for the device");
-                Ok(None)
-            }
+                    release: pool.release.clone(),
+                }),
+                LeaseStart::Queued(token) => {
+                    let (tx, rx) = oneshot::channel();
+                    pool.lease_waiters.insert(token, tx);
+                    Err(rx)
+                }
+            })
+        })??;
+        match granted {
+            Ok(lease) => Ok(lease),
+            Err(rx) => rx.await.map_err(|_| anyhow!("the device pool stopped"))?,
         }
     }
 
@@ -164,36 +130,13 @@ impl DevicePool {
         holder: WorkspaceId,
         cx: &mut Context<Self>,
     ) {
-        let release = self.release.clone();
-        let Some(device) = self.devices.get_mut(key) else {
-            return;
-        };
-        let granted = device.leases.release(&holder);
-        let next = device.leases.holder().copied();
-        for reply in granted {
-            if let Some(next) = next {
-                let lease = Lease {
-                    key: key.clone(),
-                    holder: next,
-                    release: release.clone(),
-                };
-                // A waiter that gave up returns the lease, which releases it again.
-                let _ = reply.send(Ok(lease));
-            }
-        }
-        if let Some(next) = next {
-            tracing::info!(target: "device_pool", workspace = %next, ?key, "device lease granted");
-        }
-        self.touch(key);
-        self.enforce_limit(cx);
+        self.machine.release_lease(key, holder);
+        self.run(cx);
         cx.notify();
     }
 
     /// Whether the workspace waits for a device (lease queue or a free slot).
     pub fn is_waiting(&self, ws: WorkspaceId) -> bool {
-        self.devices.values().any(|d| d.leases.is_waiting(&ws))
-            || self
-                .key_for(ws)
-                .is_some_and(|k| self.waiting_slot.contains(&k))
+        self.machine.is_waiting(ws)
     }
 }
