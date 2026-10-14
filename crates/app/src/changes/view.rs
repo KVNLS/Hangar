@@ -31,7 +31,7 @@ use super::review::{ReviewInfo, ReviewTarget, StageState};
 pub use actions::Busy;
 
 use crate::ui::components::{Chip, Delta, EmptyState, Segmented, UiButton, section_label};
-use crate::ui::{ActiveTokens as _, FONT_MONO, TypeScale as _};
+use crate::ui::{ActiveTokens as _, TypeScale as _};
 
 const LIST_ROW_HEIGHT: f32 = 28.;
 const DIFF_ROW_HEIGHT: f32 = 19.;
@@ -399,7 +399,7 @@ impl ChangesPanel {
             .gap_2()
             .flex_shrink_0()
             .items_center()
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.))
             .text_color(t.tx2)
             .map(|this| match (&self.source, &summary) {
@@ -549,7 +549,7 @@ impl ChangesPanel {
                         div()
                             .w_3()
                             .flex_shrink_0()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(10.))
                             .font_semibold()
                             .text_color(status_color(file.status, cx))
@@ -602,7 +602,7 @@ impl ChangesPanel {
             .gap_2()
             .flex_shrink_0()
             .items_center()
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.))
             .text_color(cx.tokens().tx2)
             .border_b_1()
@@ -641,7 +641,7 @@ impl ChangesPanel {
                     .flex_1()
                     .min_h_0()
                     .bg(cx.tokens().app)
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(11.5))
                     .child(list),
             )
@@ -724,7 +724,7 @@ impl ChangesPanel {
                 )
                 .child(
                     div()
-                        .font_family(FONT_MONO)
+                        .font_mono()
                         .text_size(px(11.))
                         .text_color(t.tx3)
                         .child(format!("{files} file{}", if files == 1 { "" } else { "s" })),
@@ -757,7 +757,7 @@ impl ChangesPanel {
                     .child(section_label("Files", cx))
                     .child(
                         div()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(11.))
                             .text_color(t.tx3)
                             .child(format!("{viewed}/{files} viewed")),
@@ -811,7 +811,7 @@ impl ChangesPanel {
             .bg(t.panel)
             .border_b_1()
             .border_color(t.line)
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(12.))
             .child(Icon::new(Lucide::File).size(px(13.)).text_color(t.tx3))
             .child(div().min_w_0().truncate().child(file_title(file)))
@@ -871,7 +871,7 @@ impl ChangesPanel {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(12.))
                     .child(list),
             )
@@ -1085,7 +1085,7 @@ fn counts(file: &FileDiff, cx: &App) -> AnyElement {
     if file.binary {
         return div()
             .flex_none()
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.))
             .text_color(cx.tokens().tx3)
             .child("bin")

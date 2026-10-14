@@ -14,7 +14,7 @@ use crate::changes::dialogs::{MergeDialog, PrDialog};
 use crate::changes::model::short_sha;
 use crate::changes::review::{self, PrRequest, ReviewTarget};
 use crate::ui::components::UiButton;
-use crate::ui::{ActiveTokens as _, FONT_MONO};
+use crate::ui::{ActiveTokens as _, TypeScale as _};
 
 /// The operation running in a workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -473,7 +473,7 @@ impl ChangesPanel {
             .child(div().flex_1())
             .child(
                 div()
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(11.))
                     .text_color(t.tx3)
                     .child(format!("{} staged", self.staged)),

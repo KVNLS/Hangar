@@ -204,7 +204,12 @@ Git access is the `git` CLI with porcelain output, not a library.
   The model select is ignored. The hangar MCP bridge goes into `session/new` as for Claude: live check in the
   app listed the nine `hangar_*` tools. `session/load` replays history (Resume). bash runs without asking under
   OpenCode's default permissions; with `"bash": "ask"` it sends standard allow_once / allow_always /
-  reject_once options (request id 0). Not seen on screen (the display was locked during the check).
+  reject_once options (request id 0). Checked on screen: tool cards, mode menu (build/plan) and switch, slash
+  list, Resume after restart, Approval state with Allow once and Reject. OpenCode does not keep the mode
+  across `session/load` (comes back as `build`).
+- Mono text (`TypeScale::font_mono`, terminal) turns Geist Mono's `liga`/`calt` off: its ligatures drew `--`
+  over the preceding space (`git log--oneline`). The Files code viewer (gpui-component editor, theme font
+  family only) still uses them.
 - Gaps: no images or @-context in the composer, no
   keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so

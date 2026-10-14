@@ -24,7 +24,7 @@ use logs::{LogsEvent, LogsPane};
 use crate::device_pool::{DevicePool, DeviceStatus};
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent, InputResult};
 use crate::ui::components::{EmptyState, UiButton};
-use crate::ui::{ActiveTokens as _, FONT_MONO};
+use crate::ui::{ActiveTokens as _, TypeScale as _};
 pub use logs::LogsSettings;
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
 pub use platform::{
@@ -940,7 +940,7 @@ impl DevicePanel {
                 .py_1()
                 .gap_0p5()
                 .flex_shrink_0()
-                .font_family(FONT_MONO)
+                .font_mono()
                 .text_size(px(11.))
                 .child(
                     h_flex()
@@ -1208,7 +1208,7 @@ impl DevicePanel {
             div()
                 .min_w_0()
                 .truncate()
-                .font_family(FONT_MONO)
+                .font_mono()
                 .text_size(px(11.))
                 .text_color(if s.error { t.red } else { t.tx3 })
                 .child(s.text.clone())

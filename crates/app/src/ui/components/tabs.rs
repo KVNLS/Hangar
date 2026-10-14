@@ -5,7 +5,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::ui::{ActiveTokens as _, FONT_MONO, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT};
+use crate::ui::{ActiveTokens as _, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT, TypeScale as _};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabStyle {
@@ -110,7 +110,7 @@ impl RenderOnce for UiTab {
             .when_some(self.kbd, |this, kbd| {
                 this.child(
                     div()
-                        .font_family(FONT_MONO)
+                        .font_mono()
                         .text_size(px(10.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(t.tx3)

@@ -1,9 +1,17 @@
 //! Type scale. Geist for UI text, Geist Mono for code, paths, counts and shortcuts.
 
-use gpui_kit::{FontWeight, Styled, px};
+use std::sync::Arc;
+
+use gpui_kit::{FontFeatures, FontWeight, Styled, px};
 
 pub const FONT_UI: &str = "Geist";
 pub const FONT_MONO: &str = "Geist Mono";
+
+/// Geist Mono's programming ligatures draw `--`, `->`, `<=`… over the neighbouring cell, so
+/// `git log --oneline` reads `log--oneline`. Commands, paths and code show literal glyphs.
+pub fn mono_features() -> FontFeatures {
+    FontFeatures(Arc::new(vec![("liga".into(), 0), ("calt".into(), 0)]))
+}
 
 /// Type-scale helpers; colors stay with the caller (they come from the tokens).
 pub trait TypeScale: Styled + Sized {
@@ -43,18 +51,19 @@ pub trait TypeScale: Styled + Sized {
             .font_weight(FontWeight::SEMIBOLD)
     }
 
+    /// Geist Mono without ligatures.
+    fn font_mono(self) -> Self {
+        self.font_family(FONT_MONO).font_features(mono_features())
+    }
+
     /// 12 / 18 mono.
     fn type_mono(self) -> Self {
-        self.font_family(FONT_MONO)
-            .text_size(px(12.))
-            .line_height(px(18.))
+        self.font_mono().text_size(px(12.)).line_height(px(18.))
     }
 
     /// 11 / 16 mono.
     fn type_mono_small(self) -> Self {
-        self.font_family(FONT_MONO)
-            .text_size(px(11.))
-            .line_height(px(16.))
+        self.font_mono().text_size(px(11.)).line_height(px(16.))
     }
 }
 

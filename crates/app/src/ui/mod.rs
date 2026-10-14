@@ -8,7 +8,7 @@ pub mod theme;
 pub mod tokens;
 
 pub use metrics::*;
-pub use text::{FONT_MONO, FONT_UI, TypeScale};
+pub use text::{FONT_MONO, FONT_UI, TypeScale, mono_features};
 pub use tokens::{ActiveTokens, Tokens};
 
 use gpui_kit::App;

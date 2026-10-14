@@ -6,7 +6,7 @@ use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandSt
 
 use super::*;
 use crate::ui::components::StateGlyph;
-use crate::ui::{ActiveTokens as _, FONT_MONO, RADIUS_CARD, overlay_shadow};
+use crate::ui::{ActiveTokens as _, RADIUS_CARD, TypeScale as _, overlay_shadow};
 
 pub(super) struct Palette {
     state: Entity<CommandState>,
@@ -74,7 +74,7 @@ impl HangarApp {
                             .child(div().flex_1().min_w_0().truncate().child(name.clone()))
                             .child(
                                 div()
-                                    .font_family(FONT_MONO)
+                                    .font_mono()
                                     .text_size(px(11.))
                                     .text_color(t.tx3)
                                     .child(project.clone()),
@@ -156,7 +156,7 @@ impl HangarApp {
                     .items_center()
                     .border_t_1()
                     .border_color(t.line)
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(11.))
                     .text_color(t.tx3)
                     .child("↑↓ navigate")

@@ -14,7 +14,7 @@ use hangar_core::AgentState;
 
 use super::{ChatView, Item, Outcome};
 use crate::ui::components::{StateGlyph, UiButton};
-use crate::ui::{ActiveTokens as _, FONT_MONO, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TypeScale as _};
+use crate::ui::{ActiveTokens as _, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TypeScale as _};
 
 const MAX_WIDTH: Pixels = px(700.);
 const RADIUS: Pixels = px(6.);
@@ -277,7 +277,7 @@ impl ChatView {
                     .gap(SPACE_2)
                     .h(px(28.))
                     .px(px(10.))
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(12.))
                     .child(Icon::new(icon).with_size(px(12.)).text_color(t.tx3))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(verb))
@@ -740,7 +740,7 @@ fn tool_body(content: &[ToolContent], root: &std::path::Path, cx: &App) -> Optio
             .border_t_1()
             .border_color(t.line)
             .py(px(4.))
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.5))
             .line_height(px(18.))
             .overflow_hidden()

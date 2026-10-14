@@ -212,7 +212,10 @@ impl TerminalView {
         }
 
         let focus_handle = cx.focus_handle();
-        let font = font(options.font_family.clone());
+        let font = Font {
+            features: crate::ui::mono_features(),
+            ..font(options.font_family.clone())
+        };
         Self {
             session,
             focus_handle,
