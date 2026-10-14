@@ -6,7 +6,8 @@ mod logs;
 mod picker;
 mod platform;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -79,12 +80,29 @@ enum Connection {
     },
 }
 
+const BOOT_TICK: Duration = Duration::from_secs(1);
+
 /// An AVD being booted from the panel. Kept apart from [`Connection`]: the boot continues
 /// when the user looks at another device.
 struct Booting {
     key: DeviceKey,
     name: SharedString,
+    /// Latest stage reported by the boot thread.
+    stage: Arc<Mutex<String>>,
+    started: Instant,
     _task: Task<()>,
+    _tick: Task<()>,
+}
+
+impl Booting {
+    fn status(&self) -> String {
+        let stage = self.stage.lock().map(|s| s.clone()).unwrap_or_default();
+        format!(
+            "{}: {stage}… {} s",
+            self.name,
+            self.started.elapsed().as_secs()
+        )
+    }
 }
 
 /// Last input outcome shown under the controls.
@@ -101,8 +119,6 @@ pub struct DevicePanel {
     input_status: Option<InputStatus>,
     booting: Option<Booting>,
     boot_error: Option<(DeviceKey, SharedString)>,
-    /// A device booted from the panel, to select once the next listing shows it.
-    select_after_list: Option<DeviceKey>,
     shutting_down: bool,
     stats: bool,
     logs_settings: LogsSettings,
@@ -140,7 +156,6 @@ impl DevicePanel {
             input_status: None,
             booting: None,
             boot_error: None,
-            select_after_list: None,
             shutting_down: false,
             stats: stats_forced(),
             logs_settings: LogsSettings::default(),
@@ -204,11 +219,6 @@ impl DevicePanel {
             cx.emit(DevicePanelEvent::Selected(self.picker.selected().cloned()));
         }
         self.apply(effect, window, cx);
-        if let Some(key) = self.select_after_list.take()
-            && self.picker.entry_by_value(&key.value()).is_some()
-        {
-            self.select_device(key, window, cx);
-        }
         cx.notify();
     }
 
@@ -256,9 +266,15 @@ impl DevicePanel {
         self.boot_error = None;
         let name: SharedString = entry.info.name.clone().into();
         let platform = key.platform;
-        let task = cx
-            .background_executor()
-            .spawn(async move { platform.boot(&entry.info) });
+        let stage = Arc::new(Mutex::new("booting".to_owned()));
+        let reported = stage.clone();
+        let task = cx.background_executor().spawn(async move {
+            platform.boot(&entry.info, &|s| {
+                if let Ok(mut stage) = reported.lock() {
+                    *stage = s;
+                }
+            })
+        });
         let task_key = key.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -266,10 +282,22 @@ impl DevicePanel {
                 this.on_booted(task_key, result, window, cx)
             });
         });
+        // Redraws the stage and elapsed time; dropped with `Booting` when the boot ends.
+        let tick = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BOOT_TICK).await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        });
         self.booting = Some(Booting {
             key,
             name,
+            stage,
+            started: Instant::now(),
             _task: task,
+            _tick: tick,
         });
         cx.notify();
     }
@@ -283,14 +311,9 @@ impl DevicePanel {
     ) {
         self.booting = None;
         match result {
+            // The booted device keeps its key, so the listing below opens it if it is selected.
             Ok(info) => {
                 tracing::info!(device = %info.udid, name = %info.name, "device booted");
-                if self.picker.selected() == Some(&key) {
-                    self.select_after_list = Some(DeviceKey {
-                        platform: key.platform,
-                        id: info.udid,
-                    });
-                }
             }
             Err(err) => {
                 tracing::error!(device = %key.id, "failed to boot device: {err:#}");
@@ -691,7 +714,7 @@ impl DevicePanel {
             return Some(
                 centered()
                     .text_color(theme.muted_foreground)
-                    .child(format!("Booting {}… this can take a minute.", booting.name))
+                    .child(booting.status())
                     .into_any_element(),
             );
         }

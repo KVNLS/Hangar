@@ -411,7 +411,7 @@ impl Device for GrpcEmulator {
         if alive {
             return Ok(());
         }
-        let running = emulator::boot(&self.sdk, &self.avd_id, &self.boot_options)?;
+        let running = emulator::boot(&self.sdk, &self.avd_id, &self.boot_options, &|_| {})?;
         let rt = self
             .rt
             .as_ref()

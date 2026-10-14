@@ -118,9 +118,12 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
 - Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
-- Devices: device panel controls, logs pane and Rotate never checked visually (no screen capture in agent
-  sessions); Android Lock/Volume not run live; picker key for running emulators is the adb serial (changes
-  per boot); no boot progress; logs pane fixed height, no horizontal scroll.
+- Devices: device panel controls, logs pane, Rotate and the boot stage text never checked visually (no
+  screen capture in agent sessions); logs pane fixed height, no horizontal scroll. Android run live through
+  the dev hooks (2026-10-05, Pixel_10_Pro, gRPC): boot from the panel then auto-open, saved AVD selection
+  reopened on relaunch, tap, text, Lock (screen asleep), shutdown. Volume Up twice raised music volume by one
+  step only. A gRPC tap into a text field opened Gboard's "Try out your stylus" sheet, which got the typed text
+  (gRPC touches may be seen as a stylus).
 
 ## Next
 - Manual pass over the device panel (both platforms), then M6 mobile run loop.
