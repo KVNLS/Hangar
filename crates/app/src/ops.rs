@@ -12,7 +12,7 @@ use hangar_core::{
 };
 use hangar_terminal::ExitInfo;
 
-use crate::agents;
+use crate::agents::{self, AgentExtras};
 use crate::paths::{BRANCH_PREFIX, branch_name, unique_slug, worktree_path};
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
 use crate::ui::theme::Appearance;
@@ -257,15 +257,40 @@ pub fn start_session(
     path_env: Option<&str>,
     on_update: UpdateHook,
 ) -> anyhow::Result<StartedSession> {
+    start_session_with(
+        store,
+        adapter,
+        workspace,
+        path_env,
+        on_update,
+        &AgentExtras::default(),
+    )
+}
+
+/// [`start_session`] with `extra` arguments and environment (appended after the adapter's,
+/// winning on conflicts) and files written first (0600, missing directories 0700). Files inside
+/// the worktree are refused.
+pub fn start_session_with(
+    store: &Store,
+    adapter: &PtyAdapter,
+    workspace: &Workspace,
+    path_env: Option<&str>,
+    on_update: UpdateHook,
+    extra: &AgentExtras,
+) -> anyhow::Result<StartedSession> {
     let mut ctx = SpawnContext::new(&workspace.worktree_path);
     if let Some(path) = path_env {
         ctx.env.push(("PATH".to_owned(), path.to_owned()));
     }
+    ctx.env.extend(extra.env.iter().cloned());
+    ctx.extra_args.extend(extra.args.iter().cloned());
     ctx.on_update = Some(on_update);
 
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
-    session.args = adapter.args.clone();
-    match adapter.spawn(&ctx) {
+    session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
+    let spawned = write_private_files(&workspace.worktree_path, &extra.files)
+        .and_then(|()| adapter.spawn(&ctx).map_err(anyhow::Error::new));
+    match spawned {
         Ok(handle) => {
             session.command = handle.program().display().to_string();
             session.status = SessionStatus::Running;
@@ -284,8 +309,7 @@ pub fn start_session(
                 message: err.to_string(),
             };
             session.ended_at = Some(Timestamp::now());
-            let err = anyhow::Error::new(err)
-                .context(format!("failed to start {}", adapter.display_name));
+            let err = err.context(format!("failed to start {}", adapter.display_name));
             match store.insert_session(&session) {
                 Ok(()) => Err(err),
                 Err(record) => {
@@ -294,6 +318,39 @@ pub fn start_session(
             }
         }
     }
+}
+
+/// Writes each file with mode 0600, creating missing directories with mode 0700.
+fn write_private_files(worktree: &Path, files: &[(PathBuf, String)]) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    for (path, contents) in files {
+        if !path.is_absolute() || path.starts_with(worktree) {
+            return Err(anyhow!(
+                "refusing to write {} (agent files must be absolute and outside the worktree)",
+                path.display()
+            ));
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)
+                .with_context(|| format!("cannot create {}", dir.display()))?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("cannot write {}", path.display()))?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("cannot restrict {}", path.display()))?;
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    Ok(())
 }
 
 pub fn finish_session(
@@ -652,6 +709,69 @@ mod tests {
         let sessions = store.list_sessions(ws.id).unwrap();
         assert_eq!(sessions.len(), 1);
         assert!(matches!(sessions[0].status, SessionStatus::Failed { .. }));
+    }
+
+    #[test]
+    fn session_extras_write_files_and_reach_the_agent() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let repo = repo();
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let project = add_project(&store, repo.path()).unwrap();
+        let ws = create_workspace(&store, &project, "extras", root.path()).unwrap();
+
+        let config = data.path().join("mcp/ws.json");
+        let out = data.path().join("out.txt");
+        let adapter = hangar_agents::PtyAdapter::new("sh", "sh", "/bin/sh").with_args([
+            "-c",
+            r#"printf '%s|%s|%s' "$HANGAR_X" "$1" "$(cat "$CONFIG")" > "$OUT""#,
+            "sh",
+        ]);
+        let extra = AgentExtras {
+            args: vec!["--flag".into()],
+            env: vec![
+                ("HANGAR_X".into(), "x1".into()),
+                ("CONFIG".into(), config.display().to_string()),
+                ("OUT".into(), out.display().to_string()),
+            ],
+            files: vec![(config.clone(), "{}".into())],
+        };
+        let started =
+            start_session_with(&store, &adapter, &ws, None, Arc::new(|| {}), &extra).unwrap();
+        let exit = started
+            .handle
+            .session()
+            .wait_for_exit(Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(exit_status(&exit), SessionStatus::Exited { code: 0 });
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "x1|--flag|{}");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&config), 0o600);
+        assert_eq!(mode(config.parent().unwrap()), 0o700);
+        assert_eq!(
+            started.session.args.last().map(String::as_str),
+            Some("--flag")
+        );
+
+        let inside = AgentExtras {
+            files: vec![(ws.worktree_path.join(".mcp.json"), "{}".into())],
+            ..AgentExtras::default()
+        };
+        let err = start_session_with(&store, &adapter, &ws, None, Arc::new(|| {}), &inside)
+            .err()
+            .unwrap();
+        assert!(
+            format!("{err:#}").contains("outside the worktree"),
+            "{err:#}"
+        );
+        assert!(!ws.worktree_path.join(".mcp.json").exists());
+        let sessions = store.list_sessions(ws.id).unwrap();
+        assert!(
+            sessions
+                .iter()
+                .any(|s| matches!(s.status, SessionStatus::Failed { .. }))
+        );
     }
 
     #[test]
