@@ -1,6 +1,7 @@
 //! Blocking operations on the store, Git and agents. Every function here does disk or process
 //! I/O: call them from a background executor, never from the UI thread.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -39,6 +40,8 @@ pub const APPEARANCE_SETTING: &str = "appearance";
 /// Everything the window needs at startup.
 pub struct Loaded {
     pub entries: Vec<ProjectEntry>,
+    /// Structured conversations workspaces can resume.
+    pub chats: HashMap<WorkspaceId, SavedChat>,
     pub layout: Option<PaneLayout>,
     pub agent: Option<String>,
     pub changes: Option<ChangesLayout>,
@@ -48,14 +51,36 @@ pub struct Loaded {
     pub settings_error: Option<anyhow::Error>,
 }
 
+/// The ACP conversation a workspace can resume, saved under [`chat_key`].
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SavedChat {
+    /// The preset that ran it; only that preset resumes it.
+    pub agent: String,
+    pub session: String,
+}
+
+pub fn chat_key(id: WorkspaceId) -> String {
+    format!("chat:{id}")
+}
+
 /// Loads every project with its workspaces (active and archived) and the saved settings.
 /// Sessions left `Starting`/`Running` by a previous run are marked failed: their processes
 /// ended with that run.
 pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     let mut entries = Vec::new();
+    let mut chats = HashMap::new();
     for project in store.list_projects()? {
         let workspaces = store.list_workspaces(project.id)?;
         for ws in &workspaces {
+            match store.get_setting::<SavedChat>(&chat_key(ws.id)) {
+                Ok(Some(chat)) => {
+                    chats.insert(ws.id, chat);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(workspace = %ws.id, %err, "saved conversation unreadable")
+                }
+            }
             for session in store.list_sessions(ws.id)? {
                 if !session.status.is_terminal() {
                     store.update_session_status(
@@ -106,6 +131,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     };
     Ok(Loaded {
         entries,
+        chats,
         layout,
         agent,
         changes,
@@ -323,6 +349,7 @@ pub fn start_acp_session(
     path_env: Option<&str>,
     on_update: UpdateHook,
     extra: &AgentExtras,
+    resume: Option<&str>,
 ) -> anyhow::Result<StartedAcpSession> {
     let mut ctx = SpawnContext::new(&workspace.worktree_path);
     if let Some(path) = path_env {
@@ -337,7 +364,7 @@ pub fn start_acp_session(
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
         .and_then(|()| {
             adapter
-                .start(&ctx, &extra.mcp_servers)
+                .start(&ctx, &extra.mcp_servers, resume)
                 .map_err(anyhow::Error::new)
         })
         .map(|(acp, events)| {
@@ -770,6 +797,22 @@ mod tests {
         let row = store.get_session(started.session.id).unwrap();
         assert!(matches!(row.status, SessionStatus::Failed { .. }));
         assert!(row.ended_at.is_some());
+    }
+
+    #[test]
+    fn saved_conversations_load_per_workspace() {
+        let repo = repo();
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let project = add_project(&store, repo.path()).unwrap();
+        let ws = create_workspace(&store, &project, "chat", root.path()).unwrap();
+        let chat = SavedChat {
+            agent: "claude-acp".into(),
+            session: "s-1".into(),
+        };
+        store.set_setting(&chat_key(ws.id), &chat).unwrap();
+        let loaded = load(&store).unwrap();
+        assert_eq!(loaded.chats.get(&ws.id), Some(&chat));
     }
 
     #[test]

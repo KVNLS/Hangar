@@ -66,7 +66,7 @@ impl HangarApp {
                             }
                             this.panes.show(id);
                             this.panes_changed(window, cx);
-                            Some((id, this.start_session(id, agent_id, window, cx)))
+                            Some((id, this.start_session(id, agent_id, false, window, cx)))
                         }
                         Err(err) => {
                             this.report(&err, window, cx);
@@ -82,12 +82,14 @@ impl HangarApp {
         })
     }
 
-    /// Spawns the agent off the main thread and attaches a terminal view to it. Resolves to
-    /// whether it started.
+    /// Spawns the agent off the main thread and attaches a terminal (or chat) view to it. With
+    /// `resume`, a structured agent continues the workspace's saved conversation when it ran
+    /// with the same preset. Resolves to whether it started.
     pub(super) fn start_session(
         &mut self,
         workspace_id: WorkspaceId,
         agent_id: String,
+        resume: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
@@ -123,6 +125,9 @@ impl HangarApp {
         let waker = TerminalWaker::new();
         let hook = waker.hook();
         let agent_name: SharedString = adapter.display_name().to_owned().into();
+        let resume_id = resume
+            .then(|| self.resumable_chat(workspace_id, &agent_id))
+            .flatten();
 
         cx.spawn_in(window, async move |this, cx| {
             let started = cx
@@ -145,6 +150,7 @@ impl HangarApp {
                             path.as_deref(),
                             hook,
                             &extras,
+                            resume_id.as_deref(),
                         )
                         .map(Started::Chat),
                     }
@@ -237,6 +243,14 @@ impl HangarApp {
             acp.kill();
             return;
         }
+        let chat = ops::SavedChat {
+            agent: acp.agent_id().to_owned(),
+            session: acp.session_id().to_owned(),
+        };
+        self.saved_chats.insert(workspace_id, chat.clone());
+        self.persist(window, cx, move |store| {
+            Ok(store.set_setting(&ops::chat_key(workspace_id), &chat)?)
+        });
         let root = self
             .projects
             .workspace(workspace_id)
@@ -247,6 +261,15 @@ impl HangarApp {
             let name = agent_name.clone();
             cx.new(|cx| ChatView::new(acp, events, waker, name, root, window, cx))
         };
+        if acp.resumed() {
+            view.update(cx, |chat, _| {
+                chat.add_notice(false, "Resumed the previous conversation")
+            });
+        } else if let Some(reason) = acp.resume_error() {
+            let text =
+                format!("Could not resume the previous conversation ({reason}); this is a new one");
+            view.update(cx, |chat, _| chat.add_notice(true, text));
+        }
         let exit = cx.subscribe_in(
             &view,
             window,
@@ -269,6 +292,27 @@ impl HangarApp {
             _exit: exit,
         };
         self.insert_live_session(workspace_id, live, window, cx);
+    }
+
+    /// The saved conversation of `workspace_id` if `agent_id` ran it.
+    pub(super) fn resumable_chat(
+        &self,
+        workspace_id: WorkspaceId,
+        agent_id: &str,
+    ) -> Option<String> {
+        self.saved_chats
+            .get(&workspace_id)
+            .filter(|chat| chat.agent == agent_id)
+            .map(|chat| chat.session.clone())
+    }
+
+    fn forget_chat(&mut self, workspace_id: WorkspaceId) {
+        self.saved_chats.remove(&workspace_id);
+        if let Some(store) = &self.store
+            && let Err(err) = store.delete_setting(&ops::chat_key(workspace_id))
+        {
+            tracing::warn!(%err, "failed to forget the saved conversation");
+        }
     }
 
     /// Shows `path` (absolute, inside the workspace's worktree) in the Files tab.
@@ -577,6 +621,7 @@ impl HangarApp {
                         );
                         this.projects.remove_workspace(workspace_id);
                         this.forget_run_config(workspace_id);
+                        this.forget_chat(workspace_id);
                         let device = this
                             .device_pool
                             .update(cx, |pool, cx| pool.delete(workspace_id, cx));

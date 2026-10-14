@@ -46,6 +46,12 @@ pub fn new_session_params(cwd: &str, mcp_servers: &[McpServer]) -> Value {
     json!({ "cwd": cwd, "mcpServers": servers })
 }
 
+/// `session/load` params: the session to resume, replayed as `session/update`s before the answer.
+pub fn load_session_params(session_id: &str, cwd: &str, mcp_servers: &[McpServer]) -> Value {
+    let servers: Vec<Value> = mcp_servers.iter().map(McpServer::to_json).collect();
+    json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": servers })
+}
+
 pub fn prompt_params(session_id: &str, text: &str) -> Value {
     json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] })
 }

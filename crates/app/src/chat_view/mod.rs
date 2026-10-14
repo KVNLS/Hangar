@@ -328,6 +328,11 @@ impl ChatView {
         cx.notify();
     }
 
+    /// Adds a one-line note to the transcript (resumed, could not resume, …).
+    pub fn add_notice(&mut self, error: bool, text: impl Into<SharedString>) {
+        self.notice(error, text);
+    }
+
     fn notice(&mut self, error: bool, text: impl Into<SharedString>) {
         self.items.push(Item::Notice {
             error,

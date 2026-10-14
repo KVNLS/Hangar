@@ -281,6 +281,8 @@ pub struct HangarApp {
     agent: SharedString,
     agent_chosen_by_user: bool,
     sessions: HashMap<WorkspaceId, LiveSession>,
+    /// Structured conversations each workspace can resume (saved in settings).
+    saved_chats: HashMap<WorkspaceId, ops::SavedChat>,
     /// Build and dev-server tabs per workspace (⌘R).
     runs: HashMap<WorkspaceId, run::WorkspaceRun>,
     /// The tab each workspace's pane shows (agent, dev server or build).
@@ -473,6 +475,7 @@ impl HangarApp {
             agent,
             agent_chosen_by_user: false,
             sessions: HashMap::new(),
+            saved_chats: HashMap::new(),
             runs: HashMap::new(),
             pane_tabs: HashMap::new(),
             panes: Panes::default(),
@@ -561,6 +564,7 @@ impl HangarApp {
             Ok((store, loaded)) => {
                 self.store = Some(store.clone());
                 self.projects = ProjectList::new(loaded.entries);
+                self.saved_chats = loaded.chats;
                 let workspaces: Vec<WorkspaceRef> = self
                     .projects
                     .entries()

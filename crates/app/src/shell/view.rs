@@ -231,19 +231,36 @@ impl HangarApp {
             let can_start =
                 !self.busy.contains(&ws.id) && live.is_none_or(|l| l.session.status.is_terminal());
             let ws_id = ws.id;
-            let label = if live.is_some() { "Restart" } else { "Start" };
+            let resumable = self.resumable_chat(ws_id, &self.agent).is_some();
+            let label = match (resumable, live.is_some()) {
+                (true, _) => "Resume",
+                (false, true) => "Restart",
+                (false, false) => "Start",
+            };
             can_start.then(|| {
-                UiButton::new(("start", pane))
-                    .icon(Lucide::Play)
-                    .label(format!("{label} {}", self.agent_display_name()))
-                    .ghost()
-                    .small()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        let agent = this.agent.to_string();
-                        this.panes.show(ws_id);
-                        this.panes_changed(window, cx);
-                        this.start_session(ws_id, agent, window, cx).detach();
-                    }))
+                h_flex()
+                    .gap_1()
+                    .child(
+                        UiButton::new(("start", pane))
+                            .icon(Lucide::Play)
+                            .label(format!("{label} {}", self.agent_display_name()))
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_agent_in(ws_id, true, window, cx)
+                            })),
+                    )
+                    .when(resumable, |row| {
+                        row.child(
+                            UiButton::new(("start-new", pane))
+                                .label("New conversation")
+                                .ghost()
+                                .small()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.start_agent_in(ws_id, false, window, cx)
+                                })),
+                        )
+                    })
             })
         });
         let status = live
@@ -437,6 +454,21 @@ impl HangarApp {
                 .child(handle)
                 .into_any_element(),
         )
+    }
+
+    /// Starts the selected agent in `ws_id` from the pane header and shows it.
+    fn start_agent_in(
+        &mut self,
+        ws_id: WorkspaceId,
+        resume: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let agent = self.agent.to_string();
+        self.panes.show(ws_id);
+        self.panes_changed(window, cx);
+        self.start_session(ws_id, agent, resume, window, cx)
+            .detach();
     }
 
     pub(super) fn agent_display_name(&self) -> String {

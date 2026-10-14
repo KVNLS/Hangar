@@ -62,13 +62,17 @@ impl AcpAdapter {
         find_program(&self.program, std::env::var_os("PATH").as_deref()).is_some()
     }
 
-    /// Spawns the agent, then runs `initialize` and `session/new` for `ctx.cwd`. Blocks for the
+    /// Spawns the agent, then runs `initialize` and opens a session for `ctx.cwd`: `resume` (a
+    /// session id from an earlier [`AcpSession::session_id`]) is loaded with `session/load` when
+    /// the agent supports it, its history arriving as updates; otherwise, or when loading fails,
+    /// a new session is created and [`AcpSession::resume_error`] says why. Blocks for the
     /// handshake (up to a few minutes), so call it off the UI thread. `ctx.size` is unused;
     /// `ctx.on_update` runs after every event sent to the returned receiver.
     pub fn start(
         &self,
         ctx: &SpawnContext,
         mcp_servers: &[McpServer],
+        resume: Option<&str>,
     ) -> Result<(AcpSession, Receiver<AcpEvent>)> {
         if !ctx.cwd.is_dir() {
             return Err(Error::InvalidCwd(ctx.cwd.clone()));
@@ -128,11 +132,13 @@ impl AcpAdapter {
             info: AgentInfo::default(),
             current_mode: None,
             modes: Vec::new(),
+            resumed: false,
+            resume_error: None,
             conn,
             exited,
             tail,
         };
-        match session.handshake(&ctx.cwd, mcp_servers) {
+        match session.handshake(&ctx.cwd, mcp_servers, resume) {
             Ok(()) => Ok((session, events)),
             Err(e) => {
                 session.kill();
@@ -151,13 +157,20 @@ pub struct AcpSession {
     info: AgentInfo,
     current_mode: Option<String>,
     modes: Vec<SessionMode>,
+    resumed: bool,
+    resume_error: Option<String>,
     conn: AcpConnection<ChildStdin>,
     exited: Arc<AtomicBool>,
     tail: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl AcpSession {
-    fn handshake(&mut self, cwd: &Path, mcp_servers: &[McpServer]) -> Result<()> {
+    fn handshake(
+        &mut self,
+        cwd: &Path,
+        mcp_servers: &[McpServer],
+        resume: Option<&str>,
+    ) -> Result<()> {
         let result = self.conn.request(
             "initialize",
             protocol::initialize_params(),
@@ -173,6 +186,26 @@ impl AcpSession {
         let cwd = cwd.to_str().ok_or_else(|| {
             Error::Protocol(format!("working directory is not UTF-8: {}", cwd.display()))
         })?;
+        if let Some(id) = resume {
+            if !self.info.load_session {
+                self.resume_error = Some("the agent cannot resume sessions".to_owned());
+            } else {
+                match self.conn.request(
+                    "session/load",
+                    protocol::load_session_params(id, cwd, mcp_servers),
+                    NEW_SESSION_TIMEOUT,
+                ) {
+                    Ok(result) => {
+                        self.session_id = id.to_owned();
+                        self.resumed = true;
+                        (self.current_mode, self.modes) = protocol::parse_modes(&result);
+                        return Ok(());
+                    }
+                    Err(e @ Error::Rpc { .. }) => self.resume_error = Some(e.to_string()),
+                    Err(e) => return Err(e),
+                }
+            }
+        }
         let result = self.conn.request(
             "session/new",
             protocol::new_session_params(cwd, mcp_servers),
@@ -261,9 +294,14 @@ impl AcpSession {
         self.conn.answer_permission(request, option_id)
     }
 
-    /// Resuming a session after a restart (`session/load`) is not implemented.
-    pub fn load(&self, _session_id: &str) -> Result<()> {
-        Err(Error::Unsupported("resuming an ACP session (session/load)"))
+    /// Whether the session was resumed (`session/load`) rather than created.
+    pub fn resumed(&self) -> bool {
+        self.resumed
+    }
+
+    /// Why a requested resume did not happen (a new session was created instead).
+    pub fn resume_error(&self) -> Option<&str> {
+        self.resume_error.as_deref()
     }
 
     pub fn has_exited(&self) -> bool {
@@ -365,10 +403,52 @@ mod tests {
     }
 
     #[test]
+    fn resume_loads_or_falls_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Loads: initialize (1), session/load (2) with one replayed update before the answer.
+        let script = r#"
+            read l; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}'
+            read l; case "$l" in *session/load*) ;; *) exit 9;; esac
+            echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"old","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"}}}}'
+            echo '{"jsonrpc":"2.0","id":2,"result":{}}'
+            read l
+        "#;
+        let (session, events) = sh(script)
+            .start(&SpawnContext::new(dir.path()), &[], Some("old"))
+            .expect("resumes");
+        assert!(session.resumed());
+        assert_eq!(session.session_id(), "old");
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(5)),
+            Ok(AcpEvent::Update(protocol::SessionUpdate::UserMessage(_)))
+        ));
+        session.kill();
+
+        // Load refused: a new session is created and the reason kept.
+        let script = r#"
+            read l; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}'
+            read l; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32002,"message":"Session not found"}}'
+            read l; echo '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"new"}}'
+            read l
+        "#;
+        let (session, _events) = sh(script)
+            .start(&SpawnContext::new(dir.path()), &[], Some("gone"))
+            .expect("falls back");
+        assert!(!session.resumed());
+        assert_eq!(session.session_id(), "new");
+        assert!(
+            session
+                .resume_error()
+                .is_some_and(|e| e.contains("Session not found"))
+        );
+        session.kill();
+    }
+
+    #[test]
     fn exit_during_handshake_reports_stderr() {
         let dir = tempfile::tempdir().expect("tempdir");
         let err = sh("echo 'node: not found' >&2; exit 3")
-            .start(&SpawnContext::new(dir.path()), &[])
+            .start(&SpawnContext::new(dir.path()), &[], None)
             .expect_err("fails");
         match err {
             Error::AgentExited { stderr_tail, .. } => {
@@ -390,7 +470,7 @@ mod tests {
             read l
         "#;
         let (session, events) = sh(script)
-            .start(&SpawnContext::new(dir.path()), &[])
+            .start(&SpawnContext::new(dir.path()), &[], None)
             .expect("starts");
         assert_eq!(session.session_id(), "s-1");
         assert!(session.info().load_session);
@@ -404,6 +484,5 @@ mod tests {
         assert!(matches!(wait(rx), AcpEvent::Exited { .. }));
         assert!(session.wait_for_exit(Duration::from_secs(1)));
         assert!(matches!(session.set_mode("plan"), Err(Error::Protocol(_))));
-        assert!(matches!(session.load("s-1"), Err(Error::Unsupported(_))));
     }
 }
