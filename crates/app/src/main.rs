@@ -21,6 +21,18 @@
 //!
 //! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run; a
 //! worktree-relative path instead of `1` also selects that file once it shows up.
+//!
+//! Review hooks run right after `HANGAR_DEV_OPEN` (before archive/restore/delete), on the
+//! workspace shown in the changes panel, through the panel's own operations; outcomes are
+//! logged (`HANGAR_DEV_* ...` lines):
+//! - `HANGAR_DEV_COMMIT=<message>` — stage everything (retrying up to ~15 s until the agent's
+//!   files show up), then commit.
+//! - `HANGAR_DEV_PUSH=1` — push the branch (sets the upstream on the first push).
+//! - `HANGAR_DEV_PR=<title>` — open a draft pull request through `gh` (`1` = default title).
+//! - `HANGAR_DEV_MERGE=noff|squash` — merge into the base branch with the default message.
+//!
+//! `HANGAR_GH=<program>` runs that `gh` instead of the one on the login PATH. Point it at a
+//! fake script when testing: the real `gh` acts on the user's GitHub account.
 
 use gpui_kit::*;
 use hangar_app::shell::{DevOptions, HangarApp};

@@ -45,7 +45,9 @@ pub fn create(repo: &Path, options: &CreateOptions) -> Result<Worktree> {
             options.branch.clone().into(),
         ]);
     } else {
+        // `--no-track`: a branch started from `origin/main` must not track (and push to) it.
         args.extend([
+            "--no-track".into(),
             "-b".into(),
             options.branch.clone().into(),
             "--".into(),

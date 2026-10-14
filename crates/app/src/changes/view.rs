@@ -1,18 +1,24 @@
 //! The changes panel: summary, grouped file list and a virtualized unified diff of the
 //! selected file.
 
+mod actions;
+
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::TextareaState;
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, Theme, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, Theme, h_flex,
+    v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_worktree::{FileDiff, FileStatus, LineKind};
+use hangar_worktree::{ChangedPath, FileDiff, FileStatus, Gh, LineKind};
 
 use super::highlight::{RowStyles, highlight_rows};
 use super::language::language_for_path;
@@ -21,6 +27,8 @@ use super::model::{
     DiffRow, DisplayLine, ListEntry, file_list, file_title, flatten, hunk_header, list_paths,
     reselect, short_sha, status_letter, widest_row,
 };
+use super::review::{ReviewInfo, ReviewTarget, StageState};
+pub use actions::Busy;
 
 const LIST_ROW_HEIGHT: f32 = 22.;
 const DIFF_ROW_HEIGHT: f32 = 18.;
@@ -32,11 +40,26 @@ pub enum ChangesEvent {
     Close,
 }
 
+/// What the panel shows: a workspace's live diff and where review actions apply.
+pub struct PanelSource {
+    pub workspace: WorkspaceId,
+    pub name: SharedString,
+    pub diff: Entity<WorkspaceDiff>,
+    pub target: ReviewTarget,
+}
+
 struct Source {
     workspace: WorkspaceId,
     name: SharedString,
     diff: Entity<WorkspaceDiff>,
+    target: ReviewTarget,
     _observe: Subscription,
+}
+
+/// One commit message box per workspace, so drafts survive switching panes.
+struct CommitBox {
+    input: Entity<TextareaState>,
+    _change: Subscription,
 }
 
 /// The diff on screen. Rows and styles always belong to `file`.
@@ -61,6 +84,16 @@ pub struct ChangesPanel {
     highlight: Option<Task<()>>,
     list_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
+    /// Worktree status of each listed path that is not only committed.
+    stage: HashMap<PathBuf, ChangedPath>,
+    staged: usize,
+    uncommitted: usize,
+    /// `None` until the login PATH is known: never run a `gh` found on another PATH.
+    gh: Option<Gh>,
+    info: HashMap<WorkspaceId, ReviewInfo>,
+    info_tasks: HashMap<WorkspaceId, Task<()>>,
+    busy: HashMap<WorkspaceId, Busy>,
+    commit_boxes: HashMap<WorkspaceId, CommitBox>,
     _theme: Subscription,
 }
 
@@ -86,6 +119,14 @@ impl ChangesPanel {
             highlight: None,
             list_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
+            stage: HashMap::new(),
+            staged: 0,
+            uncommitted: 0,
+            gh: None,
+            info: HashMap::new(),
+            info_tasks: HashMap::new(),
+            busy: HashMap::new(),
+            commit_boxes: HashMap::new(),
             _theme: theme,
         }
     }
@@ -99,12 +140,14 @@ impl ChangesPanel {
     }
 
     /// Shows the changes of another workspace (or none).
-    pub fn set_source(
-        &mut self,
-        source: Option<(WorkspaceId, SharedString, Entity<WorkspaceDiff>)>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some((workspace, name, diff)) = source else {
+    pub fn set_source(&mut self, source: Option<PanelSource>, cx: &mut Context<Self>) {
+        let Some(PanelSource {
+            workspace,
+            name,
+            diff,
+            target,
+        }) = source
+        else {
             if self.source.take().is_some() {
                 self.clear();
                 cx.notify();
@@ -116,6 +159,7 @@ impl ChangesPanel {
             && current.diff == diff
         {
             current.name = name;
+            current.target = target;
             return;
         }
         self.clear();
@@ -124,13 +168,18 @@ impl ChangesPanel {
             workspace,
             name,
             diff,
+            target,
             _observe: observe,
         });
         self.sync(cx);
+        self.reload_info(cx);
     }
 
     fn clear(&mut self) {
         self.list = Arc::default();
+        self.stage.clear();
+        self.staged = 0;
+        self.uncommitted = 0;
         self.paths.clear();
         self.selected = None;
         self.shown = None;
@@ -143,7 +192,25 @@ impl ChangesPanel {
         let Some(source) = &self.source else {
             return;
         };
-        let list = file_list(source.diff.read(cx).files());
+        let diff = source.diff.read(cx);
+        let list = file_list(diff.files());
+        match diff.summary() {
+            Some(summary) => {
+                self.stage = summary
+                    .status
+                    .changes
+                    .iter()
+                    .map(|c| (c.path.clone(), c.clone()))
+                    .collect();
+                self.staged = summary.status.staged;
+                self.uncommitted = summary.status.changes.len();
+            }
+            None => {
+                self.stage.clear();
+                self.staged = 0;
+                self.uncommitted = 0;
+            }
+        }
         let preferred = self.preferred.take_if(|p| list_paths(&list).contains(p));
         let selected = preferred.or_else(|| reselect(&self.paths, &list, self.selected.as_deref()));
         self.paths = list_paths(&list);
@@ -404,10 +471,37 @@ impl ChangesPanel {
                 let selected = self.selected.as_deref() == Some(file.path.as_path());
                 let (dir, name) = split_path(&file.path);
                 let path = file.path.clone();
+                let change = self.stage.get(&file.path).cloned();
+                let state = StageState::of(change.as_ref());
+                let busy = self.current_busy().is_some();
+                let toggle = change.map(|change| {
+                    let tooltip = match state {
+                        StageState::Staged => "Staged: click to unstage",
+                        StageState::Partial => "Partly staged: click to stage the rest",
+                        _ => "Click to stage",
+                    };
+                    Checkbox::new(("stage", ix))
+                        .checked(state.checked())
+                        .disabled(busy)
+                        .tooltip(tooltip)
+                        .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                            this.toggle_stage(&change, *checked, window, cx);
+                        }))
+                        .into_any_element()
+                });
                 row.cursor_pointer()
                     .when(selected, |this| this.bg(theme.list_active))
                     .when(!selected, |this| this.hover(|s| s.bg(theme.list_hover)))
                     .on_click(cx.listener(move |this, _, _, cx| this.select(path.clone(), cx)))
+                    .child(
+                        div()
+                            .w_4()
+                            .flex_shrink_0()
+                            .when(state == StageState::Partial, |this| {
+                                this.text_color(theme.warning)
+                            })
+                            .children(toggle),
+                    )
                     .child(
                         div()
                             .w_3()
@@ -509,8 +603,12 @@ impl ChangesPanel {
 }
 
 impl Render for ChangesPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = self.render_header(cx);
+        let review = self
+            .source
+            .is_some()
+            .then(|| self.render_review(window, cx));
         let body = match &self.source {
             None => div()
                 .flex_1()
@@ -527,6 +625,7 @@ impl Render for ChangesPanel {
                     .flex_1()
                     .min_h_0()
                     .child(summary)
+                    .children(review)
                     .when(empty, |this| {
                         this.child(
                             div()
