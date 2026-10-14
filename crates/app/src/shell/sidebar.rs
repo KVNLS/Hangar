@@ -173,10 +173,16 @@ impl HangarApp {
             )
             .children(row.mark.map(AgentMark::new))
             .child(trailing)
-            .when(!archived && !busy, |this| {
-                this.cursor_pointer().on_click(
-                    cx.listener(move |this, _, window, cx| this.select_workspace(id, window, cx)),
-                )
+            .when(!busy, |this| {
+                this.cursor_pointer()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if archived {
+                            // Opening an archived workspace restores it (no agent starts).
+                            this.restore_workspace(id, window, cx).detach();
+                        } else {
+                            this.select_workspace(id, window, cx);
+                        }
+                    }))
             });
         if busy {
             element.into_any_element()
