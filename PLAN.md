@@ -198,6 +198,13 @@ Git access is the `git` CLI with porcelain output, not a library.
   as updates before answering, so the transcript comes back) next to "New conversation". A refused load
   (e.g. -32002 unknown session) starts a new session and says so in the transcript. Checked against
   claude-agent-acp at the protocol level (history replayed, unknown id refused); not yet clicked in the app.
+- Preset "OpenCode (structured)" (`opencode-acp`) runs `opencode acp` (OpenCode 1.18.34 checked). It sends
+  its modes (build, plan) only as the `mode` select of `configOptions` (no `modes`), so `parse_modes` falls
+  back to it and `config_option_update` maps to the current mode; `session/set_mode` still switches it.
+  The model select is ignored. The hangar MCP bridge goes into `session/new` as for Claude: live check in the
+  app listed the nine `hangar_*` tools. `session/load` replays history (Resume). bash runs without asking under
+  OpenCode's default permissions; with `"bash": "ask"` it sends standard allow_once / allow_always /
+  reject_once options (request id 0). Not seen on screen (the display was locked during the check).
 - Gaps: no images or @-context in the composer, no
   keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
@@ -244,5 +251,5 @@ Git access is the `git` CLI with porcelain output, not a library.
 ## Next
 - Owner reviews `m7-acp` and looks at the mode menu, slash list and Resume in the app (not seen on screen:
   the display slept during the check).
-- Then more ACP agents: Gemini `--experimental-acp`, `codex-acp`, `opencode acp` (the local OpenCode install
-  printed nothing for `opencode acp --help` within 15 s).
+- OpenCode over ACP is on branch `opencode-acp` (awaiting review). Still to add: Gemini `--experimental-acp`
+  and `codex-acp` (neither installed here; installs need the owner's OK).

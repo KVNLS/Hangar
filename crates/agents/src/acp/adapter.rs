@@ -53,6 +53,11 @@ impl AcpAdapter {
         }
     }
 
+    pub fn with_args<S: Into<String>>(mut self, args: impl IntoIterator<Item = S>) -> Self {
+        self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub fn with_install_hint(mut self, hint: impl Into<String>) -> Self {
         self.install_hint = hint.into();
         self
@@ -389,6 +394,9 @@ pub fn acp_presets() -> Vec<AcpAdapter> {
     vec![
         AcpAdapter::new("claude-acp", "Claude Code (structured)", "claude-agent-acp")
             .with_install_hint("npm install -g @agentclientprotocol/claude-agent-acp"),
+        AcpAdapter::new("opencode-acp", "OpenCode (structured)", "opencode")
+            .with_args(["acp"])
+            .with_install_hint("curl -fsSL https://opencode.ai/install | bash"),
     ]
 }
 

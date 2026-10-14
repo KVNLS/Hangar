@@ -100,7 +100,7 @@ pub fn kind(id: &str) -> AgentKind {
     match id {
         "claude" | "claude-acp" => AgentKind::Claude,
         "codex" => AgentKind::Codex,
-        "opencode" => AgentKind::OpenCode,
+        "opencode" | "opencode-acp" => AgentKind::OpenCode,
         "gemini" => AgentKind::Gemini,
         "shell" => AgentKind::Shell,
         other => AgentKind::Custom(other.to_owned()),
@@ -162,7 +162,7 @@ pub fn mcp_launch(
             extras.args.push("--mcp-config".to_owned());
             extras.args.push(stdio_server.to_string());
         }
-        "claude-acp" => extras.mcp_servers.push(McpServer {
+        "claude-acp" | "opencode-acp" => extras.mcp_servers.push(McpServer {
             name: SERVER_NAME.to_owned(),
             command: exe.to_owned(),
             args: vec![BRIDGE_ARG.to_owned()],
@@ -284,6 +284,8 @@ mod tests {
         let at = |id: &str| ids.iter().position(|i| i == id);
         assert_eq!(at("claude-acp"), at("claude").map(|i| i + 1));
         assert!(matches!(preset("claude-acp"), Some(AgentPreset::Acp(_))));
+        assert_eq!(at("opencode-acp"), at("opencode").map(|i| i + 1));
+        assert!(matches!(preset("opencode-acp"), Some(AgentPreset::Acp(_))));
     }
 
     const EXE: &str = "/Applications/Hangar.app/Contents/MacOS/hangar";
@@ -338,8 +340,14 @@ mod tests {
     }
 
     #[test]
-    fn claude_acp_gets_the_bridge_through_session_new() {
-        let x = mcp_launch("claude-acp", &bridge(EXE), &device_env()).unwrap();
+    fn acp_agents_get_the_bridge_through_session_new() {
+        for id in ["claude-acp", "opencode-acp"] {
+            acp_bridge(id);
+        }
+    }
+
+    fn acp_bridge(id: &str) {
+        let x = mcp_launch(id, &bridge(EXE), &device_env()).unwrap();
         assert!(x.args.is_empty(), "no secret or config in argv");
         assert_eq!(x.mcp_servers.len(), 1);
         let server = &x.mcp_servers[0];

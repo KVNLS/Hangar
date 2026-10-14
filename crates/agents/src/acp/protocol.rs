@@ -105,26 +105,47 @@ pub struct SessionMode {
     pub name: String,
 }
 
-/// The `modes` of a `session/new` result: the current mode id and the available modes.
+/// The modes of a `session/new` or `session/load` result: the current mode id and the
+/// available modes. Agents that only send `configOptions` (OpenCode) expose them as the option
+/// of category `mode`, which `session/set_mode` still switches.
 pub fn parse_modes(result: &Value) -> (Option<String>, Vec<SessionMode>) {
     let modes = &result["modes"];
-    let available = modes["availableModes"]
+    if modes.is_object() {
+        return (
+            modes["currentModeId"].as_str().map(str::to_owned),
+            parse_mode_list(&modes["availableModes"], "id"),
+        );
+    }
+    match mode_option(&result["configOptions"]) {
+        Some(option) => (
+            option["currentValue"].as_str().map(str::to_owned),
+            parse_mode_list(&option["options"], "value"),
+        ),
+        None => (None, Vec::new()),
+    }
+}
+
+fn parse_mode_list(items: &Value, id_key: &str) -> Vec<SessionMode> {
+    items
         .as_array()
         .map(|modes| {
             modes
                 .iter()
                 .filter_map(|m| {
-                    let id = m["id"].as_str()?.to_owned();
+                    let id = m[id_key].as_str()?.to_owned();
                     let name = m["name"].as_str().unwrap_or(&id).to_owned();
                     Some(SessionMode { id, name })
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    (
-        modes["currentModeId"].as_str().map(str::to_owned),
-        available,
-    )
+        .unwrap_or_default()
+}
+
+fn mode_option(options: &Value) -> Option<&Value> {
+    options
+        .as_array()?
+        .iter()
+        .find(|o| o["category"].as_str() == Some("mode"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,6 +431,12 @@ pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
         "current_mode_update" => {
             SessionUpdate::CurrentMode(update["currentModeId"].as_str()?.to_owned())
         }
+        "config_option_update" => match mode_option(&update["configOptions"]) {
+            Some(option) => SessionUpdate::CurrentMode(option["currentValue"].as_str()?.to_owned()),
+            None => SessionUpdate::Other {
+                kind: kind.to_owned(),
+            },
+        },
         other => SessionUpdate::Other {
             kind: other.to_owned(),
         },
@@ -575,6 +602,36 @@ mod tests {
         assert_eq!(current.as_deref(), Some("default"));
         assert_eq!(modes[0].name, "Manual");
         assert_eq!(parse_modes(&json!({"sessionId": "s"})), (None, Vec::new()));
+    }
+
+    #[test]
+    fn modes_from_config_options() {
+        // OpenCode 1.18: no `modes`, a `mode` select among the config options.
+        let options = json!([
+            {"id": "model", "category": "model", "type": "select", "currentValue": "m", "options": [{"value": "m", "name": "M"}]},
+            {"id": "mode", "name": "Session Mode", "category": "mode", "type": "select", "currentValue": "build", "options": [
+                {"value": "build", "name": "build", "description": "The default agent."},
+                {"value": "plan", "name": "plan"}
+            ]}
+        ]);
+        let (current, modes) = parse_modes(&json!({"sessionId": "s", "configOptions": options}));
+        assert_eq!(current.as_deref(), Some("build"));
+        let ids: Vec<&str> = modes.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["build", "plan"]);
+
+        let mut changed = options.clone();
+        changed[1]["currentValue"] = json!("plan");
+        let update = json!({"sessionUpdate": "config_option_update", "configOptions": changed});
+        assert_eq!(
+            parse_update(&update),
+            Some(SessionUpdate::CurrentMode("plan".into()))
+        );
+        let models_only =
+            json!({"sessionUpdate": "config_option_update", "configOptions": [options[0]]});
+        assert!(matches!(
+            parse_update(&models_only),
+            Some(SessionUpdate::Other { .. })
+        ));
     }
 
     #[test]
