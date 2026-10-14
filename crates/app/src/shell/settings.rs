@@ -1235,7 +1235,7 @@ mod tests {
     #[test]
     fn shortcuts_match_init() {
         let module = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell/mod.rs"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell.rs"),
         )
         .unwrap();
         // Source text: an escaped backslash (`\\`) is one character at runtime.

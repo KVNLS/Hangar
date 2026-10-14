@@ -1025,13 +1025,19 @@ mod tests {
     /// declared for the shell must be taken as `&Action` by some handler in the shell's sources.
     #[test]
     fn every_shell_action_has_a_handler() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell");
-        let sources: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap()
-            .flatten()
-            .map(|e| std::fs::read_to_string(e.path()).unwrap())
-            .collect();
-        let module = std::fs::read_to_string(dir.join("mod.rs")).unwrap();
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let module = std::fs::read_to_string(src.join("shell.rs")).unwrap();
+        let mut sources = vec![module.clone()];
+        let mut dirs = vec![src.join("shell")];
+        while let Some(dir) = dirs.pop() {
+            for path in std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()) {
+                if path.is_dir() {
+                    dirs.push(path);
+                } else {
+                    sources.push(std::fs::read_to_string(path).unwrap());
+                }
+            }
+        }
         let start = module.find("actions!(").unwrap();
         let list = &module[start..];
         let list = &list[list.find('[').unwrap() + 1..list.find(']').unwrap()];
