@@ -38,6 +38,8 @@ use rows::{Rows, touch};
 const CONTEXT: &str = "ChatView";
 /// Events arriving within one frame are applied together.
 const REDRAW_INTERVAL: Duration = Duration::from_millis(8);
+/// How long a stopped turn waits for the agent to confirm before it ends on this side.
+const CANCEL_GRACE: Duration = Duration::from_secs(10);
 /// Transcript rows measured beyond the viewport, so scrolling does not pop items in.
 const OVERDRAW: Pixels = px(800.);
 
@@ -132,6 +134,8 @@ pub struct ChatView {
     /// The plan item of the current turn, updated in place.
     plan: Option<usize>,
     running: bool,
+    /// Counts prompts sent, so a stop timer knows whether its turn is still the running one.
+    turn_seq: u64,
     failed: bool,
     exited: bool,
     /// Display name of the session mode (Claude Code: Manual, Accept edits, Plan, …).
@@ -224,6 +228,7 @@ impl ChatView {
             tools: HashMap::new(),
             plan: None,
             running: false,
+            turn_seq: 0,
             failed: false,
             exited: false,
             mode: None,
@@ -502,6 +507,7 @@ impl ChatView {
         self.turn_start = self.items.len();
         self.items.push(Item::User(text.to_owned().into()));
         self.running = true;
+        self.turn_seq += 1;
         self.turn_done = false;
         self.failed = false;
         self.plan = None;
@@ -552,6 +558,21 @@ impl ChatView {
         if let Err(err) = self.session.cancel() {
             self.notice(true, format!("Could not stop the agent: {err}"));
         }
+        // An agent that ignores the cancel would keep the turn running for good.
+        let turn = self.turn_seq;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(CANCEL_GRACE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.running && !this.exited && this.turn_seq == turn {
+                    this.session.abandon_turn();
+                    this.running = false;
+                    this.notice(true, "Stopped: the agent did not answer the cancel");
+                    cx.emit(ChatEvent::StateChanged);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         for (i, item) in self.items.iter_mut().enumerate() {
             if let Item::Permission {
                 outcome: outcome @ None,

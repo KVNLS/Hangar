@@ -409,6 +409,11 @@ impl AcpSession {
             .notify("session/cancel", protocol::cancel_params(&self.session_id))
     }
 
+    /// Ends the running turn on this side when the agent did not answer its cancel.
+    pub fn abandon_turn(&self) {
+        self.conn.abandon_prompts();
+    }
+
     /// `Some(option id)` selects that option, `None` cancels the request.
     pub fn answer_permission(&self, request: &RequestId, option_id: Option<&str>) -> Result<()> {
         self.conn.answer_permission(request, option_id)

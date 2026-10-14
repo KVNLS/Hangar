@@ -176,6 +176,12 @@ impl<W: Write + Send + 'static> AcpConnection<W> {
         })
     }
 
+    /// Forgets the running prompt turn: the agent never answered its cancel. A late answer is
+    /// then a protocol error and cannot end a later turn.
+    pub fn abandon_prompts(&self) {
+        lock(&self.shared.pending).retain(|_, p| !matches!(p, Pending::Prompt));
+    }
+
     pub fn notify(&self, method: &str, params: Value) -> Result<()> {
         let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
         Ok(self.shared.write(&message)?)

@@ -169,6 +169,28 @@ fn invalid_utf8_does_not_end_the_connection() {
 }
 
 #[test]
+fn an_abandoned_prompt_cannot_end_a_later_turn() {
+    let (conn, rx, mut agent) = connect();
+    conn.send_prompt(protocol::prompt_params("s1", "first"))
+        .expect("send");
+    let first = agent.recv();
+    conn.abandon_prompts();
+    conn.send_prompt(protocol::prompt_params("s1", "second"))
+        .expect("send");
+    let second = agent.recv();
+    agent.send(json!({"jsonrpc": "2.0", "id": first["id"], "result": {"stopReason": "cancelled"}}));
+    assert!(matches!(next(&rx), AcpEvent::ProtocolError(_)));
+    agent.send(json!({"jsonrpc": "2.0", "id": second["id"], "result": {"stopReason": "end_turn"}}));
+    assert!(matches!(
+        next(&rx),
+        AcpEvent::TurnEnded {
+            reason: StopReason::EndTurn,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn close_ends_turn_and_fails_waiters() {
     let (conn, rx, mut agent) = connect();
     conn.send_prompt(protocol::prompt_params("s1", "x"))
