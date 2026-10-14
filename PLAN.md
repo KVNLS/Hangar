@@ -65,6 +65,9 @@ Git access is the `git` CLI with porcelain output, not a library.
     last started (`workspace_agent:<id>`); the sidebar picker is only the default for new workspaces.
 
 ## Explicitly unimplemented (return `Unsupported`)
+- `mcp` orchestration: `agent_transcript` for terminal agents (use `workspaces_list` for their state and
+  diff); `ask_user`; `notifications/tools/list_changed` when the setting changes (agents see it on their next
+  `tools/list` or in a new session).
 - `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
   Android rotation needs a sensor-following foreground app and upside-down is usually refused (spikes/m4-android-notes.md);
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
@@ -246,7 +249,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Gaps: no images or @-context in the composer, no
   keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
-  stopping a turn is esc or the Stop button; no transcript virtualization (long sessions render every item).
+  stopping a turn is esc or the Stop button. Transcript virtualization: see M9.
 - Live (2026-10-05, scratch repo, spikes/m7-acp-notes.md): streaming, tool cards, three permission prompts
   (Approval in the sidebar, ⏎ approves), `device_info` over the MCP bridge, an edit → Review `+1 −0`, esc
   stops a streaming turn, quitting leaves no agent process. `claude-agent-acp` puts the MCP session secret in
@@ -404,7 +407,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Not done: no per-subagent diff counts or devices on the rows; OpenCode, Codex and Gemini report no
   parent link; a nested subagent shows inside its top-level one, not in a view of its own.
 
-## M9 Orchestration (2026-10-07, in progress)
+## M9 Orchestration (2026-10-07 – 10-08)
 - Owner decisions: approved a `core::ports::AgentRuntime` port with an agents use case in `usecases`; Store
   schema changes (`Workspace.task`, persisted queue, session history, parent links); MCP orchestration tools
   (off by default, an agent acts only on the workspaces it created); Claude Code hooks injected inline for
@@ -453,7 +456,41 @@ Git access is the `git` CLI with porcelain output, not a library.
   ("1 approval"), Enter → working → turn ended, file written. Seen: every new worktree first shows Claude
   Code's folder trust prompt (not a hook event, so Hangar shows Idle there); the owner's Claude config
   starts in auto mode, so most commands never ask.
-- Next, in order: MCP orchestration tools; typed `usage_update`; session history; transcript virtualization.
+- Done (2026-10-08, built by four parallel subagents on separate branches, cherry-picked onto
+  `orchestration-core`; the coordinator resolved overlaps and ordered the migrations v5 then v6):
+  - **MCP orchestration tools**, off by default (Settings › Permissions › "Let agents create and drive
+    workspaces", `agents:orchestration`). When on, the hangar MCP server also lists `workspaces_list`,
+    `workspace_create {task, name?, agent?}`, `agent_prompt {workspace, text}`, `agent_transcript {workspace,
+    last? 1–50}`; when off they are not listed and a call gets an error naming the setting. `Workspace.parent`
+    (schema v5, `parent_id`). A child starts from its lead's base branch in the same project, is named from
+    the task's first line, runs the lead's agent unless one is given, and starts through the agent queue
+    (reply: started, queued or failed to start). Guard rails are pure (`usecases::orchestration`; no
+    `AgentRuntime` port was needed): only own active children (by id or name), depth 2, at most 8 active
+    children (in-flight creates count); worktree creation is serialized. Creates and prompts show as a notice
+    in a structured lead's chat or a toast for a terminal lead; children's overview cards show "↳ <lead>".
+    Live (scratch repo, Claude Code structured as lead, Full auto): `workspace_create` made a shell child
+    with `parent_id` set and the child ran its task. Not seen on screen (the session was locked): the
+    Settings switch, the chat notices, the "↳" line, `workspaces_list` output.
+  - **Usage and cost**: ACP `usage_update` `{used, size, cost?}` parsed into `SessionUpdate::Usage` and
+    folded into `acp::usage::SessionUsage`; cost is the agent's running session total (a drop is treated as
+    a restart and the earlier total is kept). Overview cards and the composer show "ctx 4% · $0.27", the
+    status bar "$X live" summed over running structured agents. Claude Code and OpenCode report cost, Codex
+    context only, Gemini nothing (shapes in spikes/m7-acp-notes.md). Seen on screen with Claude Code.
+    Not done: per-turn `PromptResponse.usage`, cost across restarts or per day, PTY agents.
+  - **Session history**: sessions record their first prompt and the workspace diff when they end, stop or
+    are archived (schema v6: `sessions.prompt/files/insertions/deletions`; `Store::finish_session`,
+    `Store::list_sessions_since`). `usecases::history` (pure) builds "Done today" from local midnight
+    (offset from `localtime_r`). Overview has a collapsible "Done today" section (both groupings); rows open
+    the workspace, archived ones are listed but not openable. Palette search also matches the task. Seen on
+    screen. Gaps: no diff when the workspace's live diff never ran; no history beyond today; sessions marked
+    stopped at startup count as ended then.
+  - **Transcript virtualization**: the chat renders through GPUI's variable-height `list` (`ListState`,
+    `FollowMode::Tail`); `chat_view::rows` (pure, tested) maps the current view's items (agent or subagent)
+    plus task/result/done/working rows to list rows and turns new and changed items into splice/remeasure
+    operations, so a streaming chunk remeasures one row. Seen on screen with a 40-line reply and a tool call.
+    Known limit: a cross-message selection drops the parts scrolled well off screen (gpui-component sweeps
+    unpainted selection participants).
+- Next: an on-screen pass of the orchestration UI; `ask_user`; persisting cost per day.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a
