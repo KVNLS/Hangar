@@ -498,7 +498,7 @@ impl HangarApp {
         });
     }
 
-    /// The agent to start in `workspace_id`: the one it last ran, else the default (Settings › Agents).
+    /// The agent to start in `workspace_id`: the one last chosen or run there, else the default (Settings › Agents).
     pub(super) fn agent_for(&self, workspace_id: WorkspaceId) -> String {
         self.live
             .workspace_agents
@@ -508,7 +508,7 @@ impl HangarApp {
             .unwrap_or_else(|| self.agent_setup.agent.to_string())
     }
 
-    fn remember_workspace_agent(
+    pub(super) fn remember_workspace_agent(
         &mut self,
         workspace_id: WorkspaceId,
         agent_id: &str,

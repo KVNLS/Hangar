@@ -468,8 +468,8 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 ## Agent choice at Start (2026-10-08, branch `agent-picker-at-start`)
 - The sidebar "Agent" picker is gone: new workspaces choose in the New workspace sheet, the default is set in
   Settings › Agents ("Make default").
-- A workspace with no session shows Start/Resume (agent named in the hint) under "No agent running" (plus "New conversation" when a
-  chat can be resumed), with a chevron menu listing the agents (installed ones enabled, current one checked).
-  Picking one starts it in that workspace, which then remembers it (`workspace_agents`); it resumes the saved
-  chat only when it is the workspace's current agent. The pane header keeps Restart/Resume only while a
-  finished session is shown.
+- A workspace with no session shows "No agent running" over a card of two choices: "Last conversation"
+  (the agent that ran the saved chat, and Resume, which always uses that agent) when a chat is saved, and
+  "New conversation" (an agent picker, installed agents enabled and current one checked, and Start). Picking an
+  agent only selects it and the workspace remembers it (`workspace_agents`). The pane header shows the same
+  picker next to Restart/Resume while a finished session is shown.
