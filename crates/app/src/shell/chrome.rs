@@ -114,6 +114,21 @@ impl HangarApp {
                             })),
                     )
                     .child(
+                        UiButton::new("settings-toggle")
+                            .icon(Lucide::Settings)
+                            .ghost()
+                            .selected(self.screen == Screen::Settings)
+                            .tooltip("Settings ⌘,")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let screen = if this.screen == Screen::Settings {
+                                    Screen::Workspace
+                                } else {
+                                    Screen::Settings
+                                };
+                                this.set_screen(screen, window, cx)
+                            })),
+                    )
+                    .child(
                         UiButton::new("new-workspace")
                             .icon(Lucide::Plus)
                             .label("New workspace")

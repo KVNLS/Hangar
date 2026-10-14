@@ -1,8 +1,8 @@
 //! Command palette (⌘K): workspaces (those needing you first) and the app's commands.
 
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::IndexPath;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
-use gpui_kit::component::{IndexPath, Theme, ThemeMode};
 
 use super::*;
 use crate::ui::components::StateGlyph;
@@ -43,15 +43,6 @@ impl HangarApp {
             self.focus_terminal(window, cx);
             cx.notify();
         }
-    }
-
-    pub(super) fn toggle_theme(window: &mut Window, cx: &mut App) {
-        let mode = if Theme::global(cx).is_dark() {
-            ThemeMode::Light
-        } else {
-            ThemeMode::Dark
-        };
-        Theme::change(mode, Some(window), cx);
     }
 
     pub(super) fn render_palette(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -98,6 +89,7 @@ impl HangarApp {
             command("New workspace…", Lucide::Plus, Box::new(NewWorkspace)),
             command("Review changes", Lucide::FileDiff, Box::new(OpenReview)),
             command("Overview", Lucide::LayoutGrid, Box::new(ToggleOverview)),
+            command("Settings", Lucide::Settings, Box::new(OpenSettings)),
             command("Show device", Lucide::Smartphone, Box::new(ShowDeviceTab)),
             command(
                 "Show changes",

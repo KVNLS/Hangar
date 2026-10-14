@@ -149,6 +149,38 @@ fn config(
     Ok(config)
 }
 
+/// The user's theme choice, saved in the store.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    /// Follow the macOS appearance.
+    System,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 3] = [Self::Dark, Self::Light, Self::System];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+            Self::System => "System",
+        }
+    }
+
+    /// Switches the theme to this appearance (System reads the window's current one).
+    pub fn apply(self, window: &mut gpui_kit::Window, cx: &mut App) {
+        match self {
+            Self::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
+            Self::Light => Theme::change(ThemeMode::Light, Some(window), cx),
+            Self::System => Theme::sync_system_appearance(Some(window), cx),
+        }
+    }
+}
+
 /// Installs the Hangar dark and light themes and switches to `mode`. Call after
 /// `gpui_kit::init`.
 pub fn init(mode: ThemeMode, cx: &mut App) -> anyhow::Result<()> {

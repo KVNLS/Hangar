@@ -60,6 +60,8 @@ pub struct DevOptions {
     pub review: bool,
     /// Open the overview, log what it counts, then go back.
     pub overview: bool,
+    /// `dark`, `light` or `system`: render every settings page, then set the appearance.
+    pub appearance: Option<String>,
     pub merge: Option<MergeStrategy>,
     /// Device id (simulator UDID) to open in the device panel.
     pub device: Option<String>,
@@ -154,6 +156,7 @@ impl DevOptions {
             pr: var("HANGAR_DEV_PR"),
             review: flag("HANGAR_DEV_REVIEW"),
             overview: flag("HANGAR_DEV_OVERVIEW"),
+            appearance: var("HANGAR_DEV_APPEARANCE"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
                 "squash" => Some(MergeStrategy::Squash),
@@ -246,6 +249,9 @@ pub(super) async fn run_dev_hooks(
     run_review_hooks(&this, &dev, cx).await;
     if dev.review {
         dev_review(&this, cx).await;
+    }
+    if let Some(name) = dev.appearance.clone() {
+        dev_settings(&this, &name, cx).await;
     }
     if dev.overview {
         let _ = this.update_in(cx, |this, window, cx| {
@@ -612,4 +618,34 @@ async fn dev_review(this: &WeakEntity<HangarApp>, cx: &mut AsyncWindowContext) {
         this.set_screen(Screen::Workspace, window, cx)
     });
     tracing::info!("HANGAR_DEV_REVIEW inline rendered, back to workspace");
+}
+
+/// `HANGAR_DEV_APPEARANCE`: renders each settings page, then applies and saves the appearance.
+async fn dev_settings(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindowContext) {
+    use crate::ui::theme::Appearance;
+    let appearance = match name {
+        "dark" => Appearance::Dark,
+        "light" => Appearance::Light,
+        "system" => Appearance::System,
+        other => {
+            tracing::error!(%other, "HANGAR_DEV_APPEARANCE: expected dark, light or system");
+            return;
+        }
+    };
+    let _ = this.update_in(cx, |this, window, cx| {
+        this.set_screen(Screen::Settings, window, cx)
+    });
+    for tab in super::settings::SettingsTab::ALL {
+        let _ = this.update_in(cx, |this, window, cx| {
+            this.open_settings_tab(tab, window, cx)
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(200))
+            .await;
+    }
+    let _ = this.update_in(cx, |this, window, cx| {
+        this.set_appearance(appearance, window, cx);
+        tracing::info!(appearance = ?this.appearance, dark = cx.theme().is_dark(), "HANGAR_DEV_APPEARANCE");
+        this.set_screen(Screen::Workspace, window, cx);
+    });
 }

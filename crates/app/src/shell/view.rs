@@ -14,6 +14,11 @@ impl Render for HangarApp {
         }
         let main = match self.screen {
             Screen::Review => div().flex_1().min_h_0().child(self.changes_panel.clone()),
+            Screen::Settings => div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .child(self.render_settings(cx)),
             Screen::Overview => div()
                 .flex()
                 .flex_1()
@@ -73,7 +78,22 @@ impl Render for HangarApp {
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),
             )
-            .on_action(|_: &ToggleTheme, window, cx| HangarApp::toggle_theme(window, cx))
+            .on_action(cx.listener(|this, _: &ToggleTheme, window, cx| {
+                let next = if cx.theme().is_dark() {
+                    crate::ui::theme::Appearance::Light
+                } else {
+                    crate::ui::theme::Appearance::Dark
+                };
+                this.set_appearance(next, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                let screen = if this.screen == Screen::Settings {
+                    Screen::Workspace
+                } else {
+                    Screen::Settings
+                };
+                this.set_screen(screen, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ToggleOverview, window, cx| {
                     this.toggle_overview(window, cx)

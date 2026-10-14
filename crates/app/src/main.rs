@@ -19,6 +19,9 @@
 //! - `HANGAR_DEV_REMOVE_PROJECT=<repo>` — forget the project (refused while it has active
 //!   workspaces). Never touches the repository.
 //!
+//! `HANGAR_DEV_APPEARANCE=dark|light|system` renders every settings page, then sets and saves
+//! the appearance.
+//!
 //! `HANGAR_DEV_OVERVIEW=1` (after the review hook) opens the overview, logs the per-state
 //! counts, then goes back.
 //!

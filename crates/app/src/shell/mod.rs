@@ -8,6 +8,7 @@ mod lifecycle;
 mod new_workspace;
 mod overview;
 mod palette;
+mod settings;
 mod sidebar;
 mod status;
 mod view;
@@ -81,7 +82,8 @@ actions!(
         CloseSheet,
         OpenPalette,
         ToggleTheme,
-        ToggleOverview
+        ToggleOverview,
+        OpenSettings
     ]
 );
 
@@ -94,6 +96,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-n", NewWorkspace, None),
         KeyBinding::new("cmd-k", OpenPalette, None),
         KeyBinding::new("cmd-shift-o", ToggleOverview, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-p", FilterWorkspaces, None),
         KeyBinding::new("cmd-o", AddProject, None),
         KeyBinding::new("cmd-1", ShowDeviceTab, None),
@@ -180,6 +183,8 @@ enum Screen {
     Review,
     /// Every workspace as a card, grouped by state (⌘⇧O).
     Overview,
+    /// Settings (⌘,).
+    Settings,
 }
 
 pub struct HangarApp {
@@ -201,6 +206,9 @@ pub struct HangarApp {
     agent_choices: Vec<AgentChoice>,
     palette: Option<palette::Palette>,
     overview_by_project: bool,
+    settings_tab: settings::SettingsTab,
+    appearance: crate::ui::theme::Appearance,
+    _appearance_observer: Subscription,
     creating: HashSet<ProjectId>,
     /// Workspaces with an archive, restore or delete in flight.
     busy: HashSet<WorkspaceId>,
@@ -305,6 +313,11 @@ impl HangarApp {
         let sidebar_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter workspaces"));
         let filter_sub = cx.subscribe(&sidebar_filter, |_, _, _: &InputEvent, cx| cx.notify());
+        let appearance_observer = cx.observe_window_appearance(window, |this, window, cx| {
+            if this.appearance == crate::ui::theme::Appearance::System {
+                this.appearance.apply(window, cx);
+            }
+        });
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
@@ -324,6 +337,7 @@ impl HangarApp {
                         projects = loaded.entries.len(),
                         layout = ?loaded.layout,
                         agent = ?loaded.agent,
+                        appearance = ?loaded.appearance,
                         "loaded store"
                     );
                     anyhow::Ok((store, loaded))
@@ -353,6 +367,9 @@ impl HangarApp {
             agent_choices: initial_choices,
             palette: None,
             overview_by_project: false,
+            settings_tab: Default::default(),
+            appearance: Default::default(),
+            _appearance_observer: appearance_observer,
             creating: HashSet::new(),
             busy: HashSet::new(),
             diffs: HashMap::new(),
@@ -434,6 +451,10 @@ impl HangarApp {
                             panel.set_visible(true, window, cx);
                         }
                     });
+                }
+                if let Some(appearance) = loaded.appearance {
+                    self.appearance = appearance;
+                    appearance.apply(window, cx);
                 }
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.device.open {
