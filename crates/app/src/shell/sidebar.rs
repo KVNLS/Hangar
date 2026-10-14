@@ -368,7 +368,7 @@ impl HangarApp {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(if n > 0 { t.tx } else { t.tx3 })
                     .tooltip(move |window, cx| Tooltip::new(state.label()).build(window, cx))
-                    .child(StateGlyph::new(state).size(px(8.)))
+                    .child(StateGlyph::new(state).size(px(8.)).still())
                     .child(n.to_string())
             }))
     }

@@ -1,4 +1,4 @@
-//! Agent-state glyphs. Shape carries the meaning without color (color-blind safe): ring spinning,
+//! Agent-state glyphs. Shape carries the meaning without color (color-blind safe): ring spinning (static with `still`),
 //! diamond, triangle, circle ✓, square ×, hollow circle.
 
 use gpui_kit::assets::IconName;
@@ -24,6 +24,7 @@ pub fn state_colors(state: AgentState, t: &Tokens) -> (Hsla, Hsla) {
 pub struct StateGlyph {
     state: AgentState,
     size: Pixels,
+    still: bool,
 }
 
 impl StateGlyph {
@@ -32,7 +33,14 @@ impl StateGlyph {
         Self {
             state,
             size: px(10.),
+            still: false,
         }
+    }
+
+    /// Draws Working as a static ring, for summaries where motion would only distract.
+    pub fn still(mut self) -> Self {
+        self.still = true;
+        self
     }
 
     pub fn size(mut self, size: Pixels) -> Self {
@@ -73,6 +81,10 @@ impl RenderOnce for StateGlyph {
         let (color, _) = state_colors(self.state, t);
         let mark = |icon: IconName| Icon::new(icon).size(z * 0.8).text_color(t.panel);
         let inner = match self.state {
+            AgentState::Working if self.still => Icon::new(IconName::LoaderCircle)
+                .size(z + px(1.))
+                .text_color(color)
+                .into_any_element(),
             AgentState::Working => Spinner::new()
                 .icon(IconName::LoaderCircle)
                 .ease(|t| t)
