@@ -128,7 +128,9 @@ impl AgentState {
             Some(SessionStatus::Starting) => Self::Working,
             Some(SessionStatus::Running) if turn.permission_pending => Self::Approval,
             Some(SessionStatus::Running) if turn.running => Self::Working,
-            Some(SessionStatus::Running) if turn.failed => Self::Failed,
+            Some(SessionStatus::Running | SessionStatus::Exited { .. }) if turn.failed => {
+                Self::Failed
+            }
             Some(SessionStatus::Running | SessionStatus::Exited { .. }) if has_changes => {
                 Self::Review
             }
@@ -260,5 +262,15 @@ mod tests {
             Failed
         );
         assert_eq!(AgentState::from_acp(None, AcpTurn::default(), true), Idle);
+        // Exiting cleanly in the middle of a turn fails that turn.
+        let quit = SessionStatus::Exited { code: 0 };
+        assert_eq!(
+            AgentState::from_acp(Some(&quit), turn(false, false, true), true),
+            Failed
+        );
+        assert_eq!(
+            AgentState::from_acp(Some(&quit), turn(false, false, false), true),
+            Review
+        );
     }
 }
