@@ -7,7 +7,8 @@ use crate::SessionStatus;
 pub enum AgentState {
     /// Paused on a tool call that needs the user's OK. Only structured agents (ACP, M7) report it.
     Approval,
-    /// Asked a question and is blocked on a reply. Only structured agents (ACP, M7) report it.
+    /// Asked a question and is blocked on a reply. Reserved: ACP has no question request, so no
+    /// agent reports it yet.
     Input,
     /// The agent process failed or exited with an error.
     Failed,
@@ -17,6 +18,16 @@ pub enum AgentState {
     Working,
     /// Stopped, quiet, or never started.
     Idle,
+}
+
+/// What a structured agent's current prompt turn is doing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AcpTurn {
+    pub running: bool,
+    /// A tool call waits for the user's permission.
+    pub permission_pending: bool,
+    /// The last turn ended with an error (not a cancel or a refusal).
+    pub failed: bool,
 }
 
 impl AgentState {
@@ -43,6 +54,22 @@ impl AgentState {
             Some(SessionStatus::Exited { .. }) if has_changes => Self::Review,
             Some(SessionStatus::Starting) => Self::Working,
             Some(SessionStatus::Running) if recently_active => Self::Working,
+            _ => Self::Idle,
+        }
+    }
+
+    /// Derives the state of a structured (ACP) agent from its process status and current turn.
+    pub fn from_acp(status: Option<&SessionStatus>, turn: AcpTurn, has_changes: bool) -> Self {
+        match status {
+            Some(SessionStatus::Failed { .. }) => Self::Failed,
+            Some(SessionStatus::Exited { code }) if *code != 0 => Self::Failed,
+            Some(SessionStatus::Starting) => Self::Working,
+            Some(SessionStatus::Running) if turn.permission_pending => Self::Approval,
+            Some(SessionStatus::Running) if turn.running => Self::Working,
+            Some(SessionStatus::Running) if turn.failed => Self::Failed,
+            Some(SessionStatus::Running | SessionStatus::Exited { .. }) if has_changes => {
+                Self::Review
+            }
             _ => Self::Idle,
         }
     }
@@ -106,5 +133,42 @@ mod tests {
         assert_eq!(AgentState::from_pty(Some(&ok), false, false), Idle);
         assert_eq!(AgentState::from_pty(Some(&err), false, true), Failed);
         assert_eq!(AgentState::from_pty(Some(&failed), true, false), Failed);
+    }
+
+    #[test]
+    fn acp_mapping() {
+        use AgentState::*;
+        let running = Some(&SessionStatus::Running);
+        let turn = |running, permission_pending, failed| AcpTurn {
+            running,
+            permission_pending,
+            failed,
+        };
+        assert_eq!(
+            AgentState::from_acp(running, turn(true, true, false), false),
+            Approval
+        );
+        assert_eq!(
+            AgentState::from_acp(running, turn(true, false, false), true),
+            Working
+        );
+        assert_eq!(
+            AgentState::from_acp(running, turn(false, false, true), true),
+            Failed
+        );
+        assert_eq!(
+            AgentState::from_acp(running, turn(false, false, false), true),
+            Review
+        );
+        assert_eq!(
+            AgentState::from_acp(running, AcpTurn::default(), false),
+            Idle
+        );
+        let crashed = SessionStatus::Exited { code: 1 };
+        assert_eq!(
+            AgentState::from_acp(Some(&crashed), AcpTurn::default(), true),
+            Failed
+        );
+        assert_eq!(AgentState::from_acp(None, AcpTurn::default(), true), Idle);
     }
 }
