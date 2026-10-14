@@ -14,7 +14,7 @@ use hangar_terminal::ExitInfo;
 
 use crate::agents;
 use crate::paths::{BRANCH_PREFIX, branch_name, unique_slug, worktree_path};
-use crate::state::{PaneLayout, ProjectEntry};
+use crate::state::{ChangesLayout, PaneLayout, ProjectEntry};
 
 pub fn open_store(path: &Path) -> anyhow::Result<Arc<Store>> {
     let store =
@@ -26,12 +26,15 @@ pub fn open_store(path: &Path) -> anyhow::Result<Arc<Store>> {
 pub const LAYOUT_SETTING: &str = "layout";
 /// Setting key of the agent picked for new workspaces.
 pub const AGENT_SETTING: &str = "agent";
+/// Setting key of the saved [`ChangesLayout`].
+pub const CHANGES_SETTING: &str = "changes_panel";
 
 /// Everything the window needs at startup.
 pub struct Loaded {
     pub entries: Vec<ProjectEntry>,
     pub layout: Option<PaneLayout>,
     pub agent: Option<String>,
+    pub changes: Option<ChangesLayout>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -63,17 +66,19 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     let settings = (|| {
         let layout = store.get_setting::<PaneLayout>(LAYOUT_SETTING)?;
         let agent = store.get_setting::<String>(AGENT_SETTING)?;
-        anyhow::Ok((layout, agent))
+        let changes = store.get_setting::<ChangesLayout>(CHANGES_SETTING)?;
+        anyhow::Ok((layout, agent, changes))
     })()
     .context("failed to read saved layout");
-    let (layout, agent, settings_error) = match settings {
-        Ok((layout, agent)) => (layout, agent, None),
-        Err(err) => (None, None, Some(err)),
+    let (layout, agent, changes, settings_error) = match settings {
+        Ok((layout, agent, changes)) => (layout, agent, changes, None),
+        Err(err) => (None, None, None, Some(err)),
     };
     Ok(Loaded {
         entries,
         layout,
         agent,
+        changes,
         settings_error,
     })
 }
@@ -82,6 +87,12 @@ pub fn save_layout(store: &Store, layout: &PaneLayout) -> anyhow::Result<()> {
     store
         .set_setting(LAYOUT_SETTING, layout)
         .context("failed to save pane layout")
+}
+
+pub fn save_changes(store: &Store, changes: &ChangesLayout) -> anyhow::Result<()> {
+    store
+        .set_setting(CHANGES_SETTING, changes)
+        .context("failed to save the changes panel layout")
 }
 
 pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {
@@ -863,6 +874,14 @@ mod tests {
         let loaded = load(&f.store).unwrap();
         assert_eq!(loaded.layout, Some(layout));
         assert_eq!(loaded.agent.as_deref(), Some("codex"));
+        assert!(loaded.changes.is_none());
+
+        let changes = ChangesLayout {
+            open: true,
+            width: 640.0,
+        };
+        save_changes(&f.store, &changes).unwrap();
+        assert_eq!(load(&f.store).unwrap().changes, Some(changes));
 
         f.store.set_setting(LAYOUT_SETTING, &42).unwrap();
         let loaded = load(&f.store).unwrap();

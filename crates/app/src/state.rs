@@ -222,6 +222,43 @@ impl Panes {
     }
 }
 
+/// Width range of the changes panel, in pixels.
+pub const CHANGES_WIDTH_RANGE: (f32, f32) = (260.0, 1600.0);
+const CHANGES_DEFAULT_WIDTH: f32 = 520.0;
+
+/// The changes panel's visibility and width, saved across launches.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChangesLayout {
+    pub open: bool,
+    pub width: f32,
+}
+
+impl Default for ChangesLayout {
+    fn default() -> Self {
+        Self {
+            open: false,
+            width: CHANGES_DEFAULT_WIDTH,
+        }
+    }
+}
+
+impl ChangesLayout {
+    /// Clamps the width; anything unusable means the default.
+    pub fn sanitized(self) -> Self {
+        Self {
+            open: self.open,
+            width: changes_width(self.width).unwrap_or(CHANGES_DEFAULT_WIDTH),
+        }
+    }
+}
+
+/// A usable panel width, clamped to [`CHANGES_WIDTH_RANGE`].
+pub fn changes_width(width: f32) -> Option<f32> {
+    width
+        .is_finite()
+        .then(|| width.clamp(CHANGES_WIDTH_RANGE.0, CHANGES_WIDTH_RANGE.1))
+}
+
 /// Short status for pane headers and the sidebar.
 pub fn status_label(status: &SessionStatus) -> String {
     match status {
@@ -234,7 +271,10 @@ pub fn status_label(status: &SessionStatus) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaneLayout, Panes, ProjectList, sanitize_split, split_ratio, status_label};
+    use super::{
+        CHANGES_WIDTH_RANGE, ChangesLayout, PaneLayout, Panes, ProjectList, changes_width,
+        sanitize_split, split_ratio, status_label,
+    };
     use hangar_core::{Project, SessionStatus, Timestamp, Workspace, WorkspaceId, WorkspaceStatus};
 
     fn workspace(project: &Project, name: &str) -> Workspace {
@@ -362,6 +402,27 @@ mod tests {
         assert_eq!(sanitize_split(Some(1.5)), None);
         assert_eq!(sanitize_split(Some(f32::INFINITY)), None);
         assert_eq!(sanitize_split(None), None);
+    }
+
+    #[test]
+    fn changes_layout_sanitized() {
+        let ok = ChangesLayout {
+            open: true,
+            width: 400.0,
+        };
+        assert_eq!(ok.sanitized(), ok);
+        let narrow = ChangesLayout {
+            open: false,
+            width: 10.0,
+        };
+        assert_eq!(narrow.sanitized().width, CHANGES_WIDTH_RANGE.0);
+        let broken = ChangesLayout {
+            open: true,
+            width: f32::NAN,
+        };
+        assert_eq!(broken.sanitized().width, ChangesLayout::default().width);
+        assert!(broken.sanitized().open);
+        assert_eq!(changes_width(1e9), Some(CHANGES_WIDTH_RANGE.1));
     }
 
     #[test]

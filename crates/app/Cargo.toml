@@ -12,7 +12,23 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-gpui-kit.workspace = true
+# Syntax highlighting: only the grammars Hangar's target stacks need (JSON comes with `tree-sitter`).
+gpui-kit = { workspace = true, features = [
+    "tree-sitter",
+    "tree-sitter-swift",
+    "tree-sitter-kotlin",
+    "tree-sitter-java",
+    "tree-sitter-typescript",
+    "tree-sitter-tsx",
+    "tree-sitter-javascript",
+    "tree-sitter-rust",
+    "tree-sitter-bash",
+    "tree-sitter-yaml",
+    "tree-sitter-toml",
+    "tree-sitter-markdown",
+    "tree-sitter-css",
+    "tree-sitter-html",
+] }
 hangar-core.workspace = true
 hangar-worktree.workspace = true
 hangar-agents.workspace = true

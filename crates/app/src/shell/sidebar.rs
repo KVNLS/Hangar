@@ -17,6 +17,8 @@ pub(super) struct WorkspaceRow {
     pub id: WorkspaceId,
     pub name: SharedString,
     pub status: Option<SharedString>,
+    /// Change badge (`3 +12 −4`) while the workspace's live diff runs.
+    pub changes: Option<SharedString>,
     pub active: bool,
     /// An archive/delete/restore is in flight: no further actions.
     pub busy: bool,
@@ -121,12 +123,15 @@ fn workspace_item(
                 workspace_menu(menu, &menu_app, workspace_id, archived)
             })
         })
-        .when_some(row.status, |item, status| {
+        .when(row.status.is_some() || row.changes.is_some(), |item| {
+            let (status, changes) = (row.status, row.changes);
             item.suffix(move |_, cx| {
-                div()
+                h_flex()
+                    .gap_2()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(status.clone())
+                    .children(changes.clone())
+                    .children(status.clone())
             })
         })
 }
