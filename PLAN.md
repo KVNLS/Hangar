@@ -257,6 +257,14 @@ Git access is the `git` CLI with porcelain output, not a library.
   (`app_icon::set_dock_icon`), so `cargo run` shows it. `export_icon` example writes the 1024px PNG. No .app
   bundle / .icns yet; light (9b–9g) and tinted variants not shipped.
 
+## Device panel visual pass (2026-10-05)
+- Seen on screen (iOS, private backend): live frame, tap (opens Settings), Home, tooltips, logs pane (level,
+  process, search, Pause/Follow/Copy/Clear), Shut down; no Rotate on iOS (unsupported). Android: the conflict
+  state with its explanation and "Shut down emulator-5554 and retry".
+- Fixed: a start that failed at launch lost its error (startup reconcile dropped closed entries), so the panel
+  showed "its own device is not running" with no reason; failed entries are kept and the fallback title reads
+  "This workspace's device". The control row no longer jumps when the input status line appears.
+
 ## Remaining gaps
 - UI vs mockup: New workspace sheet has no base-branch / new-branch fields (branch shown in the footer only);
   Settings › Agents keeps a disabled "Make default" on the default row; the device panel shows a
@@ -267,11 +275,13 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
 - Agents: if Hangar crashes or is killed, codex-acp (ignores a closed stdin) keeps running; the Files code
   viewer (gpui-component editor) still draws Geist Mono's `--` ligatures.
-- Devices: device panel controls, logs pane, Rotate and the boot stage text never checked visually by
-  Claude; logs pane fixed height, no horizontal scroll; emulators started outside Hangar keep Gboard's stylus
-  sheet until `stylus_handwriting_enabled` is turned off.
+- Devices: logs pane fixed height, no horizontal scroll (long lines cut), lines from several processes can
+  arrive a few ms out of order; the device picker shows the base model ("iPhone 17 Pro · iOS 26.5") while the
+  panel runs the workspace's clone. Android boot stage text not seen yet: the only AVD (Pixel_10_Pro) was
+  already running outside Hangar (the pool refuses a second instance, and offers "Shut down … and retry").
+  Emulators started outside Hangar keep Gboard's stylus sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a
   `GEMINI_API_KEY` (or Vertex AI) before a turn, modes and MCP can be checked live, or drop the presets.
-- Device panel visual pass (controls, logs pane, Rotate, boot stage text never seen on screen by Claude).
+- Android boot stage text and Rotate on screen (needs Pixel_10_Pro shut down first, or a second AVD).

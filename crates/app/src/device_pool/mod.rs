@@ -1523,6 +1523,9 @@ impl DevicePool {
                     } else if !device.running
                         && matches!(device.state, State::Closed)
                         && device.leases.is_idle()
+                        // A failed start keeps its entry: the panel shows why and how to fix it.
+                        && device.error.is_none()
+                        && device.conflict.is_none()
                     {
                         pool.devices.remove(&key);
                     }
@@ -1633,7 +1636,7 @@ impl DevicePool {
         let Some(device) = self.devices.get(&key) else {
             let name = match (&key, self.assignments.get(&ws)) {
                 (PoolKey::Base(_), Some(a)) => a.base.as_str(),
-                _ => "its own device",
+                _ => "This workspace's device",
             };
             return DeviceStatus::Closed {
                 name,
