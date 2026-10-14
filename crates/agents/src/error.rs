@@ -10,6 +10,24 @@ pub enum Error {
     InvalidCwd(PathBuf),
     #[error(transparent)]
     Terminal(#[from] TerminalError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("agent protocol error: {0}")]
+    Protocol(String),
+    #[error("{method} failed: {message} ({code})")]
+    Rpc {
+        method: String,
+        code: i64,
+        message: String,
+    },
+    #[error("{method}: the agent did not answer in time")]
+    Timeout { method: String },
+    #[error("{method}: the agent closed the connection")]
+    Disconnected { method: String },
+    #[error("{agent} exited: {stderr_tail}")]
+    AgentExited { agent: String, stderr_tail: String },
+    #[error("not supported: {0}")]
+    Unsupported(&'static str),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

@@ -1,5 +1,6 @@
-//! Agent adapters: PTY now, ACP later.
+//! Agent adapters: interactive CLIs in a PTY, and structured agents over ACP.
 
+pub mod acp;
 mod adapter;
 mod error;
 mod path;
