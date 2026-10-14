@@ -349,6 +349,62 @@ mod tests {
         );
     }
 
+    fn android(id: &str, state: &str) -> DeviceEntry {
+        DeviceEntry::new(
+            Platform::Android,
+            DeviceInfo {
+                udid: id.into(),
+                name: format!("Pixel {id}"),
+                runtime: "Android 17".into(),
+                state: state.into(),
+                device_type: None,
+                screen: None,
+            },
+        )
+    }
+
+    #[test]
+    fn android_devices_mix_with_ios() {
+        let mut p = Picker::default();
+        p.set_visible(true);
+        // A shut-down AVD is listed but never opened or auto-selected.
+        let fx = p.list_done(
+            vec![android("Pixel_10", "Shutdown"), entry("A", "Booted")],
+            vec![],
+        );
+        assert_eq!(opens(&fx), Some("A"));
+        assert!(!p.entries()[0].ready);
+        let avd = DeviceKey {
+            platform: Platform::Android,
+            id: "Pixel_10".into(),
+        };
+        assert!(p.select(avd.clone()).close);
+        assert_eq!(p.active(), None);
+        // Once booted it is listed under its adb serial and the same id on iOS stays distinct.
+        let serial = DeviceKey {
+            platform: Platform::Android,
+            id: "emulator-5554".into(),
+        };
+        p.list_done(
+            vec![android("emulator-5554", "Booted"), entry("A", "Booted")],
+            vec![],
+        );
+        assert_eq!(opens(&p.select(serial.clone())), Some("emulator-5554"));
+        assert_eq!(serial.value(), "android:emulator-5554");
+        assert_eq!(
+            p.entry_by_value("android:emulator-5554")
+                .map(|e| e.key.platform),
+            Some(Platform::Android)
+        );
+        // An Android failure does not hide the iOS devices.
+        let fx = p.list_done(
+            vec![entry("A", "Booted")],
+            vec![(Platform::Android, "no SDK".into())],
+        );
+        assert!(fx.close);
+        assert_eq!(p.errors(), [(Platform::Android, "no SDK".to_owned())]);
+    }
+
     #[test]
     fn lookups() {
         let mut p = Picker::default();
