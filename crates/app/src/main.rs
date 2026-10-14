@@ -13,7 +13,8 @@
 //!   workspace (`HANGAR_DEV_WORKSPACE`, default `dev`) running `HANGAR_DEV_AGENT` (default
 //!   `shell`), then type `HANGAR_DEV_INPUT` followed by Enter into it (once it runs, if the
 //!   start queued at "Max concurrent agents"). Exercises the full
-//!   add-project → worktree → store → agent flow without clicking.
+//!   add-project → worktree → store → agent flow without clicking. Several comma-separated agents
+//!   create one grouped workspace per agent (best of N), as ⌘-clicking agents in the sheet does.
 //! - `HANGAR_DEV_OLLAMA=<host>` — before `HANGAR_DEV_OPEN`, turn Ollama on at that host for this run (not
 //!   saved) and wait for its model list, so an OpenCode agent starts with the local models.
 //!
@@ -40,7 +41,7 @@
 //! review hooks below), logs its row counts, renders the inline mode, then goes back.
 //!
 //! `HANGAR_DEV_SHOW=<screen>` runs last and leaves the window on `workspace`, `review` (split),
-//! `review-inline`, `overview`, `settings-{agents,devices,appearance,keybindings}`, `palette` or
+//! `review-inline`, `overview`, `compare` (the focused workspace's attempts), `settings-{agents,devices,appearance,keybindings}`, `palette` or
 //! `sheet` (New workspace) or `device` (device panel), for screenshots.
 //! `HANGAR_DEV_SCREENSHOT=1` then waits for the workspace device's first frame and takes the
 //! device panel's ⌘S screenshot for the agent.

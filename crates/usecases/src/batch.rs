@@ -1,7 +1,7 @@
 //! Several workspaces from one New workspace request: one per task line, one per agent (best
 //! of N, linked as a group to compare), or both. Pure: the caller creates what is planned.
 
-use hangar_core::WorkspaceGroupId;
+use hangar_core::{Workspace, WorkspaceGroupId, WorkspaceId};
 
 use crate::workspaces::NewWorkspace;
 
@@ -122,6 +122,34 @@ fn name_from_line(line: &str) -> String {
         }
     };
     format!("{}…", cut.trim_end())
+}
+
+/// The active attempts of `group`, oldest first.
+pub fn attempts<'a>(
+    workspaces: impl IntoIterator<Item = &'a Workspace>,
+    group: WorkspaceGroupId,
+) -> Vec<&'a Workspace> {
+    let mut list: Vec<&Workspace> = workspaces
+        .into_iter()
+        .filter(|ws| ws.group == Some(group) && ws.status == hangar_core::WorkspaceStatus::Active)
+        .collect();
+    list.sort_by_key(|ws| ws.created_at);
+    list
+}
+
+/// "Keep this one": the other active attempts of `keep`'s group, to archive.
+pub fn others_to_archive<'a>(
+    workspaces: impl IntoIterator<Item = &'a Workspace>,
+    keep: &Workspace,
+) -> Vec<WorkspaceId> {
+    let Some(group) = keep.group else {
+        return Vec::new();
+    };
+    attempts(workspaces, group)
+        .into_iter()
+        .filter(|ws| ws.id != keep.id)
+        .map(|ws| ws.id)
+        .collect()
 }
 
 #[cfg(test)]
@@ -247,5 +275,44 @@ mod tests {
         );
         let word = "x".repeat(60);
         assert_eq!(name_from_line(&word), format!("{}…", "x".repeat(40)));
+    }
+
+    fn attempt(group: Option<WorkspaceGroupId>, at: i64, active: bool) -> Workspace {
+        Workspace {
+            id: WorkspaceId::new(),
+            project_id: hangar_core::ProjectId::new(),
+            name: format!("ws{at}"),
+            slug: format!("ws{at}"),
+            branch: format!("hangar/ws{at}"),
+            base: "main".into(),
+            worktree_path: format!("/wt/ws{at}").into(),
+            status: if active {
+                hangar_core::WorkspaceStatus::Active
+            } else {
+                hangar_core::WorkspaceStatus::Archived
+            },
+            created_at: hangar_core::Timestamp(at),
+            task: None,
+            group,
+        }
+    }
+
+    #[test]
+    fn keeping_one_attempt_archives_the_other_active_ones() {
+        let group = WorkspaceGroupId::new();
+        let all = [
+            attempt(Some(group), 3, true),
+            attempt(Some(group), 1, true),
+            attempt(Some(group), 2, false),
+            attempt(Some(WorkspaceGroupId::new()), 4, true),
+            attempt(None, 5, true),
+        ];
+        let listed: Vec<i64> = attempts(&all, group)
+            .iter()
+            .map(|ws| ws.created_at.0)
+            .collect();
+        assert_eq!(listed, [1, 3]);
+        assert_eq!(others_to_archive(&all, &all[1]), [all[0].id]);
+        assert!(others_to_archive(&all, &all[4]).is_empty());
     }
 }

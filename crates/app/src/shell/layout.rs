@@ -64,10 +64,11 @@ impl HangarApp {
         self.live
             .diffs
             .retain(|id, _| projects.is_active(*id) && !busy.contains(id));
-        for pane in 0..self.layout.panes.count() {
-            let Some(id) = self.layout.panes.slot(pane) else {
-                continue;
-            };
+        let shown: Vec<WorkspaceId> = (0..self.layout.panes.count())
+            .filter_map(|pane| self.layout.panes.slot(pane))
+            .chain(self.compared_workspaces())
+            .collect();
+        for id in shown {
             if self.live.diffs.contains_key(&id) || self.work.busy.contains(&id) {
                 continue;
             }

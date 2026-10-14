@@ -229,6 +229,7 @@ impl HangarApp {
             .map(|v| v.read(cx).subagents())
             .unwrap_or_default();
         let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
+        let attempts = self.attempts_of(id);
         let (action_label, action) =
             card_action(state, live.is_some_and(|l| !l.session.status.is_terminal()));
         let (action_fg, action_bg, action_border) = if card_action_tinted(state) {
@@ -321,6 +322,18 @@ impl HangarApp {
                         )
                     })
                     .child(div().flex_1())
+                    .when_some(attempts, |this, (group, count)| {
+                        this.child(
+                            UiButton::new(SharedString::from(format!("overview-compare-{id}")))
+                                .label(format!("Compare {count}"))
+                                .ghost()
+                                .small()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_compare(group, window, cx)
+                                })),
+                        )
+                    })
                     .child(
                         div()
                             .id(SharedString::from(format!("overview-action-{id}")))

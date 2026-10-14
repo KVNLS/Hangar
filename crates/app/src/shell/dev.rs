@@ -22,16 +22,36 @@ impl HangarApp {
             } else {
                 dev.workspaces.clone()
             };
-            let mut created = Vec::new();
+            let agents: Vec<(String, String)> = dev
+                .agent
+                .split(',')
+                .map(|a| (a.trim().to_owned(), a.trim().to_owned()))
+                .collect();
+            let mut planned = Vec::new();
             for name in names {
-                let (agent, target) = (dev.agent.clone(), dev.target.clone());
-                let input = dev.input.clone();
+                let request = hangar_usecases::batch::BatchRequest {
+                    name,
+                    task: dev.input.clone().unwrap_or_default(),
+                    agents: agents.clone(),
+                    ..Default::default()
+                };
+                match hangar_usecases::batch::plan(&request) {
+                    Ok(items) => planned.extend(items),
+                    Err(err) => tracing::warn!("HANGAR_DEV_OPEN: {err}"),
+                }
+            }
+            let mut created = Vec::new();
+            for item in planned {
+                let target = dev.target.clone();
                 let Ok(create) = this.update_in(cx, |this, window, cx| {
-                    let new = ops::NewWorkspace {
-                        task: input,
-                        ..ops::NewWorkspace::named(name)
-                    };
-                    this.create_workspace(project.id, new, agent, target, window, cx)
+                    this.create_workspace(
+                        project.id,
+                        item.workspace,
+                        item.agent,
+                        target,
+                        window,
+                        cx,
+                    )
                 }) else {
                     break;
                 };
@@ -658,7 +678,7 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
         let (screen, tab) = match name {
             "workspace" | "device" => (Screen::Workspace, None),
             "review" | "review-inline" => (Screen::Review, None),
-            "overview" => (Screen::Overview, None),
+            "overview" | "compare" => (Screen::Overview, None),
             "settings" | "settings-agents" => settings(SettingsTab::Agents),
             "settings-devices" => settings(SettingsTab::Devices),
             "settings-appearance" => settings(SettingsTab::Appearance),
@@ -681,6 +701,10 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
             "sheet" => match this.current_project() {
                 Some(project) => this.open_new_workspace(project, window, cx),
                 None => tracing::error!("HANGAR_DEV_SHOW sheet: no project"),
+            },
+            "compare" => match this.focused_workspace().and_then(|(_, ws)| ws.group) {
+                Some(group) => this.open_compare(group, window, cx),
+                None => tracing::error!("HANGAR_DEV_SHOW compare: the workspace has no attempts"),
             },
             _ => {}
         }

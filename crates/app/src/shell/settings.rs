@@ -95,6 +95,7 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Back to workspace", "escape", "Settings"),
     ("Create workspace", "cmd-enter", "New workspace sheet"),
     ("Cancel", "escape", "New workspace sheet"),
+    ("Close", "escape", "Compare attempts"),
 ];
 
 /// How long `<agent> --version` may take before it is given up on.

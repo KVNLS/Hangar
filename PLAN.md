@@ -419,8 +419,18 @@ Git access is the `git` CLI with porcelain output, not a library.
   cards, second start queued and saved; after quit and relaunch it started and the saved queue emptied.
   Not shown in the sidebar (rows stay one line). A restored start begins without a click: it was asked for
   before the quit.
-- Next, in order: batch create and best-of-N with a compare view;
-  approvals inbox and palette "Approve pending request"; Claude Code hooks for terminal agents (`Input` state);
+- Done: batch create and best of N. The New workspace sheet takes several agents (⌘-click adds or removes
+  one) and "One workspace per line"; `usecases::batch::plan` turns the request into workspaces (lines ×
+  agents, at most 12, branch name only for a single one, names "<name> · <agent>" or from the line), created
+  one at a time and started through the queue. Several agents on one task share a `WorkspaceGroupId`
+  (`Workspace.group`, schema v4). Overview cards of a group get "Compare N": an overlay with each attempt's
+  state, diff (+/−, files; diffs start for compared workspaces) and last line, with Open, Review and "Keep
+  this one" (confirms, then archives the other attempts; branches and worktrees stay). `HANGAR_DEV_AGENT`
+  takes several comma-separated agents, `HANGAR_DEV_SHOW=compare` opens the overlay. Seen on screen: the
+  overlay with two shell attempts and their diffs. Not seen: the sheet with several agents picked, Keep
+  (unit-tested: `batch::others_to_archive`). Gap: Resume/Retry on a card starts the global agent, not the
+  attempt's own (open question 10).
+- Next, in order: approvals inbox and palette "Approve pending request"; Claude Code hooks for terminal agents (`Input` state);
   MCP orchestration tools; typed `usage_update`; session history; transcript virtualization.
 
 ## Next

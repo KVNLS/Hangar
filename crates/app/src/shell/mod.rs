@@ -2,6 +2,7 @@
 
 mod attention;
 mod chrome;
+mod compare;
 mod dev;
 mod device_api;
 mod dialogs;
@@ -156,6 +157,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("escape", CloseScreen, Some("SettingsScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
+        KeyBinding::new("escape", CloseSheet, Some("CompareAttempts")),
     ]);
 }
 
@@ -372,7 +374,7 @@ struct LiveState {
     runs: HashMap<WorkspaceId, run::WorkspaceRun>,
     /// The tab each workspace's pane shows (agent, dev server or build).
     pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
-    /// Live diffs of active workspaces, started when first shown in a pane.
+    /// Live diffs of active workspaces, started when first shown in a pane or compared.
     diffs: HashMap<WorkspaceId, DiffEntry>,
     /// "Max concurrent agents" and the workspaces waiting for a slot.
     agent_queue: hangar_usecases::agents::AgentQueue<queue::StartRequest>,
@@ -391,6 +393,8 @@ struct WorkState {
     creating: HashSet<ProjectId>,
     /// Workspaces with an archive, restore or delete in flight.
     busy: HashSet<WorkspaceId>,
+    /// "Compare attempts", when open.
+    compare: Option<compare::CompareAttempts>,
 }
 
 pub struct HangarApp {
@@ -610,6 +614,7 @@ impl HangarApp {
                 loading: true,
                 load_error: None,
                 new_workspace: None,
+                compare: None,
                 creating: HashSet::new(),
                 busy: HashSet::new(),
             },

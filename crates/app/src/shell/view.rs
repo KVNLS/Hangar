@@ -195,6 +195,7 @@ impl Render for HangarApp {
             .child(main)
             .child(self.render_status_bar(cx))
             .children(self.render_new_workspace_sheet(cx))
+            .children(self.render_compare(cx))
             .children(self.render_palette(cx))
             .children(self.render_toast(cx))
     }
