@@ -849,3 +849,25 @@ fn usage_outlives_deleted_workspaces_and_projects() {
     let usage = store.list_usage_since(Timestamp(0)).unwrap();
     assert_eq!(usage, vec![usage_entry(s.id, 10, "claude-opus-5", 2.0)]);
 }
+
+#[test]
+fn setting_keys_match_an_exact_prefix() {
+    let store = store();
+    for key in [
+        "device:b",
+        "device:a",
+        "device_pool:limit",
+        "devicex",
+        "layout",
+    ] {
+        store.write_setting(key, "1").unwrap();
+    }
+    assert_eq!(
+        store.setting_keys("device:").unwrap(),
+        ["device:a", "device:b"]
+    );
+    // `_` is not a wildcard.
+    store.write_setting("a_b", "1").unwrap();
+    store.write_setting("axb", "1").unwrap();
+    assert_eq!(store.setting_keys("a_").unwrap(), ["a_b"]);
+}

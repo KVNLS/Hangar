@@ -14,6 +14,7 @@ mod assignments;
 pub mod backend;
 mod boot;
 mod leases;
+pub mod orphans;
 pub mod policy;
 mod shutdown;
 mod status;

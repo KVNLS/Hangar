@@ -185,6 +185,18 @@ impl Store for FakeStore {
         self.settings.lock().unwrap().remove(key);
         Ok(())
     }
+    fn setting_keys(&self, prefix: &str) -> PortResult<Vec<String>> {
+        let mut keys: Vec<String> = self
+            .settings
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .cloned()
+            .collect();
+        keys.sort();
+        Ok(keys)
+    }
 }
 
 /// Records every change it is asked to make.
