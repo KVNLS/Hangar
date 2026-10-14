@@ -157,6 +157,17 @@ impl AgentKind {
             Self::Custom(program) => program.clone(),
         }
     }
+
+    /// Neutral two-character mark shown instead of vendor logos.
+    pub fn monogram(&self) -> &'static str {
+        match self {
+            Self::Claude => "CC",
+            Self::Codex => "CX",
+            Self::OpenCode => "OC",
+            Self::Gemini => "GM",
+            Self::Shell | Self::Custom(_) => ">_",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -70,6 +70,15 @@ impl Render for HangarApp {
                 this.sidebar_open = !this.sidebar_open;
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &FilterWorkspaces, window, cx| {
+                this.sidebar_open = true;
+                this.sidebar_filter
+                    .update(cx, |state, cx| state.focus(window, cx));
+                cx.notify();
+            }))
+            .on_action(
+                cx.listener(|this, _: &AddProject, window, cx| this.pick_project(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
                 if let Some(project) = this.current_project() {
                     this.sidebar_open = true;
@@ -114,125 +123,7 @@ pub(super) fn agent_options(choices: &[AgentChoice]) -> Vec<AgentOption> {
         .collect()
 }
 
-fn short_status(status: &SessionStatus) -> String {
-    match status {
-        SessionStatus::Failed { .. } => "failed".to_owned(),
-        other => status_label(other),
-    }
-}
-
 impl HangarApp {
-    pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let app = cx.entity().downgrade();
-        let focused_workspace = self.panes.slot(self.panes.focused());
-        let row = |ws: &Workspace| WorkspaceRow {
-            id: ws.id,
-            name: ws.name.clone().into(),
-            status: if self.busy.contains(&ws.id) {
-                Some("…".into())
-            } else {
-                self.sessions
-                    .get(&ws.id)
-                    .map(|live| short_status(&live.session.status).into())
-            },
-            changes: self
-                .diffs
-                .get(&ws.id)
-                .and_then(|entry| entry.diff.read(cx).badge())
-                .map(SharedString::from),
-            active: focused_workspace == Some(ws.id),
-            busy: self.busy.contains(&ws.id),
-        };
-        let sections = self.projects.entries().iter().map(|entry| {
-            let project_id = entry.project.id;
-            ProjectSection {
-                app: app.clone(),
-                project_id,
-                name: entry.project.name.clone().into(),
-                workspaces: entry.active().map(row).collect(),
-                archived: entry.archived().map(row).collect(),
-                input: self
-                    .new_workspace
-                    .as_ref()
-                    .filter(|n| n.project_id == project_id)
-                    .map(|n| n.input.clone()),
-                creating: self.creating.contains(&project_id),
-                collapsed: false,
-            }
-        });
-
-        let device_open = self.device.open;
-        let header = h_flex()
-            .w_full()
-            .gap_1()
-            .items_center()
-            .child(div().font_semibold().child("Hangar"))
-            .child(div().flex_1())
-            .child(
-                Button::new("device-toggle")
-                    .ghost()
-                    .small()
-                    .icon(if device_open {
-                        IconName::PanelRightClose
-                    } else {
-                        IconName::PanelRightOpen
-                    })
-                    .selected(device_open)
-                    .tooltip(if device_open {
-                        "Hide device (⌘⇧P)"
-                    } else {
-                        "Show device (⌘⇧P)"
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_device_open(!device_open, window, cx)
-                    })),
-            )
-            .child(
-                Button::new("add-project")
-                    .ghost()
-                    .small()
-                    .icon(IconName::FolderOpen)
-                    .label("Add project")
-                    .on_click(cx.listener(|this, _, window, cx| this.pick_project(window, cx))),
-            );
-
-        let notice = if self.loading {
-            Some(SharedString::from("Loading…"))
-        } else if let Some(err) = &self.load_error {
-            Some(err.clone())
-        } else if self.projects.is_empty() {
-            Some("No projects yet. Add a Git repository to start.".into())
-        } else {
-            None
-        };
-
-        let footer = v_flex()
-            .w_full()
-            .gap_1()
-            .when_some(notice, |this, notice| {
-                let color = if self.load_error.is_some() {
-                    cx.theme().danger
-                } else {
-                    cx.theme().muted_foreground
-                };
-                this.child(div().text_xs().text_color(color).child(notice))
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Agent for new workspaces"),
-            )
-            .child(Select::new(&self.agent_select).small());
-
-        Sidebar::new("projects")
-            .collapsible(SidebarCollapsible::None)
-            .w(px(SIDEBAR_WIDTH))
-            .header(header)
-            .children(sections)
-            .footer(footer)
-    }
-
     pub(super) fn render_pane(&self, pane: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let focused = self.panes.focused() == pane;

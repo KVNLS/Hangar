@@ -19,11 +19,10 @@ use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::resizable::{ResizablePanelEvent, ResizableState};
-use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
-use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible};
+use gpui_kit::component::select::{SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Selectable as _, Sizable as _, StyledExt as _, WindowExt as _,
-    h_flex, h_resizable, resizable_panel, v_flex,
+    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, h_resizable,
+    resizable_panel, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -44,14 +43,14 @@ use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
 use crate::state::{
     CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, PANE_COUNT, PaneLayout,
-    Panes, ProjectList, changes_width, device_width, sanitize_split, split_ratio, status_label,
+    Panes, ProjectEntry, ProjectList, changes_width, device_width, sanitize_split, split_ratio,
+    status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
 pub use chrome::titlebar_options;
 pub use dev::DevOptions;
 use dev::run_dev_hooks;
 use dialogs::DeleteWorkspaceDialog;
-use sidebar::{ProjectSection, WorkspaceRow};
 use view::agent_options;
 
 /// Width of the sidebar; the panes share the rest.
@@ -70,7 +69,9 @@ actions!(
         ToggleDevice,
         ToggleDeviceStats,
         ToggleSidebar,
-        NewWorkspace
+        NewWorkspace,
+        FilterWorkspaces,
+        AddProject
     ]
 );
 
@@ -81,6 +82,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-alt-shift-p", ToggleDeviceStats, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-n", NewWorkspace, None),
+        KeyBinding::new("cmd-p", FilterWorkspaces, None),
+        KeyBinding::new("cmd-o", AddProject, None),
     ]);
 }
 
@@ -185,6 +188,10 @@ pub struct HangarApp {
     save_device: Option<Task<()>>,
     focus: FocusHandle,
     sidebar_open: bool,
+    sidebar_filter: Entity<InputState>,
+    collapsed_projects: HashSet<ProjectId>,
+    /// Projects whose archived group is expanded.
+    show_archived: HashSet<ProjectId>,
     _activity: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -269,6 +276,9 @@ impl HangarApp {
                 }
             },
         );
+        let sidebar_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter workspaces"));
+        let filter_sub = cx.subscribe(&sidebar_filter, |_, _, _: &InputEvent, cx| cx.notify());
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
@@ -325,8 +335,11 @@ impl HangarApp {
             save_device: None,
             focus,
             sidebar_open: true,
+            sidebar_filter,
+            collapsed_projects: HashSet::new(),
+            show_archived: HashSet::new(),
             _activity: Self::track_activity(cx),
-            _subscriptions: vec![select_sub, resize_sub, changes_sub, device_sub],
+            _subscriptions: vec![select_sub, resize_sub, changes_sub, device_sub, filter_sub],
         }
     }
 
