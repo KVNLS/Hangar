@@ -92,25 +92,29 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
    - Done (M9): `usecases::batch`, `usecases::orchestration` and `usecases::history` are pure
      policies tested on plain data. The approved `AgentRuntime` port was not added: dispatch to live
      agents stays in `app` like the device tools, and a port would only wrap GPUI calls.
-   - Next: make those groups entities (controllers) with services passed in, so views do no I/O;
-     turn `DevicePool`'s orchestration into a state machine (events and `Instant` in, commands
-     out) behind `DeviceCatalog`. Check on macOS with the dev hooks and real
+   - Next (M10 in PLAN.md): make those groups entities (controllers) with services passed in, so
+     views do no I/O; turn `DevicePool`'s orchestration into a state machine (events and `Instant`
+     in, commands out) behind `DeviceCatalog`. Check on macOS with the dev hooks and real
      simulators/emulators before merging.
 8. **Docs and cleanup** — done for this round: PLAN.md crate table, CLAUDE.md rules, large test
    modules moved to sibling files.
+   - File layout (2026-10-08): `foo.rs` next to `foo/` everywhere (no `mod.rs`), large unit-test
+     modules in `tests.rs` in every crate, and the device pool, device panel, changes view, dev
+     hooks and settings split by concern. PLAN.md trimmed to the current plan; the milestone log
+     moved to docs/HISTORY.md.
 
 ## Done when
 
 - [x] The layering test passes with no edges between library crates.
 - [x] No `hangar_worktree::` or SQLite `Store` paths in `app/src` outside `app::adapters` (tests
   aside).
-- [ ] No `hangar_devices::` paths in `app/src` outside the adapters (today 17 files: mostly the
-  device pool, panel and views, plus `mcp_host` and four `shell` modules; many only name types
-  that `core::device` also exports).
+- [ ] No `hangar_devices::` paths in `app/src` outside the adapters (today 26 files, tests aside:
+  mostly the device pool, panel and views, plus `mcp_host`, `state` and nine `shell` modules;
+  many only name types that `core::device` also exports).
 - [x] `HangarApp` has at most 15 fields.
-- [ ] No source file over about 800 lines (today: `shell.rs` 1,065, `shell/lifecycle.rs` 1,025,
-  `chat_view.rs` 1,003, `chat_view/render.rs` 984 and three files of 840–890 lines; the device pool,
-  device panel, changes view, dev hooks and settings were split by concern).
+- [ ] No source file over about 800 lines (today, all in `app` unless noted: `shell.rs` 1,065,
+  `shell/lifecycle.rs` 1,025, `chat_view.rs` 1,003, `chat_view/render.rs` 984, `shell/overview.rs`
+  890, `ops/tests.rs` 870, `mcp/src/tools.rs` 862, `shell/run.rs` 842).
 - [x] Every port is tested against its real adapter.
 
 ## References

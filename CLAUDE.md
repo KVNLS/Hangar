@@ -1,6 +1,7 @@
 # Hangar — working notes for Claude
 
-See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
+See PLAN.md for the roadmap and known gaps, docs/ARCHITECTURE.md for architecture, docs/HISTORY.md for what
+shipped, SPIKES.md for spike results.
 
 ## Commands
 - Build: `cargo build --workspace`
