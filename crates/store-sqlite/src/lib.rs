@@ -209,7 +209,7 @@ impl Store {
              FROM projects ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([], project_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "project")?)
     }
 
     pub fn get_project(&self, id: ProjectId) -> Result<Project> {
@@ -277,7 +277,7 @@ impl Store {
              FROM workspaces WHERE project_id = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([project_id.0.to_string()], workspace_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "workspace")?)
     }
 
     pub fn get_workspace(&self, id: WorkspaceId) -> Result<Workspace> {
@@ -353,7 +353,7 @@ impl Store {
              ORDER BY created_at, rowid"
         ))?;
         let rows = stmt.query_map([workspace_id.0.to_string()], session_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "session")?)
     }
 
     /// Sessions of every workspace that ended at or after `since`, the latest ended first.
@@ -364,7 +364,7 @@ impl Store {
              ORDER BY ended_at DESC, rowid DESC"
         ))?;
         let rows = stmt.query_map([since.0], session_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "session")?)
     }
 
     pub fn get_session(&self, id: SessionId) -> Result<Session> {
@@ -462,7 +462,7 @@ impl Store {
              FROM usage WHERE at >= ?1 ORDER BY at, rowid",
         )?;
         let rows = stmt.query_map([since.0], usage_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        Ok(readable(rows, "usage")?)
     }
 
     /// The raw JSON stored under `key`; `None` when it was never set.
@@ -628,6 +628,27 @@ fn json_at<T: serde::de::DeserializeOwned>(row: &Row<'_>, index: usize) -> rusql
 #[derive(Debug, thiserror::Error)]
 #[error("unknown workspace status `{0}`")]
 struct UnknownStatus(String);
+
+/// The rows that decode. A row this build cannot read (a value written by a newer Hangar, or
+/// edited by hand) is logged and skipped so the rest still loads; database errors still fail.
+fn readable<T>(
+    rows: impl Iterator<Item = rusqlite::Result<T>>,
+    what: &str,
+) -> rusqlite::Result<Vec<T>> {
+    let mut out = Vec::new();
+    for row in rows {
+        match row {
+            Ok(row) => out.push(row),
+            Err(
+                err @ (rusqlite::Error::FromSqlConversionFailure(..)
+                | rusqlite::Error::IntegralValueOutOfRange(..)
+                | rusqlite::Error::InvalidColumnType(..)),
+            ) => tracing::warn!("skipping an unreadable {what} row: {err}"),
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(out)
+}
 
 fn project_from_row(row: &Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
