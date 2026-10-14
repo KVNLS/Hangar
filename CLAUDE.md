@@ -12,6 +12,8 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 - App: `cargo run -p hangar-app`. Dev env: `HANGAR_DB`, `HANGAR_WORKTREES` override storage paths;
   `HANGAR_DEV_OPEN=<repo>` (+ `HANGAR_DEV_AGENT`, `HANGAR_DEV_INPUT`) drives the add-project → workspace →
   agent flow without clicks (see `crates/app/src/main.rs`). Never point these at real data in tests.
+- MCP bridge: `hangar mcp-bridge` (agents start it as their `hangar` MCP server; needs `HANGAR_MCP_SOCKET` and
+  `HANGAR_MCP_SESSION`, set by the app on each agent). End-to-end test: `cargo test -p hangar-app --test mcp_bridge`.
 
 ## Toolchain
 - Rust 1.99.0 pinned in `rust-toolchain.toml`, edition 2024, one Cargo workspace.
