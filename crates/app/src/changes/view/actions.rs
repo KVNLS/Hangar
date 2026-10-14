@@ -395,7 +395,7 @@ impl ChangesPanel {
         let muted = theme.muted_foreground;
 
         let detached = status.branch.is_none();
-        let nothing_to_push = status.upstream.is_some() && status.ahead == 0;
+        let nothing_to_push = review::own_upstream(&status).is_some() && status.ahead == 0;
         let push = Button::new("review-push")
             .small()
             .ghost()

@@ -75,9 +75,19 @@ pub fn commit_blocker(message: &str, staged: usize) -> Option<&'static str> {
     }
 }
 
+/// The branch's upstream when it is the same-named remote branch (where Push goes). A branch
+/// tracking its base (`origin/main`) counts as unpublished.
+pub fn own_upstream(status: &Status) -> Option<&str> {
+    let branch = status.branch.as_deref()?;
+    status
+        .upstream
+        .as_deref()
+        .filter(|up| up.ends_with(&format!("/{branch}")))
+}
+
 /// Push button label: `Publish` before the first push, then `Push ↑2 ↓1`.
 pub fn push_label(status: &Status) -> String {
-    if status.upstream.is_none() {
+    if own_upstream(status).is_none() {
         return "Publish".to_owned();
     }
     let mut label = "Push".to_owned();
@@ -91,7 +101,7 @@ pub fn push_label(status: &Status) -> String {
 }
 
 pub fn push_tooltip(status: &Status) -> String {
-    match &status.upstream {
+    match own_upstream(status) {
         None => "Push the branch and set its upstream".to_owned(),
         Some(up) if status.ahead == 0 && status.behind == 0 => format!("Up to date with {up}"),
         Some(up) => format!(
@@ -334,6 +344,11 @@ mod tests {
 
         let mut status = Status::default();
         assert_eq!(push_label(&status), "Publish");
+        status.branch = Some("hangar/x".into());
+        status.upstream = Some("origin/main".into());
+        status.ahead = 3;
+        assert_eq!(push_label(&status), "Publish");
+        status.ahead = 0;
         status.upstream = Some("origin/hangar/x".into());
         assert_eq!(push_label(&status), "Push");
         assert!(push_tooltip(&status).contains("Up to date"));
