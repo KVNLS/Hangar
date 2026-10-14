@@ -74,6 +74,47 @@ pub struct LogModel {
     /// The visible line with the most characters (sequence number, length): the list is as
     /// wide as it, so long lines scroll sideways.
     widest: Option<(u64, usize)>,
+    /// Warnings and errors (faults included) held, filtered or not.
+    counts: LevelCounts,
+}
+
+/// Warnings and errors among the held lines, kept as lines come and go.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LevelCounts {
+    pub warnings: usize,
+    pub errors: usize,
+}
+
+impl LevelCounts {
+    fn slot(&mut self, level: LogLevel) -> Option<&mut usize> {
+        match level {
+            LogLevel::Warn => Some(&mut self.warnings),
+            LogLevel::Error | LogLevel::Fault => Some(&mut self.errors),
+            _ => None,
+        }
+    }
+
+    fn add(&mut self, level: LogLevel) {
+        if let Some(n) = self.slot(level) {
+            *n += 1;
+        }
+    }
+
+    fn remove(&mut self, level: LogLevel) {
+        if let Some(n) = self.slot(level) {
+            *n = n.saturating_sub(1);
+        }
+    }
+
+    /// `2 warnings · 1 error`.
+    pub fn summary(self) -> String {
+        let plural = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+        format!(
+            "{} · {}",
+            plural(self.warnings, "warning"),
+            plural(self.errors, "error")
+        )
+    }
 }
 
 impl LogModel {
@@ -86,6 +127,7 @@ impl LogModel {
             min_level: LogLevel::Verbose,
             query: String::new(),
             widest: None,
+            counts: LevelCounts::default(),
         }
     }
 
@@ -108,11 +150,14 @@ impl LogModel {
             let mut evicted_widest = false;
             if self.lines.len() >= self.cap
                 && let Some(old) = self.lines.pop_front()
-                && self.visible.front() == Some(&old.seq)
             {
-                self.visible.pop_front();
-                evicted_widest = self.widest.is_some_and(|(seq, _)| seq == old.seq);
+                self.counts.remove(old.level);
+                if self.visible.front() == Some(&old.seq) {
+                    self.visible.pop_front();
+                    evicted_widest = self.widest.is_some_and(|(seq, _)| seq == old.seq);
+                }
             }
+            self.counts.add(line.level);
             if self.passes(line.level, &line.text) {
                 self.visible.push_back(line.seq);
                 shown += 1;
@@ -156,6 +201,11 @@ impl LogModel {
         self.lines.clear();
         self.visible.clear();
         self.widest = None;
+        self.counts = LevelCounts::default();
+    }
+
+    pub fn counts(&self) -> LevelCounts {
+        self.counts
     }
 
     pub fn set_min_level(&mut self, level: LogLevel) {
@@ -337,6 +387,41 @@ mod tests {
         );
         m.clear();
         assert_eq!((m.len(), m.total()), (0, 0));
+    }
+
+    #[test]
+    fn warning_and_error_counts_follow_the_ring_buffer() {
+        let mut m = LogModel::new(3);
+        assert_eq!(m.counts(), LevelCounts::default());
+        m.push([
+            entry(LogLevel::Warn, "w1"),
+            entry(LogLevel::Error, "e1"),
+            entry(LogLevel::Info, "i1"),
+        ]);
+        assert_eq!(
+            m.counts(),
+            LevelCounts {
+                warnings: 1,
+                errors: 1
+            }
+        );
+        // Filters do not change the counts.
+        m.set_min_level(LogLevel::Fault);
+        m.set_query("nothing matches");
+        // Evicts the warning, then the error; a fault counts as an error.
+        m.push([entry(LogLevel::Fault, "f1"), entry(LogLevel::Debug, "d1")]);
+        assert_eq!(
+            m.counts(),
+            LevelCounts {
+                warnings: 0,
+                errors: 1
+            }
+        );
+        assert_eq!(m.counts().summary(), "0 warnings · 1 error");
+        m.push([entry(LogLevel::Warn, "w2"), entry(LogLevel::Warn, "w3")]);
+        assert_eq!(m.counts().summary(), "2 warnings · 0 errors");
+        m.clear();
+        assert_eq!(m.counts(), LevelCounts::default());
     }
 
     #[test]
