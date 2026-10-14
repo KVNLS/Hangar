@@ -11,23 +11,22 @@ keeps the product roadmap.
                  │  app (GPUI views)   mcp server/bridge  dev │
                  └───────────────┬───────────────────────────┘
                                  ▼
-               usecases  (application services, headless)          ← planned
+               usecases  (application services, headless)
                                  │
                                  ▼
                core  (domain model, pure rules, port traits)
                                  ▲ implemented by
      ┌──────────┬──────────┬─────┴─────┬──────────┬──────────┐
   store-sqlite  worktree   agents     devices    files     runner
-  (planned)     (git/gh)   (pty/acp)  (simctl…)  (notify)
+  (rusqlite)    (git/gh)   (pty/acp)  (simctl…)  (notify)
 ```
 
-- Dependencies point inwards. `core` depends on no workspace crate and on no I/O or runtime crate
-  (no `tokio`, no UI). Adapter crates depend on `core`, never on each other's internals or on
+- Dependencies point inwards. `core` depends on no workspace crate and only on `serde`,
+  `thiserror` and `uuid` (no I/O, runtime or UI crate). Adapter crates depend on `core`, never on each other's internals or on
   `usecases`. Only `app` and `examples` (the composition roots) use GPUI and `anyhow`.
 - Enforced by `crates/app/tests/architecture.rs` (`cargo metadata`, no extra tool). A new crate must
-  be given a layer there. Today's allowed edges between library crates are recorded as is
-  (`agents → terminal`, `files → worktree`, `runner → devices`, `mcp → devices`); the roadmap removes
-  the last three.
+  be given a layer there. Two edges between adapter crates remain (`agents → terminal`,
+  `files → worktree`); the `Changes` and `AgentLauncher` ports remove them.
 
 ## Decisions
 
@@ -47,16 +46,15 @@ keeps the product roadmap.
 ## Roadmap
 
 Each step is a series of small commits that leave behaviour unchanged, each passing fmt, clippy
-`-D warnings` and tests. No step adds an external dependency. New crates (`store-sqlite`,
-`usecases`) need the owner's approval.
+`-D warnings` and tests. No step adds an external dependency. The owner approved the new
+`store-sqlite` and `usecases` crates.
 
 1. **Guardrails** — done
    - Layering test (`crates/app/tests/architecture.rs`).
    - This document.
    - Coverage check of `ops.rs` (21 tests: create, delete, archive/restore, sessions, settings) and
-     `device_pool` (15 tests). Gap: the rollback of `create_workspace_from` when the row cannot be
-     saved (worktree and branch removed). Test it through the `Store` port in step 4, before step 5
-     moves it; today it needs a failing SQLite.
+     `device_pool` (15 tests). Gap found: the rollback of `create_workspace_from` when the row
+     cannot be saved; now covered by a `usecases` test with a refusing store double.
 2. **Quick wins** — done
    - One `Platform`: the app's copy is gone. `hangar_devices::Platform` owns ids, labels and
      readiness/boot/shutdown/rotate rules. The panel adds controls and hints (`PlatformUi`) and
@@ -65,32 +63,42 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
    - `AgentProfile` table: kind, MCP wiring and Ollama support per preset. No other code
      matches on agent ids; a test keeps presets and profiles in step.
    - Unused `EventBus` deleted; `tokio` removed from `core`.
-3. **Pure domain**
-   - Move `Store` into `crates/store-sqlite`; drop `rusqlite` from `CORE_EXTERNAL`.
-   - Move `Platform`, `Input`, `Key`, `Orientation`, `ScreenSpec` into `core::device`
-     (`devices` re-exports them); `runner` and `mcp` stop depending on `devices`.
-   - Move naming rules (`unique_slug`, `branch_name`, `worktree_path`) from `app::paths` into `core`.
-   - Extract the device allocator (`device_pool::policy` plus lease and assignment state) as a pure
-     state machine: events and `Instant` in, commands (`Boot`, `Shutdown`, `Grant`, `Notice`) out.
-4. **Ports**, only at real I/O boundaries, each with a contract suite:
-   - `Store` (one trait, so changes across aggregates can share a transaction).
-   - `Worktrees`, `Changes`, `ReviewOps` and `CodeHost` (`gh`), implemented by `worktree`.
-     `files` takes `Arc<dyn Changes>` instead of `hangar-worktree`.
+3. **Pure domain** — done
+   - `Store` lives in `crates/store-sqlite`; `core` has no `rusqlite`, `tokio`, `tracing` or
+     `serde_json` any more.
+   - `core::device`: `Platform` (with its rules), `DeviceInfo`, `ScreenSpec`, `Frame`, `Input`,
+     `Key`, `Orientation`, `LogLevel` and the state words; `devices` re-exports them, PNG export
+     stays there (`SavePng`). `runner` and `mcp` depend on `core`, not on `devices`.
+   - Naming rules (`BRANCH_PREFIX`, `branch_name`, `worktree_path`, `unique_slug`) are in `core`.
+   - The allocation policy (`device_pool::policy`: lease queue with an injected `Instant`, slots,
+     capacity) was already pure and now only uses `core` types. Moving the rest of `DevicePool`'s
+     orchestration (81 GPUI context calls) behind a commands-out state machine needs a live check
+     on macOS with simulators; it moves to step 7.
+4. **Ports**, only at real I/O boundaries, each tested against its real adapter:
+   - Done: `ports::Store` (implemented by `store-sqlite`) and `ports::VersionControl` (the git
+     operations of the workspace lifecycle, `worktree::GitCli`, tested against a temp repository).
+     `PortError` keeps adapter error types out of `core` and displays as the adapter's error.
+   - Next: `Changes` (status, diff, merge base, ignore checks) so `files` stops depending on
+     `worktree`; `ReviewOps` and `CodeHost` (`gh`) for the review screen. These need the status and
+     patch types (`Status`, `FileDiff`, `Hunk`, …) to move into `core` first.
    - `AgentLauncher` (`spawn_pty`, `start_acp`).
    - `DeviceCatalog` per platform (list, boot, clone, delete) and `HostResources`; this replaces
      the `PlatformDevices` extension trait.
    - `runner` stays as is: detection reads a few files and is tested on temp dirs.
 5. **`usecases` crate**
-   - `ProjectService`, `WorkspaceService` (create with rollback, archive, restore, delete),
-     `SessionService` (PTY and ACP start, recording the outcome) and `SettingsService`, out of
-     `ops.rs`, with `thiserror` errors.
+   - Done: `usecases::workspaces::Workspaces` (add project, create with rollback, archive,
+     restore, delete, remove project) and `delete_summary`, with a `thiserror` `WorkspaceError`
+     whose messages match the old ones. `app::ops` keeps its signatures as thin wrappers.
+   - Next: `SessionService` (PTY and ACP start, recording the outcome) behind `AgentLauncher`, and
+     `SettingsService`.
    - `DeviceTools`: the tool dispatch of `mcp_host`. The `mcp::ToolHost` impl that calls it lives
      in an adapter (app side), so `usecases` never depends on `mcp`.
 6. **`Device::capabilities()`** with its contract test; the panel and MCP tools read flags
    instead of matching on `Unsupported`.
 7. **Split `HangarApp`** (about 50 fields) into `WorkspacesController`, `SessionsController`,
-   `RunController` and `LayoutState`. Services are passed in through constructors. Views do no I/O
-   of their own.
+   `RunController` and `LayoutState`, and `DevicePool`'s orchestration into a state machine.
+   Services are passed in through constructors. Views do no I/O of their own. Check on macOS
+   with the dev hooks and real simulators/emulators before merging.
 8. **Docs and cleanup**: PLAN.md crate table, CLAUDE.md rules, delete the free-function
    re-exports nothing uses any more, re-run the end-to-end dev flow.
 
@@ -98,8 +106,8 @@ Steps 3–4 unlock the rest; 5 and 6 are independent of each other.
 
 ## Done when
 
-- The layering test passes with `runner` and `mcp` no longer depending on `devices`, and with
-  `rusqlite` out of `core`.
+- The layering test passes with no edges between adapter crates (today: `agents → terminal`,
+  `files → worktree`).
 - No `hangar_worktree::`, `hangar_devices::` or `Store` paths in `app/src` outside the composition
   root and the adapter impls.
 - `HangarApp` has at most 15 fields and no source file is over about 800 lines.
