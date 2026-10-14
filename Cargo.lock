@@ -2997,6 +2997,7 @@ dependencies = [
  "hangar-files",
  "hangar-mcp",
  "hangar-runner",
+ "hangar-store-sqlite",
  "hangar-terminal",
  "hangar-worktree",
  "image",
@@ -3016,12 +3017,8 @@ dependencies = [
 name = "hangar-core"
 version = "0.1.0"
 dependencies = [
- "rusqlite",
  "serde",
  "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tracing",
  "uuid",
 ]
 
@@ -3098,6 +3095,20 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "hangar-store-sqlite"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

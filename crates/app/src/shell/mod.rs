@@ -37,9 +37,9 @@ use gpui_kit::*;
 use hangar_agents::AgentHandle;
 use hangar_agents::acp::AcpSession;
 use hangar_core::{
-    AgentState, Project, ProjectId, Session, SessionStatus, Store, Workspace, WorkspaceId,
-    WorkspaceStatus,
+    AgentState, Project, ProjectId, Session, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
+use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
 use hangar_worktree::MergeStrategy;
 

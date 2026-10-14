@@ -20,8 +20,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use gpui_kit::*;
-use hangar_core::{Setting, Store, WorkspaceId};
+use hangar_core::{Setting, WorkspaceId};
 use hangar_devices::capacity::{self, DeviceCost, HostResources, Pressure};
+use hangar_store_sqlite::Store;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::device_panel::{BackendReason, DeviceKey, Platform};

@@ -1,11 +1,11 @@
-//! Projects, workspaces, sessions, agent state and SQLite persistence.
+//! The domain: projects, workspaces, sessions, agent state, device vocabulary and typed
+//! setting keys. Pure data and rules; persistence lives in `hangar-store-sqlite`.
 
 mod agent_state;
 pub mod device;
 mod model;
 mod setting;
 mod slug;
-mod store;
 
 pub use agent_state::{AcpTurn, AgentState};
 pub use model::{
@@ -14,4 +14,3 @@ pub use model::{
 };
 pub use setting::Setting;
 pub use slug::slugify;
-pub use store::{SCHEMA_VERSION, Store, StoreError, default_db_path};

@@ -10,9 +10,10 @@ use anyhow::{Context as _, anyhow};
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, AgentHandle, PtyAdapter, SpawnContext, UpdateHook};
 use hangar_core::{
-    Project, ProjectId, Session, SessionId, SessionStatus, Store, Timestamp, Workspace,
-    WorkspaceId, WorkspaceStatus, slugify,
+    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
+    WorkspaceStatus, slugify,
 };
+use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
 
 use crate::agents::{self, AgentExtras};
@@ -758,7 +759,8 @@ pub fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::agents;
-    use hangar_core::{SessionStatus, Setting, Store};
+    use hangar_core::{SessionStatus, Setting};
+    use hangar_store_sqlite::Store;
     use hangar_terminal::ExitInfo;
     use std::path::Path;
     use std::process::Command;

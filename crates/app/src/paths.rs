@@ -67,7 +67,7 @@ pub fn db_path() -> Option<PathBuf> {
     std::env::var_os(DB_ENV)
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
-        .or_else(hangar_core::default_db_path)
+        .or_else(hangar_store_sqlite::default_db_path)
 }
 
 /// Hangar's data directory: the database's directory.

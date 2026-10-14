@@ -13,6 +13,7 @@ use serde_json::Value;
 /// (`hangar-app`, `hangar-examples`) are the composition root and may use any of them.
 const ALLOWED: &[(&str, &[&str])] = &[
     ("hangar-core", &[]),
+    ("hangar-store-sqlite", &["hangar-core"]),
     ("hangar-worktree", &[]),
     ("hangar-terminal", &[]),
     ("hangar-devices", &["hangar-core"]),
@@ -27,15 +28,8 @@ const OUTER: &[&str] = &["hangar-app", "hangar-examples"];
 /// The UI toolkit: only outer crates may use it.
 const UI: &[&str] = &["gpui-kit", "gpui", "gpui-pre", "gpui-component"];
 
-/// External crates the domain crate may use. `rusqlite` goes once the store leaves `core`.
-const CORE_EXTERNAL: &[&str] = &[
-    "rusqlite",
-    "serde",
-    "serde_json",
-    "thiserror",
-    "tracing",
-    "uuid",
-];
+/// External crates the domain crate may use: data and error derives only, no I/O or runtime.
+const CORE_EXTERNAL: &[&str] = &["serde", "uuid"];
 
 struct Package {
     name: String,

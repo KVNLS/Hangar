@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::*;
-use crate::slugify;
+use hangar_core::slugify;
 
 fn store() -> Store {
     Store::open_in_memory().unwrap()

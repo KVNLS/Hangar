@@ -9,10 +9,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, ffi, params};
 use uuid::Uuid;
 
-use crate::Setting;
-use crate::model::{
-    AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
-    WorkspaceId, WorkspaceStatus,
+use hangar_core::{
+    AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Setting, Timestamp,
+    Workspace, WorkspaceId, WorkspaceStatus,
 };
 
 #[cfg(test)]
