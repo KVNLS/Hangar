@@ -523,3 +523,13 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   mid-turn, the Terminal settings. Not driven live: the chat's stop timer (no dev hook presses Stop),
   removing a project with a real clone.
 
+## Crash safety and leftovers (2026-10-12, branch `crash-safety`)
+- PTY watchdog: each terminal agent gets one; when Hangar dies (crash, SIGKILL) it hangs up, then kills,
+  the processes still on the agent's terminal (listed once with `ps -t`; the agent leads its own session,
+  and macOS `pkill` has no `-s`). Seen live: a SIGHUP-ignoring agent gone 6 s after the app was SIGKILLed.
+- `agent_prompt` refuses children whose agent does not report its waits (`reports_waits` column in
+  `PROFILES`), since their approval state is only guessed.
+- Leftover simulator copies: `Store::setting_keys`; at startup a notice offers to delete copies whose
+  workspace no longer exists (this database's assignments only). Seen live with a throwaway copy; the
+  Delete button itself was not clicked (it reuses the pool's `delete_clone`).
+

@@ -134,13 +134,11 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   - Review: `.gitignore` edits leave ignored files in the live diff until a full refresh; non-GitHub
     remotes show a permanent PR error; submodule edits, mode-only and CRLF changes are shown poorly.
   - Run loop and devices: detection misses monorepos and nested projects and silently picks one of several
-    `.xcodeproj`; an Expo run waits for a log line only on the visible screen; Hangar clones orphaned
-    before 2026-10-09 are not swept (`list_clones` unused); Android and the memory-pressure guard unchecked.
-  - Agents: terminal agents without hooks (all but Claude Code) report state by output timing, so a lead's
-    `agent_prompt` can still land on their prompts; an `ask_user` whose bridge died while its agent lives
-    stays open until the 30-minute timeout (no MCP cancellation); a Hangar crash leaves a terminal agent
-    that ignores SIGHUP running (no watchdog for PTY agents); the chat shows only a long message's first
-    64 KB (no "show all"); resumed sessions may book their earlier cost again (unverified).
+    `.xcodeproj`; an Expo run waits for a log line only on the visible screen; Android and the
+    memory-pressure guard unchecked.
+  - Agents: an `ask_user` whose bridge died while its agent lives stays open until the 30-minute timeout
+    (no MCP cancellation); the chat shows only a long message's first 64 KB (no "show all"); resumed
+    sessions may book their earlier cost again (unverified).
   - UI: the title bar overflows at 1280 px on Review and Files; non-ASCII names lose their characters in
     slugs; duplicate workspace names look alike; queued cards show Resume; dark palette selection contrast;
     shortcut labels differ between palette, title bar and Keybindings.
@@ -205,6 +203,10 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   child waits for approval or input, prompts stripped of control characters; programs may write the
   clipboard (OSC 52) only when Settings › Appearance allows it (off by default); size limits on MCP
   messages and tool texts, chat messages, the Files viewer, terminal titles and clipboard writes.
+- `Store::setting_keys(prefix)` added to the port, for leftover device assignments (2026-10-12).
+- `agent_prompt` only reaches children whose agent reports its waits (`reports_waits` in `PROFILES`):
+  terminal Claude Code (hooks) and the ACP presets; never terminal Codex/OpenCode/Gemini or a shell
+  (2026-10-12).
 
 ## Next
 1. Split the files over 800 lines (docs/ARCHITECTURE.md "Done when").
