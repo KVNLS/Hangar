@@ -33,6 +33,9 @@ pub struct SimWindow {
 }
 
 pub(crate) fn click(info: &DeviceInfo, input: Input) -> Result<()> {
+    if let Some(what) = unsupported(&input) {
+        return Err(Error::Unsupported(what));
+    }
     if !CGPreflightPostEventAccess() {
         return Err(Error::Permission(
             "posting mouse events needs Accessibility access for this app (System Settings ▸ \
@@ -44,12 +47,8 @@ pub(crate) fn click(info: &DeviceInfo, input: Input) -> Result<()> {
         .screen
         .ok_or(Error::Unsupported("simctl input without known screen size"))?;
     let windows = simulator_windows();
-    let window = pick_window(&windows, &info.name).ok_or_else(|| {
-        Error::NotFound(format!(
-            "visible Simulator.app window for {} (open it with `open -a Simulator`)",
-            info.name
-        ))
-    })?;
+    let window = pick_window(&windows, &info.name)
+        .ok_or_else(|| no_window(&info.name, simulator_app_installed()))?;
     if window.owner == DEVICE_HUB_OWNER {
         // The hub window embeds the device screen next to its own sidebar/toolbar at a position
         // that can only be discovered through Accessibility or screen capture; not mapped.
@@ -80,16 +79,49 @@ pub(crate) fn click(info: &DeviceInfo, input: Input) -> Result<()> {
             post_key(KEY_H, true)?;
             post_key(KEY_H, false)
         }
-        Input::Lock | Input::VolumeUp | Input::VolumeDown | Input::AppSwitch => {
-            Err(Error::Unsupported(
-                "this hardware button through the simctl backend (use the private backend)",
-            ))
-        }
-        Input::Back => Err(Error::Unsupported("Back button on iOS")),
-        Input::Key(_) => Err(Error::Unsupported(
-            "keyboard keys through the simctl backend (use the private backend)",
+        Input::Lock
+        | Input::VolumeUp
+        | Input::VolumeDown
+        | Input::AppSwitch
+        | Input::Back
+        | Input::Key(_) => Err(Error::Unsupported(
+            unsupported(&input).unwrap_or("this input through the simctl backend"),
         )),
     }
+}
+
+/// What this backend can never send, whatever window is open.
+fn unsupported(input: &Input) -> Option<&'static str> {
+    match input {
+        Input::Lock | Input::VolumeUp | Input::VolumeDown | Input::AppSwitch => {
+            Some("this hardware button through the simctl backend (use the private backend)")
+        }
+        Input::Back => Some("Back button on iOS"),
+        Input::Key(_) => Some("keyboard keys through the simctl backend (use the private backend)"),
+        _ => None,
+    }
+}
+
+/// No window shows the device. Xcode 27 has no Simulator.app to open: input is not possible.
+fn no_window(device: &str, simulator_app: bool) -> Error {
+    if simulator_app {
+        Error::NotFound(format!(
+            "visible Simulator.app window for {device} (open it with `open -a Simulator`)"
+        ))
+    } else {
+        Error::Unsupported(
+            "input on the simctl backend: this Xcode has no Simulator.app, so the device is \
+             view only (use the private backend)",
+        )
+    }
+}
+
+fn simulator_app_installed() -> bool {
+    super::developer_dir().is_ok_and(|dir| {
+        std::path::Path::new(&dir)
+            .join("Applications/Simulator.app")
+            .is_dir()
+    })
 }
 
 fn post_mouse(kind: CGEventType, p: CGPoint) -> Result<()> {
@@ -236,6 +268,21 @@ pub(crate) fn window_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buttons_and_keys_are_unsupported_before_any_window_lookup() {
+        for input in [Input::Lock, Input::VolumeUp, Input::AppSwitch, Input::Back] {
+            assert!(unsupported(&input).is_some(), "{input:?}");
+        }
+        assert!(unsupported(&Input::Tap { x: 1.0, y: 1.0 }).is_none());
+        assert!(unsupported(&Input::Home).is_none());
+    }
+
+    #[test]
+    fn without_simulator_app_input_is_unsupported() {
+        assert!(matches!(no_window("iPhone", false), Error::Unsupported(_)));
+        assert!(matches!(no_window("iPhone", true), Error::NotFound(_)));
+    }
 
     fn win(name: Option<&str>, w: f64, h: f64) -> SimWindow {
         SimWindow {
