@@ -331,6 +331,22 @@ pub fn split_runs<S: Clone>(
         .collect()
 }
 
+/// Index of the row with the longest text (hunk headers included).
+pub fn widest_row(file: &FileDiff, rows: &[DiffRow]) -> usize {
+    rows.iter()
+        .enumerate()
+        .max_by_key(|(_, row)| match **row {
+            DiffRow::Line { hunk, line } => file
+                .hunks
+                .get(hunk)
+                .and_then(|h| h.lines.get(line))
+                .map_or(0, |l| l.text.len() + l.text.matches('\t').count() * 3),
+            DiffRow::Hunk { hunk } => file.hunks.get(hunk).map_or(0, |h| h.header.len() + 24),
+            DiffRow::Notice(n) => n.text().len(),
+        })
+        .map_or(0, |(ix, _)| ix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,6 +542,28 @@ mod tests {
 
         let empty = file("m", FileStatus::TypeChanged, vec![]);
         assert_eq!(flatten(&empty), [DiffRow::Notice(Notice::NoContent)]);
+    }
+
+    #[test]
+    fn widest_row_counts_tabs_and_notices() {
+        let mut f = file(
+            "x.rs",
+            FileStatus::Modified,
+            vec![hunk(vec![
+                line(LineKind::Context, "0123456789"),
+                line(LineKind::Added, "\t\t\t"),
+                line(LineKind::Added, "short"),
+            ])],
+        );
+        assert_eq!(widest_row(&f, &flatten(&f)), 0, "hunk header is the widest");
+        f.hunks[0].lines[0].text = "x".repeat(40);
+        assert_eq!(widest_row(&f, &flatten(&f)), 1);
+        f.hunks[0].lines[1].text = "\t".repeat(14);
+        assert_eq!(widest_row(&f, &flatten(&f)), 2);
+        f.truncated = true;
+        f.hunks[0].lines.truncate(1);
+        f.hunks[0].lines[0].text = "x".into();
+        assert_eq!(widest_row(&f, &flatten(&f)), 2, "truncation notice");
     }
 
     #[test]

@@ -19,7 +19,7 @@ use super::language::language_for_path;
 use super::live::WorkspaceDiff;
 use super::model::{
     DiffRow, DisplayLine, ListEntry, file_list, file_title, flatten, hunk_header, list_paths,
-    reselect, short_sha, status_letter,
+    reselect, short_sha, status_letter, widest_row,
 };
 
 const LIST_ROW_HEIGHT: f32 = 22.;
@@ -53,6 +53,8 @@ pub struct ChangesPanel {
     list: Arc<Vec<ListEntry>>,
     paths: Vec<PathBuf>,
     selected: Option<PathBuf>,
+    /// Selected as soon as it is listed (dev hook).
+    preferred: Option<PathBuf>,
     shown: Option<Shown>,
     /// Bumped on every highlight request; stale results are dropped.
     generation: u64,
@@ -78,6 +80,7 @@ impl ChangesPanel {
             list: Arc::default(),
             paths: Vec::new(),
             selected: None,
+            preferred: None,
             shown: None,
             generation: 0,
             highlight: None,
@@ -85,6 +88,10 @@ impl ChangesPanel {
             diff_scroll: UniformListScrollHandle::new(),
             _theme: theme,
         }
+    }
+
+    pub fn prefer(&mut self, path: PathBuf) {
+        self.preferred = Some(path);
     }
 
     pub fn workspace(&self) -> Option<WorkspaceId> {
@@ -137,7 +144,8 @@ impl ChangesPanel {
             return;
         };
         let list = file_list(source.diff.read(cx).files());
-        let selected = reselect(&self.paths, &list, self.selected.as_deref());
+        let preferred = self.preferred.take_if(|p| list_paths(&list).contains(p));
+        let selected = preferred.or_else(|| reselect(&self.paths, &list, self.selected.as_deref()));
         self.paths = list_paths(&list);
         self.list = Arc::new(list);
         tracing::debug!(
@@ -474,6 +482,7 @@ impl ChangesPanel {
                 let Some(shown) = &this.shown else {
                     return Vec::new();
                 };
+                tracing::trace!(?range, total = shown.rows.len(), "diff rows rendered");
                 range
                     .filter_map(|ix| render_row(shown, ix, cx))
                     .collect::<Vec<_>>()
@@ -657,20 +666,4 @@ fn split_path(path: &Path) -> (String, String) {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     (dir, name)
-}
-
-/// Index of the row with the longest text (hunk headers included).
-fn widest_row(file: &FileDiff, rows: &[DiffRow]) -> usize {
-    rows.iter()
-        .enumerate()
-        .max_by_key(|(_, row)| match **row {
-            DiffRow::Line { hunk, line } => file
-                .hunks
-                .get(hunk)
-                .and_then(|h| h.lines.get(line))
-                .map_or(0, |l| l.text.len() + l.text.matches('\t').count() * 3),
-            DiffRow::Hunk { hunk } => file.hunks.get(hunk).map_or(0, |h| h.header.len() + 24),
-            DiffRow::Notice(n) => n.text().len(),
-        })
-        .map_or(0, |(ix, _)| ix)
 }

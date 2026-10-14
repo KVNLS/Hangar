@@ -68,7 +68,8 @@ pub struct DevOptions {
     pub delete_branch: bool,
     pub delete_force: bool,
     pub remove_project: Option<PathBuf>,
-    pub changes: bool,
+    /// `1`, or a worktree-relative path to select once it changes.
+    pub changes: Option<String>,
 }
 
 impl DevOptions {
@@ -86,7 +87,7 @@ impl DevOptions {
             delete_branch: flag("HANGAR_DEV_DELETE_BRANCH"),
             delete_force: flag("HANGAR_DEV_DELETE_FORCE"),
             remove_project: var("HANGAR_DEV_REMOVE_PROJECT").map(PathBuf::from),
-            changes: flag("HANGAR_DEV_CHANGES"),
+            changes: var("HANGAR_DEV_CHANGES"),
         }
     }
 }
@@ -1465,9 +1466,13 @@ impl HangarApp {
 
 /// Runs the `HANGAR_DEV_*` hooks in order: open, archive, restore, delete, remove project.
 async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut AsyncWindowContext) {
-    if dev.changes {
-        tracing::info!("HANGAR_DEV_CHANGES");
+    if let Some(changes) = dev.changes.clone() {
+        tracing::info!(%changes, "HANGAR_DEV_CHANGES");
         let _ = this.update_in(cx, |this, window, cx| {
+            if changes != "1" {
+                this.changes_panel
+                    .update(cx, |panel, _| panel.prefer(PathBuf::from(changes)));
+            }
             this.set_changes_open(true, window, cx)
         });
     }
