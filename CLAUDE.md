@@ -12,6 +12,9 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 - App: `cargo run -p hangar-app`. Dev env: `HANGAR_DB`, `HANGAR_WORKTREES` override storage paths;
   `HANGAR_DEV_OPEN=<repo>` (+ `HANGAR_DEV_AGENT`, `HANGAR_DEV_INPUT`) drives the add-project → workspace →
   agent flow without clicks (see `crates/app/src/main.rs`). Never point these at real data in tests.
+- Structured agents (ACP): `HANGAR_DEV_AGENT=claude-acp` runs Claude Code through `claude-agent-acp` (must be on
+  PATH: `npm install -g @agentclientprotocol/claude-agent-acp`); `HANGAR_DEV_INPUT` becomes the first prompt.
+  Protocol tests: `cargo test -p hangar-agents acp`.
 - MCP bridge: `hangar mcp-bridge` (agents start it as their `hangar` MCP server; needs `HANGAR_MCP_SOCKET` and
   `HANGAR_MCP_SESSION`, set by the app on each agent). End-to-end test: `cargo test -p hangar-app --test mcp_bridge`.
 
