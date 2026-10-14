@@ -131,14 +131,18 @@ pub fn find_running(sdk: &AndroidSdk, serial_or_avd: &str) -> Result<RunningEmul
         .ok_or_else(|| Error::NotFound(format!("running emulator {serial_or_avd}")))
 }
 
-/// How the emulator renders without a window.
+/// How the emulator runs without showing its own window (measured on emulator 36.5, M5 Pro).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowMode {
-    /// `-no-window`: the headless binary. Software GPU (SwiftShader/lavapipe) on macOS, so snapshots
-    /// taken by Android Studio's windowed emulator do not load ("different renderer").
+    /// `-no-window -gpu host`: the headless binary on the host GPU. No UI process, no focus
+    /// steal. Android Studio's quick-boot snapshot does not load ("different renderer"), so each
+    /// boot is a cold boot (8-10 s here).
+    NoWindowHostGpu,
+    /// `-no-window`: headless with the default software renderer (SwiftShader/lavapipe): ~10x the
+    /// CPU of host GPU (1000% vs 80% while scrolling). Kept for machines without a usable GPU.
     NoWindow,
-    /// `-qt-hide-window`: the regular binary with its window hidden; keeps the host GPU and the
-    /// snapshots Android Studio made.
+    /// `-qt-hide-window`: the regular binary with its window hidden. Loads Android Studio's
+    /// snapshot (quick boot 5.7 s), but registers as a UI app and takes focus when it starts.
     HiddenWindow,
 }
 
@@ -162,7 +166,7 @@ pub struct BootOptions {
 impl Default for BootOptions {
     fn default() -> Self {
         Self {
-            window: WindowMode::HiddenWindow,
+            window: WindowMode::NoWindowHostGpu,
             cold_boot: false,
             save_snapshot: false,
             grpc_port: None,
@@ -184,13 +188,12 @@ pub fn boot_args(avd_id: &str, grpc_port: u16, opts: &BootOptions) -> Vec<String
         "-grpc-use-token".into(),
         "-no-boot-anim".into(),
     ];
-    args.push(
-        match opts.window {
-            WindowMode::NoWindow => "-no-window",
-            WindowMode::HiddenWindow => "-qt-hide-window",
-        }
-        .into(),
-    );
+    let window: &[&str] = match opts.window {
+        WindowMode::NoWindowHostGpu => &["-no-window", "-gpu", "host"],
+        WindowMode::NoWindow => &["-no-window"],
+        WindowMode::HiddenWindow => &["-qt-hide-window"],
+    };
+    args.extend(window.iter().map(|a| (*a).to_owned()));
     if opts.cold_boot {
         args.push("-no-snapshot-load".into());
     }
@@ -347,7 +350,9 @@ mod tests {
                 "8554",
                 "-grpc-use-token",
                 "-no-boot-anim",
-                "-qt-hide-window",
+                "-no-window",
+                "-gpu",
+                "host",
                 "-no-snapshot-save"
             ]
         );

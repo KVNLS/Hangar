@@ -1,8 +1,8 @@
 //! M4 spike: live Android emulator frames in a GPUI window, click to tap; headless bench.
 //!
 //! `cargo run -p hangar-examples --example spike_android -- [--backend grpc|adb] [--serial S | --avd ID]
-//!  [--boot AVD [--cold] [--window none|hidden]] [--bench SECS | --tap X,Y | --back | --home | --text T]
-//!  [--capture raw|png] [--out DIR] [--shutdown]`
+//!  [--boot AVD [--cold] [--window host|none|hidden]] [--bench SECS | --tap X,Y | --back | --home | --text T]
+//!  [--capture raw|png] [--out DIR] [--shutdown] [--relaunch]`
 //!
 //! Coordinates are dp (Android's points). `HANGAR_SIM_STATS=1` logs fps and capture→paint latency.
 
@@ -28,8 +28,9 @@ fn main() -> anyhow::Result<()> {
     let mut bench: Option<u64> = None;
     let mut one_input: Option<Input> = None;
     let mut text: Option<String> = None;
-    let mut capture = Capture::Raw;
+    let mut capture = Capture::Png;
     let mut shutdown = false;
+    let mut relaunch = false;
     let mut out = std::env::temp_dir().join("hangar-spike-android");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -44,11 +45,15 @@ fn main() -> anyhow::Result<()> {
             "--serial" | "--avd" => select = Some(args.next().context("needs a value")?),
             "--boot" => boot = Some(args.next().context("--boot needs an AVD id")?),
             "--cold" => opts.cold_boot = true,
+            "--emu-arg" => opts
+                .extra_args
+                .push(args.next().context("--emu-arg needs a value")?),
             "--window" => {
                 opts.window = match args.next().as_deref() {
+                    Some("host") => WindowMode::NoWindowHostGpu,
                     Some("none") => WindowMode::NoWindow,
                     Some("hidden") => WindowMode::HiddenWindow,
-                    other => bail!("--window none|hidden, got {other:?}"),
+                    other => bail!("--window host|none|hidden, got {other:?}"),
                 }
             }
             "--bench" => bench = Some(args.next().context("--bench needs seconds")?.parse()?),
@@ -71,12 +76,13 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             "--shutdown" => shutdown = true,
+            "--relaunch" => relaunch = true,
             "--out" => out = args.next().context("--out needs a directory")?.into(),
             "-h" | "--help" => {
                 println!(
                     "spike_android [--backend grpc|adb] [--serial S | --avd ID] [--boot AVD [--cold] \
-                     [--window none|hidden]] [--bench SECS | --tap X,Y | --back | --home | --text T] \
-                     [--capture raw|png] [--out DIR] [--shutdown]"
+                     [--window host|none|hidden]] [--bench SECS | --tap X,Y | --back | --home | --text T] \
+                     [--capture raw|png] [--out DIR] [--shutdown] [--relaunch]"
                 );
                 return Ok(());
             }
@@ -176,6 +182,27 @@ fn main() -> anyhow::Result<()> {
         )
     };
 
+    if relaunch {
+        // Device::shutdown then Device::boot on the same handle; frames must resume.
+        let t0 = Instant::now();
+        device.shutdown().context("shutdown")?;
+        println!("relaunch: shut down in {:.1} s", t0.elapsed().as_secs_f64());
+        let t0 = Instant::now();
+        device.boot().context("boot")?;
+        println!("relaunch: booted in {:.1} s", t0.elapsed().as_secs_f64());
+        let rx = device.frames();
+        let t0 = Instant::now();
+        while rx.borrow().is_none() || rx.borrow().as_ref().is_some_and(|f| f.captured_at < t0) {
+            if t0.elapsed() > std::time::Duration::from_secs(10) {
+                bail!("no new frame 10 s after relaunch");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        println!(
+            "relaunch: first new frame after {:.0} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     if shutdown {
         let t0 = Instant::now();
         device.shutdown().context("shutdown")?;

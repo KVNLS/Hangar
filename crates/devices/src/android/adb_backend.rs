@@ -15,10 +15,11 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Capture {
-    /// `screencap` raw RGBA: no PNG encode on the device, ~4x more bytes over adb.
-    #[default]
+    /// `screencap` raw RGBA: no PNG encode on the device, but 14.6 MB per 1280x2856 frame over
+    /// adb made it ~4x slower than PNG on emulator 36.5 (1.5 vs 6.3 fps while scrolling).
     Raw,
     /// `screencap -p`, decoded with `image`.
+    #[default]
     Png,
 }
 
@@ -26,7 +27,7 @@ pub struct AdbDevice {
     info: DeviceInfo,
     screen: ScreenSpec,
     adb: Adb,
-    frames: FrameReceiver,
+    frames: Arc<FrameSender>,
     stop: Arc<AtomicBool>,
     poller: Option<JoinHandle<()>>,
 }
@@ -37,8 +38,11 @@ impl AdbDevice {
             .screen
             .ok_or_else(|| Error::NotFound(format!("screen size of {}", info.udid)))?;
         let first = screenshot(&adb, &info.udid, capture)?;
-        let (tx, frames) = tokio::sync::watch::channel(None);
-        tx.send_replace(Some(Frame { seq: 1, ..first }));
+        let frames = Arc::new(tokio::sync::watch::Sender::new(Some(Frame {
+            seq: 1,
+            ..first
+        })));
+        let tx = frames.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let poll_stop = stop.clone();
         let (poll_adb, serial) = (adb.clone(), info.udid.clone());
@@ -60,9 +64,14 @@ impl AdbDevice {
     }
 }
 
+/// Polls only while someone holds a receiver from [`Device::frames`].
 fn poll(adb: &Adb, serial: &str, capture: Capture, tx: &FrameSender, stop: &AtomicBool) {
     let mut seq = 1;
-    while !stop.load(Ordering::Relaxed) && !tx.is_closed() {
+    while !stop.load(Ordering::Relaxed) {
+        if tx.receiver_count() == 0 {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        }
         match screenshot(adb, serial, capture) {
             Ok(frame) => {
                 seq += 1;
@@ -177,7 +186,9 @@ impl Device for AdbDevice {
     }
 
     fn frames(&self) -> FrameReceiver {
-        self.frames.clone()
+        let mut rx = self.frames.subscribe();
+        rx.mark_changed();
+        rx
     }
 
     fn send_input(&self, input: Input) -> Result<()> {

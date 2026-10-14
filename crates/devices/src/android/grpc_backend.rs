@@ -36,7 +36,7 @@ pub struct GrpcEmulator {
     sdk: AndroidSdk,
     boot_options: BootOptions,
     conn: Arc<RwLock<Option<Conn>>>,
-    frames: FrameReceiver,
+    frames: Arc<FrameSender>,
     rt: Option<Runtime>,
 }
 
@@ -55,12 +55,12 @@ impl GrpcEmulator {
             .enable_all()
             .build()?;
         let client = connect(&rt, &running)?;
-        let (tx, frames) = tokio::sync::watch::channel(None);
+        let frames = Arc::new(tokio::sync::watch::Sender::new(None));
         let conn = Arc::new(RwLock::new(Some(Conn {
             client,
             running: running.clone(),
         })));
-        rt.spawn(stream_frames(conn.clone(), tx, size));
+        rt.spawn(stream_frames(conn.clone(), frames.clone(), size));
         Ok(Self {
             info: running.info.clone(),
             screen,
@@ -143,18 +143,17 @@ fn connect(rt: &Runtime, running: &RunningEmulator) -> Result<Client> {
         .map_err(|_| Error::Command("gRPC connect task dropped".into()))?
 }
 
-async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: FrameSender, size: FrameSize) {
+/// Streams only while someone holds a receiver from [`Device::frames`]: an unwatched device costs
+/// no emulator encoding, copies or conversion.
+async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: Arc<FrameSender>, size: FrameSize) {
     let mut seq = 0u64;
     loop {
-        if tx.is_closed() {
-            return;
-        }
         let client = conn
             .read()
             .ok()
             .and_then(|c| c.as_ref().map(|c| c.client.clone()));
-        let Some(mut client) = client else {
-            tokio::time::sleep(Duration::from_millis(250)).await;
+        let (Some(mut client), true) = (client, tx.receiver_count() > 0) else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         };
         let request = proto::ImageFormat {
@@ -163,45 +162,56 @@ async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: FrameSender, size: F
             height: size.height,
             ..Default::default()
         };
-        match client.stream_screenshot(request).await {
-            Ok(resp) => {
-                let mut stream = resp.into_inner();
-                loop {
-                    match stream.message().await {
-                        Ok(Some(img)) => {
-                            let captured_at = produced_at(img.timestamp_us);
-                            let (w, h) =
-                                img.format.as_ref().map_or((0, 0), |f| (f.width, f.height));
-                            // An inactive display sends empty images.
-                            if w == 0 || h == 0 {
-                                continue;
-                            }
-                            let got = img.image.len();
-                            let Some(bgra) = grpc::rgba_to_bgra(img.image, w, h) else {
-                                tracing::warn!("short frame: {got} bytes for {w}x{h}");
-                                continue;
-                            };
-                            seq += 1;
-                            tx.send_replace(Some(Frame {
-                                width: w,
-                                height: h,
-                                stride: w as usize * 4,
-                                bgra: Arc::from(bgra),
-                                captured_at,
-                                seq,
-                            }));
-                        }
-                        Ok(None) => break,
-                        Err(s) => {
-                            tracing::debug!("screenshot stream: {s}");
-                            break;
-                        }
+        let mut stream = match client.stream_screenshot(request).await {
+            Ok(resp) => resp.into_inner(),
+            Err(s) => {
+                tracing::debug!("streamScreenshot: {s}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        };
+        let mut watchers = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            let msg = tokio::select! {
+                m = stream.message() => m,
+                _ = watchers.tick() => {
+                    if tx.receiver_count() == 0 {
+                        break;
                     }
+                    continue;
+                }
+            };
+            match msg {
+                Ok(Some(img)) => {
+                    let captured_at = produced_at(img.timestamp_us);
+                    let (w, h) = img.format.as_ref().map_or((0, 0), |f| (f.width, f.height));
+                    // An inactive display sends empty images.
+                    if w == 0 || h == 0 {
+                        continue;
+                    }
+                    let got = img.image.len();
+                    let Some(bgra) = grpc::rgba_to_bgra(img.image, w, h) else {
+                        tracing::warn!("short frame: {got} bytes for {w}x{h}");
+                        continue;
+                    };
+                    seq += 1;
+                    tx.send_replace(Some(Frame {
+                        width: w,
+                        height: h,
+                        stride: w as usize * 4,
+                        bgra: Arc::from(bgra),
+                        captured_at,
+                        seq,
+                    }));
+                }
+                Ok(None) => break,
+                Err(s) => {
+                    tracing::debug!("screenshot stream: {s}");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    break;
                 }
             }
-            Err(s) => tracing::debug!("streamScreenshot: {s}"),
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -234,7 +244,10 @@ impl Device for GrpcEmulator {
     }
 
     fn frames(&self) -> FrameReceiver {
-        self.frames.clone()
+        let mut rx = self.frames.subscribe();
+        // The latest frame (if any) counts as new for this receiver.
+        rx.mark_changed();
+        rx
     }
 
     fn send_input(&self, input: Input) -> Result<()> {

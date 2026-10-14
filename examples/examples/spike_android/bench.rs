@@ -44,11 +44,16 @@ pub fn run(
     measure_fps(&device.frames(), Duration::from_secs(secs));
     cpu.report();
 
+    println!("\n[1b] idle ({secs}s, static Settings screen, no input)");
+    let _ = adb.shell(&serial, "am start -W -a android.settings.SETTINGS");
+    std::thread::sleep(Duration::from_millis(1500));
+    let cpu = Cpu::start(emulator_pid);
+    measure_fps(&device.frames(), Duration::from_secs(secs));
+    cpu.report();
+
     match &animator {
         Some(anim) => {
             println!("\n[2] scrolling the Settings list ({secs}s, swipes via gRPC sendTouch)");
-            let _ = adb.shell(&serial, "am start -W -a android.settings.SETTINGS");
-            std::thread::sleep(Duration::from_millis(1500));
             let stop = Arc::new(AtomicBool::new(false));
             let (anim, anim_stop) = (anim.clone(), stop.clone());
             let swiper = std::thread::spawn(move || swipe_loop(anim.as_ref(), &anim_stop));
