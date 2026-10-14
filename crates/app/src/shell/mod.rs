@@ -373,6 +373,8 @@ struct LiveState {
     sessions: HashMap<WorkspaceId, LiveSession>,
     /// Structured conversations each workspace can resume (saved in settings).
     saved_chats: HashMap<WorkspaceId, ops::SavedChat>,
+    /// The agent each workspace last started; workspaces without one use the picker's.
+    workspace_agents: HashMap<WorkspaceId, String>,
     /// Build and dev-server tabs per workspace (⌘R).
     runs: HashMap<WorkspaceId, run::WorkspaceRun>,
     /// The tab each workspace's pane shows (agent, dev server or build).
@@ -605,6 +607,7 @@ impl HangarApp {
             live: LiveState {
                 sessions: HashMap::new(),
                 saved_chats: HashMap::new(),
+                workspace_agents: HashMap::new(),
                 runs: HashMap::new(),
                 pane_tabs: HashMap::new(),
                 diffs: HashMap::new(),
@@ -735,6 +738,14 @@ impl HangarApp {
                     .update(cx, |panel, cx| panel.set_store(store.clone(), cx));
                 self.work.projects = ProjectList::new(loaded.entries);
                 self.live.saved_chats = loaded.chats;
+                self.live.workspace_agents = loaded.workspace_agents;
+                // Workspaces from before this was saved: the agent of their saved conversation.
+                for (id, chat) in &self.live.saved_chats {
+                    self.live
+                        .workspace_agents
+                        .entry(*id)
+                        .or_insert_with(|| chat.agent.clone());
+                }
                 let workspaces: Vec<WorkspaceRef> = self
                     .work
                     .projects

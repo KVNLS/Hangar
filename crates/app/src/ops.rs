@@ -43,6 +43,8 @@ pub struct Loaded {
     pub entries: Vec<ProjectEntry>,
     /// Structured conversations workspaces can resume.
     pub chats: HashMap<WorkspaceId, SavedChat>,
+    /// The agent each workspace last started (see [`setting_keys::workspace_agent`]).
+    pub workspace_agents: HashMap<WorkspaceId, String>,
     pub layout: Option<PaneLayout>,
     pub agent: Option<String>,
     pub changes: Option<ChangesLayout>,
@@ -178,9 +180,17 @@ pub fn remember_agent_config(
 pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
     let mut entries = Vec::new();
     let mut chats = HashMap::new();
+    let mut workspace_agents = HashMap::new();
     for project in store.list_projects()? {
         let workspaces = store.list_workspaces(project.id)?;
         for ws in &workspaces {
+            match store.get_setting(&setting_keys::workspace_agent(ws.id)) {
+                Ok(Some(agent)) => {
+                    workspace_agents.insert(ws.id, agent);
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(workspace = %ws.id, %err, "saved agent unreadable"),
+            }
             match store.get_setting(&setting_keys::chat(ws.id)) {
                 Ok(Some(chat)) => {
                     chats.insert(ws.id, chat);
@@ -281,6 +291,7 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
     Ok(Loaded {
         entries,
         chats,
+        workspace_agents,
         layout,
         agent,
         changes,
@@ -343,6 +354,17 @@ pub fn save_agent_queue(
     store
         .set_setting(&setting_keys::AGENT_QUEUE, &queue.to_vec())
         .context("failed to save the queued agent starts")
+}
+
+/// Remembers the agent `workspace` started, so it runs again there.
+pub fn save_workspace_agent(
+    store: &dyn Store,
+    workspace: WorkspaceId,
+    agent: &str,
+) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::workspace_agent(workspace), &agent.to_owned())
+        .context("failed to save the workspace's agent")
 }
 
 pub fn save_agent(store: &dyn Store, agent: &str) -> anyhow::Result<()> {

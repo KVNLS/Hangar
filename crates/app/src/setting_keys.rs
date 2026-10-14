@@ -34,6 +34,11 @@ pub const DEVICE_LIMIT: Setting<Limit> = Setting::new("device_pool:limit");
 pub const SINGLE_DEVICE_ALERT_SHOWN: Setting<bool> = Setting::new("device_pool:single_alert_shown");
 pub const LAST_DEVICE_TARGET: Setting<DeviceKey> = Setting::new("device_pool:last_target");
 
+/// The agent preset a workspace last started; Resume, Retry and Start run it again there.
+pub fn workspace_agent(id: WorkspaceId) -> Setting<String> {
+    Setting::scoped("workspace_agent", id)
+}
+
 /// The structured conversation a workspace can resume.
 pub fn chat(id: WorkspaceId) -> Setting<SavedChat> {
     Setting::scoped("chat", id)
@@ -94,6 +99,7 @@ mod tests {
         );
         assert_eq!(LAST_DEVICE_TARGET.key(), "device_pool:last_target");
         assert_eq!(chat(ws).key(), format!("chat:{ws}"));
+        assert_eq!(workspace_agent(ws).key(), format!("workspace_agent:{ws}"));
         assert_eq!(agent_config("codex").key(), "agent_config:codex");
         assert_eq!(run(ws).key(), format!("run:{ws}"));
         assert_eq!(device_assignment(ws).key(), format!("device:{ws}"));

@@ -145,6 +145,7 @@ impl HangarApp {
                 return Task::ready(false);
             }
         };
+        self.remember_workspace_agent(workspace_id, &agent_id, window, cx);
         let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
         if let Some(message) = self.ollama_unavailable(&agent_id) {
             window.push_notification(Notification::warning(message), cx);
@@ -379,11 +380,50 @@ impl HangarApp {
 
     fn forget_chat(&mut self, workspace_id: WorkspaceId) {
         self.live.saved_chats.remove(&workspace_id);
-        if let Some(store) = &self.store
-            && let Err(err) = store.delete_setting(&setting_keys::chat(workspace_id))
-        {
-            tracing::warn!(%err, "failed to forget the saved conversation");
+        self.live.workspace_agents.remove(&workspace_id);
+        if let Some(store) = &self.store {
+            if let Err(err) = store.delete_setting(&setting_keys::chat(workspace_id)) {
+                tracing::warn!(%err, "failed to forget the saved conversation");
+            }
+            if let Err(err) = store.delete_setting(&setting_keys::workspace_agent(workspace_id)) {
+                tracing::warn!(%err, "failed to forget the workspace's agent");
+            }
         }
+    }
+
+    /// The agent to start in `workspace_id`: the one it last ran, else the picker's.
+    pub(super) fn agent_for(&self, workspace_id: WorkspaceId) -> String {
+        self.live
+            .workspace_agents
+            .get(&workspace_id)
+            .filter(|id| agents::preset(id).is_some())
+            .cloned()
+            .unwrap_or_else(|| self.agent_setup.agent.to_string())
+    }
+
+    fn remember_workspace_agent(
+        &mut self,
+        workspace_id: WorkspaceId,
+        agent_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .live
+            .workspace_agents
+            .get(&workspace_id)
+            .map(String::as_str)
+            == Some(agent_id)
+        {
+            return;
+        }
+        self.live
+            .workspace_agents
+            .insert(workspace_id, agent_id.to_owned());
+        let agent = agent_id.to_owned();
+        self.persist(window, cx, move |store| {
+            ops::save_workspace_agent(store, workspace_id, &agent)
+        });
     }
 
     /// Shows `path` (absolute, inside the workspace's worktree) in the Files tab.

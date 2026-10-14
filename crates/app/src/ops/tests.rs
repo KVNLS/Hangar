@@ -211,6 +211,13 @@ fn saved_conversations_load_per_workspace() {
         .unwrap();
     let loaded = load(&store).unwrap();
     assert_eq!(loaded.chats.get(&ws.id), Some(&chat));
+    assert!(loaded.workspace_agents.is_empty());
+    save_workspace_agent(&store, ws.id, "codex-acp").unwrap();
+    let loaded = load(&store).unwrap();
+    assert_eq!(
+        loaded.workspace_agents.get(&ws.id).map(String::as_str),
+        Some("codex-acp")
+    );
 }
 
 #[test]

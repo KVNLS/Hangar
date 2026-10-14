@@ -61,7 +61,8 @@ Git access is the `git` CLI with porcelain output, not a library.
    ship it as view-only?
 9. Login PATH: `$SHELL -l -c` misses PATH set only in `.zshrc` (nvm, etc.); `-i -l` catches it but runs
    interactive startup scripts.
-10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
+10. ~~Agent choice per workspace~~ — resolved (owner, 2026-10-08): each workspace remembers the agent it
+    last started (`workspace_agent:<id>`); the sidebar picker is only the default for new workspaces.
 
 ## Explicitly unimplemented (return `Unsupported`)
 - `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
@@ -427,8 +428,11 @@ Git access is the `git` CLI with porcelain output, not a library.
   this one" (confirms, then archives the other attempts; branches and worktrees stay). `HANGAR_DEV_AGENT`
   takes several comma-separated agents, `HANGAR_DEV_SHOW=compare` opens the overlay. Seen on screen: the
   overlay with two shell attempts and their diffs. Not seen: the sheet with several agents picked, Keep
-  (unit-tested: `batch::others_to_archive`). Gap: Resume/Retry on a card starts the global agent, not the
-  attempt's own (open question 10).
+  (unit-tested: `batch::others_to_archive`).
+- Done: each workspace remembers the agent it last started (`workspace_agent:<id>`, saved when an agent
+  launches, dropped with the workspace; older workspaces fall back to their saved conversation's agent).
+  Overview Resume/Retry and the pane's Start/Resume/Restart run it, and resuming checks that agent's saved
+  conversation. Seen: a shell workspace offers "Restart Shell" while the picker is on Claude Code.
 - Done: permission requests answered without opening the pane. `ChatView::pending_request` /
   `answer_pending` (allow once, else reject once or outright). Overview cards in Approval show
   "Permission: <title>" with Deny and Allow once; the palette's "Approve" group (after Needs you) lists

@@ -90,7 +90,7 @@ impl HangarApp {
         };
         self.set_screen(screen, window, cx);
         if restart {
-            let agent = self.agent_setup.agent.to_string();
+            let agent = self.agent_for(id);
             self.start_session(id, agent, true, window, cx).detach();
         }
     }
