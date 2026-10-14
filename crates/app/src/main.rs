@@ -83,10 +83,9 @@ fn main() {
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Hangar".into()),
-                    ..Default::default()
-                }),
+                titlebar: Some(hangar_app::shell::titlebar_options()),
+                // The custom title bar moves the window itself (see gpui-component TitleBar).
+                app_owns_titlebar_drag: true,
                 ..Default::default()
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {

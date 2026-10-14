@@ -237,6 +237,8 @@ impl RenderOnce for UiButton {
                 (true, _) => this.opacity(0.5),
                 (false, Some(handler)) => this
                     .cursor_pointer()
+                    // Keep focus where it is (e.g. in the terminal), as gpui-component buttons do.
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .hover(move |style| style.bg(look.hover))
                     .on_click(handler),
                 (false, None) => this,

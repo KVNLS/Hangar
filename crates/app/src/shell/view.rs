@@ -50,13 +50,32 @@ impl Render for HangarApp {
                         .on_drag(DeviceResize, |_, _, _, cx| cx.new(|_| DeviceResize)),
                 )
         });
-        h_flex()
+        let main = h_flex()
+            .flex_1()
+            .min_h_0()
+            .when(self.sidebar_open, |this| {
+                this.child(self.render_sidebar(cx))
+            })
+            .child(div().flex_1().min_w_0().h_full().child(panes))
+            .children(changes)
+            .children(device);
+        v_flex()
             .id("hangar")
             .key_context("Hangar")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::toggle_changes))
             .on_action(cx.listener(Self::toggle_device))
             .on_action(cx.listener(Self::toggle_device_stats))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
+                this.sidebar_open = !this.sidebar_open;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
+                if let Some(project) = this.current_project() {
+                    this.sidebar_open = true;
+                    this.open_new_workspace(project, window, cx);
+                }
+            }))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ChangesResize>, window, cx| {
                     // The device panel, when open, is right of the changes panel.
@@ -74,10 +93,10 @@ impl Render for HangarApp {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(self.render_sidebar(cx))
-            .child(div().flex_1().min_w_0().h_full().child(panes))
-            .children(changes)
-            .children(device)
+            .font_family(crate::ui::FONT_UI)
+            .child(self.render_titlebar(cx))
+            .child(main)
+            .child(self.render_status_bar(cx))
     }
 }
 

@@ -1,10 +1,12 @@
 //! The main window: project sidebar and two tiled terminal panes.
 
+mod chrome;
 mod dev;
 mod dialogs;
 mod layout;
 mod lifecycle;
 mod sidebar;
+mod status;
 mod view;
 
 use std::collections::{HashMap, HashSet};
@@ -27,7 +29,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_agents::AgentHandle;
 use hangar_core::{
-    Project, ProjectId, Session, SessionStatus, Store, Workspace, WorkspaceId, WorkspaceStatus,
+    AgentState, Project, ProjectId, Session, SessionStatus, Store, Workspace, WorkspaceId,
+    WorkspaceStatus,
 };
 use hangar_terminal::ExitInfo;
 use hangar_worktree::MergeStrategy;
@@ -44,6 +47,7 @@ use crate::state::{
     Panes, ProjectList, changes_width, device_width, sanitize_split, split_ratio, status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
+pub use chrome::titlebar_options;
 pub use dev::DevOptions;
 use dev::run_dev_hooks;
 use dialogs::DeleteWorkspaceDialog;
@@ -59,13 +63,24 @@ const MIN_PANES_WIDTH: f32 = 320.;
 /// Quiet time after a panel resize before the width is saved.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 
-actions!(hangar, [ToggleChanges, ToggleDevice, ToggleDeviceStats]);
+actions!(
+    hangar,
+    [
+        ToggleChanges,
+        ToggleDevice,
+        ToggleDeviceStats,
+        ToggleSidebar,
+        NewWorkspace
+    ]
+);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-shift-d", ToggleChanges, None),
         KeyBinding::new("cmd-shift-p", ToggleDevice, None),
         KeyBinding::new("cmd-alt-shift-p", ToggleDeviceStats, None),
+        KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-n", NewWorkspace, None),
     ]);
 }
 
@@ -95,6 +110,7 @@ struct LiveSession {
     /// Owns the process; dropping it kills the program.
     handle: AgentHandle,
     view: Entity<TerminalView>,
+    activity: status::Activity,
     _exit: Subscription,
 }
 
@@ -168,6 +184,8 @@ pub struct HangarApp {
     device_panel: Entity<DevicePanel>,
     save_device: Option<Task<()>>,
     focus: FocusHandle,
+    sidebar_open: bool,
+    _activity: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -306,6 +324,8 @@ impl HangarApp {
             device_panel,
             save_device: None,
             focus,
+            sidebar_open: true,
+            _activity: Self::track_activity(cx),
             _subscriptions: vec![select_sub, resize_sub, changes_sub, device_sub],
         }
     }

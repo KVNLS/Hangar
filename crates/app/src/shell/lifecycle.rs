@@ -221,6 +221,7 @@ impl HangarApp {
                 agent_name,
                 handle,
                 view,
+                activity: Default::default(),
                 _exit: exit,
             },
         ) && let Some(id) = previous.stop()
