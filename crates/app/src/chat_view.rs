@@ -7,7 +7,9 @@ mod subagent;
 mod usage;
 
 pub use subagent::subagent_state;
-pub use usage::{costs_label, stored_cost, stored_costs_label, turn_spend, usage_label};
+pub use usage::{
+    cost_label, costs_label, stored_cost, stored_costs_label, turn_spend, usage_label,
+};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

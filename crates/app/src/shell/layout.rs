@@ -143,6 +143,9 @@ impl HangarApp {
         if screen == Screen::Overview {
             self.refresh_done_today(cx);
         }
+        if screen == Screen::Settings && self.layout.settings_tab == settings::SettingsTab::Usage {
+            self.load_usage(window, cx);
+        }
         match screen {
             Screen::Review => {}
             Screen::Overview | Screen::Settings => window.focus(&self.layout.screen_focus, cx),
