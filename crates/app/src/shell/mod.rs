@@ -15,6 +15,7 @@ mod run;
 mod settings;
 mod sidebar;
 mod status;
+mod toast;
 mod view;
 mod welcome;
 
@@ -366,6 +367,7 @@ pub struct HangarApp {
     agent_setup: AgentSetup,
     live: LiveState,
     work: WorkState,
+    toast: Option<toast::Toast>,
 }
 
 impl HangarApp {
@@ -417,10 +419,13 @@ impl HangarApp {
         let pool_sub = cx.subscribe_in(
             &device_pool,
             window,
-            |_, _, event: &PoolEvent, window, cx| match event {
+            |this, _, event: &PoolEvent, window, cx| match event {
                 PoolEvent::Notice(level, message) => {
                     let notification = match level {
-                        NoticeLevel::Info => Notification::info(message.clone()),
+                        NoticeLevel::Info => {
+                            this.show_toast(toast::ToastKind::Info, message.clone(), cx);
+                            return;
+                        }
                         NoticeLevel::Warning => Notification::warning(message.clone()),
                         NoticeLevel::Error => Notification::error(message.clone()),
                     };
@@ -546,6 +551,7 @@ impl HangarApp {
                 creating: HashSet::new(),
                 busy: HashSet::new(),
             },
+            toast: None,
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
                 // ACP agents run in their own process group and some (codex-acp) outlive a
