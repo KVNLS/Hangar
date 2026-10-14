@@ -231,3 +231,17 @@ fn synchronized_update_is_buffered_until_end() {
     assert!(t.sync_deadline().is_none());
     assert_eq!(row_text(&t.snapshot(), 0), "hidden");
 }
+
+#[test]
+fn titles_and_clipboard_writes_are_capped() {
+    let mut t = term(10, 3);
+    t.advance(format!("\x1b]2;{}\x07", "t".repeat(10_000)).as_bytes());
+    assert_eq!(t.title().unwrap().chars().count(), MAX_TITLE_CHARS);
+
+    let small = "aGk="; // "hi"
+    t.advance(format!("\x1b]52;c;{small}\x07").as_bytes());
+    assert_eq!(t.take_clipboard_store().as_deref(), Some("hi"));
+    let huge = "A".repeat(MAX_CLIPBOARD_BYTES * 2);
+    t.advance(format!("\x1b]52;c;{huge}\x07").as_bytes());
+    assert_eq!(t.take_clipboard_store(), None);
+}

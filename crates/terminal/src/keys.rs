@@ -62,6 +62,8 @@ pub fn encode_key(key: Key, mods: Modifiers, mode: KeyMode) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(8);
     match key {
         Key::Char(c) => encode_char(c, mods, &mut out),
+        // Shift+Enter as Alt+Enter (ESC CR), which line editors read as a newline.
+        Key::Enter if mods.shift => out.extend_from_slice(b"\x1b\r"),
         Key::Enter => alt_prefixed(mods, b'\r', &mut out),
         Key::Backspace => alt_prefixed(mods, if mods.ctrl { 0x08 } else { 0x7f }, &mut out),
         Key::Tab if mods.shift => out.extend_from_slice(b"\x1b[Z"),
@@ -241,6 +243,8 @@ mod tests {
     #[test]
     fn editing_keys() {
         assert_eq!(enc(Key::Enter, Modifiers::NONE), b"\r");
+        // A newline in Claude Code and other line editors, not a submit.
+        assert_eq!(enc(Key::Enter, SHIFT), b"\x1b\r");
         assert_eq!(enc(Key::Backspace, Modifiers::NONE), [0x7f]);
         assert_eq!(enc(Key::Backspace, CTRL), [0x08]);
         assert_eq!(enc(Key::Tab, Modifiers::NONE), b"\t");
