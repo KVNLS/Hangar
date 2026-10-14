@@ -307,12 +307,11 @@ impl<'a> Workspaces<'a> {
             });
         }
         let project_slug = slugify(&project.name);
-        let existing: Vec<String> = self
-            .store
-            .list_workspaces(project.id)?
-            .into_iter()
-            .map(|ws| ws.slug)
-            .collect();
+        let siblings = self.store.list_workspaces(project.id)?;
+        let existing: Vec<String> = siblings.iter().map(|ws| ws.slug.clone()).collect();
+        // Rows show names, not slugs: a repeated name gets a number the way its slug does.
+        let name = unique_name(name, |n| siblings.iter().any(|ws| ws.name == n));
+        let name = name.as_str();
         let slug = unique_slug(&slugify(name), |candidate| {
             if existing.iter().any(|s| s == candidate)
                 || worktree_path(worktrees_root, &project_slug, candidate).exists()
@@ -500,6 +499,17 @@ pub fn delete_summary(git: &dyn VersionControl, workspace: &Workspace) -> Result
         ahead,
         submodules: counts.submodules,
     })
+}
+
+/// `name`, else `name 2`, `name 3`, … — the first `is_taken` rejects.
+fn unique_name(name: &str, is_taken: impl Fn(&str) -> bool) -> String {
+    if !is_taken(name) {
+        return name.to_owned();
+    }
+    (2..)
+        .map(|n| format!("{name} {n}"))
+        .find(|candidate| !is_taken(candidate))
+        .unwrap_or_else(|| name.to_owned())
 }
 
 /// `parent` is a directory of `child` in git's ref namespace (`a` for `a/b`).
