@@ -19,6 +19,7 @@ use crate::path::{find_program, resolve_program};
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `session/new` starts the session's MCP servers, which can be slow.
 const NEW_SESSION_TIMEOUT: Duration = Duration::from_secs(120);
+const SET_MODE_TIMEOUT: Duration = Duration::from_secs(10);
 const STDERR_TAIL: usize = 4096;
 /// How long a stopped agent gets between SIGTERM and SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(3);
@@ -233,6 +234,21 @@ impl AcpSession {
             .send_prompt(protocol::prompt_params(&self.session_id, text))
     }
 
+    /// Switches the session to one of [`Self::modes`]. Blocks until the agent answers.
+    pub fn set_mode(&self, mode_id: &str) -> Result<()> {
+        if !self.modes.iter().any(|m| m.id == mode_id) {
+            return Err(Error::Protocol(format!(
+                "the agent offers no mode `{mode_id}`"
+            )));
+        }
+        self.conn.request(
+            "session/set_mode",
+            protocol::set_mode_params(&self.session_id, mode_id),
+            SET_MODE_TIMEOUT,
+        )?;
+        Ok(())
+    }
+
     /// Asks the agent to stop the running turn. Unanswered permission requests are cancelled.
     pub fn cancel(&self) -> Result<()> {
         self.conn.cancel_permissions()?;
@@ -387,6 +403,7 @@ mod tests {
         session.kill();
         assert!(matches!(wait(rx), AcpEvent::Exited { .. }));
         assert!(session.wait_for_exit(Duration::from_secs(1)));
+        assert!(matches!(session.set_mode("plan"), Err(Error::Protocol(_))));
         assert!(matches!(session.load("s-1"), Err(Error::Unsupported(_))));
     }
 }

@@ -1,7 +1,9 @@
 //! Transcript and composer elements, after the agent pane of `design/Hangar.dc.html`.
 
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Textarea;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Icon, Sizable as _};
@@ -391,6 +393,103 @@ impl ChatView {
             .into_any_element()
     }
 
+    /// The session mode as a chip; with several modes it opens a menu to switch.
+    fn render_mode_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = cx.tokens();
+        let mode = self.mode.clone()?;
+        let modes = self.session.modes().to_vec();
+        if modes.len() < 2 {
+            return Some(
+                div()
+                    .h(px(20.))
+                    .px(px(6.))
+                    .rounded(px(4.))
+                    .bg(t.hover)
+                    .flex()
+                    .items_center()
+                    .child(mode)
+                    .into_any_element(),
+            );
+        }
+        let current = self.mode_id.clone();
+        let view = cx.entity().downgrade();
+        Some(
+            Button::new("chat-mode")
+                .ghost()
+                .xsmall()
+                .label(mode)
+                .icon(Lucide::ChevronDown)
+                .tooltip("Session mode")
+                .dropdown_menu(move |mut menu, _, _| {
+                    for mode in &modes {
+                        let view = view.clone();
+                        let id = mode.id.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(mode.name.clone())
+                                .checked(current.as_deref() == Some(mode.id.as_str()))
+                                .on_click(move |_, _, cx| {
+                                    let _ = view
+                                        .update(cx, |chat, cx| chat.choose_mode(id.clone(), cx));
+                                }),
+                        );
+                    }
+                    menu
+                })
+                .into_any_element(),
+        )
+    }
+
+    fn render_commands(
+        &self,
+        commands: Vec<hangar_agents::acp::protocol::AvailableCommand>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let t = cx.tokens();
+        div()
+            .flex()
+            .flex_col()
+            .py(px(4.))
+            .rounded(RADIUS)
+            .border_1()
+            .border_color(t.line2)
+            .bg(t.elev)
+            .children(commands.into_iter().enumerate().map(|(n, command)| {
+                let name = command.name.clone();
+                div()
+                    .id(("slash", n))
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_2)
+                    .h(px(26.))
+                    .px(px(10.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(t.hover))
+                    .child(
+                        div()
+                            .flex_none()
+                            .type_mono()
+                            .text_color(t.tx)
+                            .child(format!("/{}", command.name)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .type_secondary()
+                            .text_color(t.tx3)
+                            .child(command.description),
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.pick_command(&name, window, cx)
+                        }),
+                    )
+            }))
+    }
+
     fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
         let inner = if self.exited {
@@ -428,28 +527,21 @@ impl ChatView {
                         .gap(px(6.))
                         .type_mono_small()
                         .text_color(t.tx2)
-                        .when_some(self.mode.clone(), |d, mode| {
-                            d.child(
-                                div()
-                                    .h(px(20.))
-                                    .px(px(6.))
-                                    .rounded(px(4.))
-                                    .bg(t.hover)
-                                    .flex()
-                                    .items_center()
-                                    .child(mode),
-                            )
-                        })
+                        .when_some(self.render_mode_chip(cx), |d, chip| d.child(chip))
                         .child(div().flex_1())
                         .child(div().text_color(t.tx3).child("⏎ send · ⇧⏎ newline"))
                         .child(action),
                 )
         };
+        let commands = self.command_matches(cx);
         div()
             .flex_none()
             .px(SPACE_6)
             .pt(SPACE_2)
             .pb(SPACE_3)
+            .when(!commands.is_empty() && !self.exited, |d| {
+                d.child(centered(self.render_commands(commands, cx)).mb(px(6.)))
+            })
             .child(centered(
                 div()
                     .px(px(10.))

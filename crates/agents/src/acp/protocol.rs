@@ -50,6 +50,10 @@ pub fn prompt_params(session_id: &str, text: &str) -> Value {
     json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] })
 }
 
+pub fn set_mode_params(session_id: &str, mode_id: &str) -> Value {
+    json!({ "sessionId": session_id, "modeId": mode_id })
+}
+
 pub fn cancel_params(session_id: &str) -> Value {
     json!({ "sessionId": session_id })
 }

@@ -13,7 +13,7 @@ use gpui_kit::component::input::{InputEvent, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use hangar_agents::acp::protocol::{
-    PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
+    AvailableCommand, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
 };
 use hangar_agents::acp::{AcpEvent, AcpSession, PermissionRequest};
 use hangar_core::AcpTurn;
@@ -91,6 +91,9 @@ pub struct ChatView {
     exited: bool,
     /// Display name of the session mode (Claude Code: Manual, Accept edits, Plan, …).
     mode: Option<SharedString>,
+    mode_id: Option<String>,
+    /// Slash commands the agent offers (`/name` at the start of a prompt).
+    commands: Vec<AvailableCommand>,
     composer: Entity<TextareaState>,
     scroll: ScrollHandle,
     /// Keep the newest item in view; turned off when the user scrolls up.
@@ -119,8 +122,11 @@ impl ChatView {
             &composer,
             window,
             |this, _, event: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = event {
-                    this.on_enter(window, cx);
+                match event {
+                    InputEvent::PressEnter { .. } => this.on_enter(window, cx),
+                    // The slash-command list follows the text.
+                    InputEvent::Change => cx.notify(),
+                    _ => {}
                 }
             },
         )];
@@ -147,6 +153,8 @@ impl ChatView {
             failed: false,
             exited: false,
             mode: None,
+            mode_id: None,
+            commands: Vec::new(),
             composer,
             scroll: ScrollHandle::new(),
             follow: true,
@@ -469,16 +477,65 @@ impl ChatView {
                 }
             },
             SessionUpdate::CurrentMode(mode) => self.set_mode(Some(mode)),
-            // Slash commands are not offered in the composer yet.
-            SessionUpdate::AvailableCommands(_) | SessionUpdate::Other { .. } => {}
+            SessionUpdate::AvailableCommands(commands) => self.commands = commands,
+            SessionUpdate::Other { .. } => {}
         }
     }
 
     fn set_mode(&mut self, id: Option<String>) {
-        self.mode = id.map(|id| {
-            let name = self.session.modes().iter().find(|m| m.id == id);
+        self.mode = id.as_ref().map(|id| {
+            let name = self.session.modes().iter().find(|m| &m.id == id);
             SharedString::from(name.map_or(id.clone(), |m| m.name.clone()))
         });
+        self.mode_id = id;
+    }
+
+    /// Switches the session mode off the main thread; the chip changes once the agent agrees.
+    fn choose_mode(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.mode_id.as_deref() == Some(id.as_str()) || self.exited {
+            return;
+        }
+        let session = Arc::clone(&self.session);
+        cx.spawn(async move |this, cx| {
+            let requested = id.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { session.set_mode(&requested) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                match result {
+                    Ok(()) => view.set_mode(Some(id)),
+                    Err(err) => view.notice(true, format!("Could not switch mode: {err}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Commands matching the composer while it holds only `/prefix`.
+    fn command_matches(&self, cx: &App) -> Vec<AvailableCommand> {
+        let text = self.composer.read(cx).value();
+        let Some(prefix) = text.strip_prefix('/') else {
+            return Vec::new();
+        };
+        if prefix.contains(char::is_whitespace) {
+            return Vec::new();
+        }
+        self.commands
+            .iter()
+            .filter(|c| c.name.starts_with(prefix))
+            .take(8)
+            .cloned()
+            .collect()
+    }
+
+    fn pick_command(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer.update(cx, |state, cx| {
+            state.set_value(format!("/{name} "), window, cx);
+            state.focus(window, cx);
+        });
+        cx.notify();
     }
 
     fn open_location(&mut self, path: &str, cx: &mut Context<Self>) {

@@ -187,8 +187,12 @@ Git access is the `git` CLI with porcelain output, not a library.
   deny), "Working…" line, composer (⏎ send, ⇧⏎ newline, Stop/esc cancels the turn). `AgentState::from_acp`:
   pending permission → Approval, running turn → Working, failed turn or bad exit → Failed, changes → Review.
   The New workspace task and `HANGAR_DEV_INPUT` become the first prompt.
-- Gaps: no resume after a Hangar restart (`session/load`); no slash-command menu (available commands are
-  received and dropped), mode switching, images or @-context in the composer; `Input` state unused (ACP has
+- Composer: the mode chip is a menu of the agent's modes (`session/set_mode`; claude-agent-acp answers `{}`
+  and sends no `current_mode_update`, so the chip changes on success). Typing `/prefix` lists matching slash
+  commands (from `available_commands_update`, up to 8); clicking one fills `/name `. Both are protocol- and
+  build-checked; neither was seen on screen yet (the display slept during the check).
+- Gaps: no resume after a Hangar restart (`session/load`); no images or @-context in the composer, no
+  keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
   stopping a turn is esc or the Stop button; no transcript virtualization (long sessions render every item).
 - Live (2026-10-05, scratch repo, spikes/m7-acp-notes.md): streaming, tool cards, three permission prompts
@@ -227,5 +231,5 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Owner reviews `m7-acp`. Then: `session/load` resume, slash commands, more ACP agents (Gemini `--experimental-acp`, `opencode acp`,
-  `codex-acp`).
+- Owner reviews `m7-acp` (and looks at the mode menu and slash list). Then: `session/load` resume, slash commands, more ACP agents (Gemini `--experimental-acp`, `opencode acp` — the local
+  OpenCode install printed nothing for `opencode acp --help` within 15 s —, `codex-acp`).
