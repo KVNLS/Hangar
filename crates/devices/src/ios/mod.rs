@@ -2,12 +2,14 @@
 
 mod dispatch;
 mod introspect;
+pub mod logs;
 mod private;
 mod runtime;
 mod sim_window;
 mod simctl_backend;
 
 pub use introspect::introspect;
+pub use logs::log_stream;
 pub use private::PrivateSimulator;
 pub use sim_window::{SimWindow, on_screen_windows, simulator_windows};
 pub use simctl_backend::SimctlSimulator;

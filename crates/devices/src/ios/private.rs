@@ -152,6 +152,10 @@ impl Device for PrivateSimulator {
         &self.info
     }
 
+    fn logs(&self, filter: &crate::LogFilter) -> Result<crate::LogStream> {
+        super::log_stream(&self.info.udid, filter)
+    }
+
     fn backend(&self) -> &'static str {
         "private"
     }

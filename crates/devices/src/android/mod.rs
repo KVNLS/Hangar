@@ -14,12 +14,14 @@ pub mod discovery;
 pub mod emulator;
 pub mod grpc;
 pub mod grpc_backend;
+pub mod logcat;
 pub mod sdk;
 
 pub use adb_backend::{AdbDevice, Capture};
 pub use avd::Avd;
 pub use emulator::{BootOptions, RunningEmulator, WindowMode, find_running, list_running, state};
 pub use grpc_backend::{FrameSize, GrpcEmulator};
+pub use logcat::logcat;
 pub use sdk::AndroidSdk;
 
 use crate::{Device, DeviceInfo, Error, Result};
