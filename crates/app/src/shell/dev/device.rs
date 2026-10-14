@@ -165,6 +165,7 @@ pub(super) async fn dev_show(
         let (screen, tab) = match name {
             "workspace" | "device" => (Screen::Workspace, None),
             "review" | "review-inline" => (Screen::Review, None),
+            "files" => (Screen::Files, None),
             "overview" | "compare" => (Screen::Overview, None),
             "settings" | "settings-agents" | "settings-permissions" => {
                 settings(SettingsTab::Agents)

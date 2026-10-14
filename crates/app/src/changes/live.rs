@@ -129,6 +129,14 @@ impl WorkspaceDiff {
         self.summary.as_ref()
     }
 
+    /// Differs from its base and is not yet published: once committed and pushed, nothing is
+    /// left to review here.
+    pub fn needs_review(&self) -> bool {
+        self.summary
+            .as_ref()
+            .is_some_and(|s| s.files > 0 && !s.status.is_published())
+    }
+
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
     }

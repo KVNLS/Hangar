@@ -23,8 +23,11 @@ pub const OLLAMA: Setting<OllamaSettings> = Setting::new("ollama");
 pub const USAGE: Setting<UsageSettings> = Setting::new("usage");
 /// Whether commits from the review box credit the workspace's agent with a trailer.
 pub const COAUTHOR_TRAILER: Setting<bool> = Setting::new("review:coauthor_trailer");
-/// Dock badge and bounce when an agent waits on approval, input or a failure (default on).
+/// Dock badge, bounce and system notification when an agent waits on approval, input or a
+/// failure (default on).
 pub const NOTIFY_ATTENTION: Setting<bool> = Setting::new("permissions:notify_attention");
+/// System notification when an agent finishes a turn (default on).
+pub const NOTIFY_FINISHED: Setting<bool> = Setting::new("permissions:notify_finished");
 /// Default approval level of structured agents, as an `ApprovalLevel` id; missing means
 /// "Ask every time".
 pub const APPROVAL_LEVEL: Setting<String> = Setting::new("permissions:approval_level");
@@ -94,6 +97,7 @@ mod tests {
         assert_eq!(USAGE.key(), "usage");
         assert_eq!(COAUTHOR_TRAILER.key(), "review:coauthor_trailer");
         assert_eq!(NOTIFY_ATTENTION.key(), "permissions:notify_attention");
+        assert_eq!(NOTIFY_FINISHED.key(), "permissions:notify_finished");
         assert_eq!(APPROVAL_LEVEL.key(), "permissions:approval_level");
         assert_eq!(workspace_mode(ws).key(), format!("mode:{ws}"));
         assert_eq!(MAX_AGENTS.key(), "agents:max_concurrent");

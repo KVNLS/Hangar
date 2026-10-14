@@ -48,8 +48,7 @@ output, not a library.
     `HostResources` ports; `DevicePool` as a sans-IO state machine; `HangarApp` groups as controllers so views
     do no I/O; `changes/review.rs` reaches `base_branch_name` through `ReviewOps`.
   - On-screen verification: walk the checklist below with the dev hooks, fix what breaks.
-  - Distribution: .app bundle, .icns (light/tinted variants), signing and notarisation (question 6), banner
-    notifications (need the bundle).
+  - Distribution: .app bundle, .icns (light/tinted variants), signing and notarisation (question 6).
   - Done when: ARCHITECTURE "Done when" all ticked, the checklist seen, a signed .app runs on a clean user.
 
 ## Status
@@ -156,6 +155,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   the status bar; "Sandbox: worktree only" not shown (agents are not sandboxed); ⌘⏎ missing from the
   keybinding table; the toast covers the device panel's Shut down button for 2.8 s; queued starts not shown
   in the sidebar.
+- **Notifications:** clicking one does not open its workspace; unbundled macOS builds show them as
+  Finder's, and Windows as PowerShell's until Hangar is packaged with its own AUMID; only macOS was run.
 
 ## Owner decisions
 - No ACP crate: the ACP client is hand-rolled (M7).
@@ -172,6 +173,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - Each workspace remembers the agent it last started (2026-10-08).
 - `ask_user` for every agent (2026-10-08).
 - M10 is a hardening pass (2026-10-08).
+- System notifications through `notify-rust`, only while Hangar is in the background, for new waits and
+  for any finished turn (Working → Review or Idle) (2026-10-08).
 
 ## Next
 1. Split the files over 800 lines (docs/ARCHITECTURE.md "Done when").

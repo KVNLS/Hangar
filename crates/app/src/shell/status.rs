@@ -187,7 +187,11 @@ impl HangarApp {
             return AgentState::Input;
         }
         let live = self.live.sessions.get(&id);
-        let has_changes = self.diff_counts(id, cx).is_some_and(|c| c.files > 0);
+        let has_changes = self
+            .live
+            .diffs
+            .get(&id)
+            .is_some_and(|d| d.diff.read(cx).needs_review());
         match live.map(|l| &l.surface) {
             Some(AgentSurface::Chat { view, .. }) => AgentState::from_acp(
                 live.map(|l| &l.session.status),

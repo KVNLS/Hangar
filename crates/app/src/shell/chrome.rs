@@ -73,6 +73,19 @@ impl HangarApp {
                             .child(ws.title().to_owned()),
                     ),
                 (Screen::Review, None) => this.child(screen_crumb("Review", t.tx)),
+                (Screen::Files, Some((project, ws))) => this
+                    .child(div().text_color(t.tx2).child(project.name.clone()))
+                    .child(div().text_color(t.tx3).child("/"))
+                    .child(screen_crumb("Files", t.tx))
+                    .child(div().text_color(t.tx3).child("·"))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_color(t.tx2)
+                            .truncate()
+                            .child(ws.title().to_owned()),
+                    ),
+                (Screen::Files, None) => this.child(screen_crumb("Files", t.tx)),
                 (Screen::Workspace, None) => this.child(div().text_color(t.tx2).child("Hangar")),
                 (Screen::Workspace, Some((project, ws))) => this
                     .child(div().text_color(t.tx2).child(project.name.clone()))

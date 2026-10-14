@@ -47,7 +47,8 @@ shipped, SPIKES.md for spike results.
   listed in PLAN.md.
 - New dependencies or architecture changes need the owner's approval first. Approved so far: gpui(-pre),
   gpui-component, portable-pty, alacritty_terminal, notify, tree-sitter, tokio, thiserror, anyhow, rusqlite,
-  serde, serde_json, uuid, tracing, tracing-subscriber, tempfile (dev), objc2 family, block2, libc, image.
+  serde, serde_json, uuid, tracing, tracing-subscriber, tempfile (dev), objc2 family, block2, libc, image,
+  notify-rust.
 - Do not copy code from Zed's GPL crates, idb, SimView or baguette; learn from them and credit in SPIKES.md.
 - Code, comments, logs and UI copy in English. Minimal comments: only the non-obvious why.
 - File layout: modules as `foo.rs` next to `foo/` (no `mod.rs`). Unit tests start inline in

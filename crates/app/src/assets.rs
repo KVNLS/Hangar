@@ -31,6 +31,7 @@ gpui_kit::assets::icon_assets!(
         LayoutGrid,
         ListCollapse,
         Lock,
+        Maximize2,
         MessageCircleQuestionMark,
         MessageSquare,
         Move,

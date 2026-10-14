@@ -134,6 +134,9 @@ impl HangarApp {
         let wide = screen == Screen::Review;
         self.changes_panel
             .update(cx, |panel, cx| panel.set_wide(wide, window, cx));
+        let files = screen == Screen::Files;
+        self.files_panel
+            .update(cx, |panel, cx| panel.set_wide(files, window, cx));
         // The device panel is only on the workspace screen: stop streaming while it is hidden.
         if self.layout.device.open {
             let shown = screen == Screen::Workspace;
@@ -147,7 +150,7 @@ impl HangarApp {
             self.load_usage(window, cx);
         }
         match screen {
-            Screen::Review => {}
+            Screen::Review | Screen::Files => {}
             Screen::Overview | Screen::Settings => window.focus(&self.layout.screen_focus, cx),
             Screen::Workspace => {
                 window.focus(&self.focus, cx);

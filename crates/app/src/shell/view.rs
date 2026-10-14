@@ -34,6 +34,7 @@ impl Render for HangarApp {
         }
         let main = match self.layout.screen {
             Screen::Review => div().flex_1().min_h_0().child(self.changes_panel.clone()),
+            Screen::Files => div().flex_1().min_h_0().child(self.files_panel.clone()),
             Screen::Settings => div()
                 .key_context("SettingsScreen")
                 .track_focus(&self.layout.screen_focus)
@@ -140,6 +141,9 @@ impl Render for HangarApp {
             }))
             .on_action(cx.listener(|this, _: &OpenReview, window, cx| {
                 this.set_screen(Screen::Review, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenFiles, window, cx| {
+                this.set_screen(Screen::Files, window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),

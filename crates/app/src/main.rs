@@ -44,7 +44,7 @@
 //! review hooks below), logs its row counts, renders the inline mode, then goes back.
 //!
 //! `HANGAR_DEV_SHOW=<screen>` runs last and leaves the window on `workspace`, `review` (split),
-//! `review-inline`, `overview`, `compare` (the focused workspace's attempts), `settings-{agents,permissions,devices,usage,appearance,keybindings}`, `palette` or
+//! `review-inline`, `files`, `overview`, `compare` (the focused workspace's attempts), `settings-{agents,permissions,devices,usage,appearance,keybindings}`, `palette` or
 //! `sheet` (New workspace) or `device` (device panel), for screenshots.
 //! `HANGAR_DEV_SCREENSHOT=1` then waits for the workspace device's first frame and takes the
 //! device panel's ⌘S screenshot for the agent.
@@ -158,6 +158,7 @@ fn run_app() {
             if let Err(err) = hangar_app::ui::init(component::ThemeMode::Dark, cx) {
                 tracing::error!("design system init failed, using the default theme: {err:#}");
             }
+            hangar_app::notify::init();
             hangar_app::terminal_view::init(cx);
             hangar_app::chat_view::init(cx);
             hangar_app::changes::init(cx);

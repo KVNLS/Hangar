@@ -62,6 +62,7 @@ use crate::device_panel::{
     Screenshot as DeviceScreenshot,
 };
 use crate::device_pool::{DevicePool, NoticeLevel, PoolEvent, WorkspaceRef};
+use crate::files_view::{ExitFiles, FilesEvent, FilesPanel};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
@@ -101,6 +102,7 @@ actions!(
         ShowChangesTab,
         ShowFilesTab,
         OpenReview,
+        OpenFiles,
         SubmitSheet,
         CloseSheet,
         OpenPalette,
@@ -142,6 +144,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-2", ShowChangesTab, None),
         KeyBinding::new("cmd-3", ShowFilesTab, None),
         KeyBinding::new("cmd-shift-r", OpenReview, None),
+        KeyBinding::new("cmd-shift-e", OpenFiles, None),
         KeyBinding::new("cmd-r", Run, None),
         KeyBinding::new("cmd-.", StopRun, None),
         KeyBinding::new("cmd-d", SplitPane, None),
@@ -156,6 +159,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-s", DeviceScreenshot, Some(DEVICE_PANEL)),
         KeyBinding::new("cmd-shift-h", DeviceHome, Some(DEVICE_PANEL)),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
+        KeyBinding::new("escape", ExitFiles, Some("FilesScreen")),
         KeyBinding::new("escape", CloseScreen, Some("OverviewScreen")),
         KeyBinding::new("escape", CloseScreen, Some("SettingsScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
@@ -326,6 +330,8 @@ enum Screen {
     Workspace,
     /// Full-width diff review of the focused workspace (⌘⇧R).
     Review,
+    /// Full-width file browser of the focused workspace (⌘⇧E).
+    Files,
     /// Every workspace as a card, grouped by state (⌘⇧O).
     Overview,
     /// Settings (⌘,).
@@ -423,7 +429,7 @@ struct WorkState {
 pub struct HangarApp {
     store: Option<Arc<dyn Store>>,
     changes_panel: Entity<ChangesPanel>,
-    files_panel: Entity<crate::files_view::FilesPanel>,
+    files_panel: Entity<FilesPanel>,
     /// Every workspace's device.
     device_pool: Entity<DevicePool>,
     /// Serves the MCP device tools of `Hangar mcp-bridge`; `None` if the socket could not be bound.
@@ -497,6 +503,15 @@ impl HangarApp {
                 ChangesEvent::AskAgent { workspace, text } => {
                     this.prefill_agent(*workspace, text, window, cx)
                 }
+            },
+        );
+        let files_panel = cx.new(FilesPanel::new);
+        let files_sub = cx.subscribe_in(
+            &files_panel,
+            window,
+            |this, _, event: &FilesEvent, window, cx| match event {
+                FilesEvent::OpenWide => this.set_screen(Screen::Files, window, cx),
+                FilesEvent::ExitWide => this.set_screen(Screen::Workspace, window, cx),
             },
         );
         let device_pool = cx.new(DevicePool::new);
@@ -585,7 +600,7 @@ impl HangarApp {
         Self {
             store: None,
             changes_panel,
-            files_panel: cx.new(crate::files_view::FilesPanel::new),
+            files_panel,
             device_pool,
             mcp: mcp::start(window, cx),
             device_limit_override,
@@ -664,6 +679,7 @@ impl HangarApp {
                 select_sub,
                 settings_sub,
                 changes_sub,
+                files_sub,
                 device_sub,
                 filter_sub,
                 pool_sub,
@@ -814,6 +830,9 @@ impl HangarApp {
                 }
                 if let Some(on) = loaded.notify_attention {
                     self.attention.enabled = on;
+                }
+                if let Some(on) = loaded.notify_finished {
+                    self.attention.notify_finished = on;
                 }
                 if let Some(on) = loaded.orchestration {
                     self.apply_orchestration(on);
