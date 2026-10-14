@@ -15,6 +15,7 @@ use std::time::Duration;
 use gpui_kit::component::input::{InputEvent, Position, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
+use hangar_agents::acp::approval::{self, ApprovalLevel};
 use hangar_agents::acp::protocol::{
     AvailableCommand, ConfigOption, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
 };
@@ -83,6 +84,8 @@ pub enum ChatEvent {
     /// The user picked a value for a non-mode config option (model, effort, …) and the agent
     /// took it.
     ConfigChosen { config_id: String, value: String },
+    /// The user switched the session mode and the agent took it.
+    ModeChosen(String),
 }
 
 impl EventEmitter<ChatEvent> for ChatView {}
@@ -120,6 +123,8 @@ pub struct ChatView {
     turn_start: usize,
     /// The subagent shown instead of the agent's own transcript (its launch call id).
     focus: Option<String>,
+    /// Read-kind permission requests are answered without asking at this level.
+    approval: ApprovalLevel,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -185,6 +190,7 @@ impl ChatView {
             follow: true,
             turn_start: 0,
             focus: None,
+            approval: ApprovalLevel::default(),
             _tasks: vec![pump],
             _subscriptions: subscriptions,
         };
@@ -200,6 +206,10 @@ impl ChatView {
             permission_pending: self.pending_permission().is_some(),
             failed: self.failed,
         }
+    }
+
+    pub fn set_approval(&mut self, level: ApprovalLevel) {
+        self.approval = level;
     }
 
     /// The latest thing worth showing in a one-line summary (overview cards).
@@ -517,17 +527,20 @@ impl ChatView {
         match event {
             AcpEvent::Update(update) => self.apply_update(update, cx),
             AcpEvent::PermissionRequest(request) => {
-                let title = match self.tools.get(&request.tool_call.id) {
+                let (title, kind) = match self.tools.get(&request.tool_call.id) {
                     Some(&i) => {
                         if let Some(Item::Tool(call)) = self.items.get_mut(i) {
                             call.apply(&request.tool_call);
-                            Some(call.title.clone())
+                            (Some(call.title.clone()), Some(call.kind.clone()))
                         } else {
-                            None
+                            (None, None)
                         }
                     }
-                    None => None,
+                    None => (None, None),
                 };
+                let kind = request.tool_call.kind.clone().or(kind);
+                let auto = approval::auto_allow(self.approval, kind.as_deref(), &request.options)
+                    .map(str::to_owned);
                 let title = title
                     .or_else(|| request.tool_call.title.clone())
                     .unwrap_or_else(|| "use a tool".to_owned());
@@ -537,6 +550,17 @@ impl ChatView {
                     outcome: None,
                 });
                 self.follow = true;
+                if let Some(option) = auto {
+                    let index = self.items.len() - 1;
+                    self.answer(index, Some(option), cx);
+                    if let Some(Item::Permission {
+                        outcome: Some(outcome),
+                        ..
+                    }) = self.items.get_mut(index)
+                    {
+                        outcome.label = "Allowed automatically (reads)".into();
+                    }
+                }
             }
             AcpEvent::TurnEnded(reason) => {
                 self.running = false;
@@ -707,7 +731,9 @@ impl ChatView {
                         }
                         let is_mode = list.iter().any(|o| o.id == config_id && o.is_mode());
                         view.set_config(list);
-                        if !is_mode {
+                        if is_mode {
+                            cx.emit(ChatEvent::ModeChosen(value));
+                        } else {
                             cx.emit(ChatEvent::ConfigChosen { config_id, value });
                         }
                     }
@@ -733,7 +759,10 @@ impl ChatView {
                 .await;
             let _ = this.update(cx, |view, cx| {
                 match result {
-                    Ok(()) => view.set_mode(Some(id)),
+                    Ok(()) => {
+                        view.set_mode(Some(id.clone()));
+                        cx.emit(ChatEvent::ModeChosen(id));
+                    }
                     Err(err) => view.notice(true, format!("Could not switch mode: {err}")),
                 }
                 cx.notify();

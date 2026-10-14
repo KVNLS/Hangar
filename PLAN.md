@@ -226,6 +226,14 @@ Git access is the `git` CLI with porcelain output, not a library.
   `config_option_update` does the same. Choices are saved per agent (`agent_config:<agent id>`, mode left
   out: it decides permissions) and re-applied right after each new session starts, model first. Checked on
   screen with Codex (GPT-5.5 → effort chip, Low; next session starts on GPT-5.5 / Low) and Claude Code.
+- Default approval mode (Settings › Agents & providers › Permissions; `permissions:approval_level`, Ask every
+  time when unset): `acp::approval::ApprovalLevel::mode` picks each new session's mode right after the saved
+  config options, by known id, else by name/description. Ask / Auto-approve reads → Claude `default`, Codex
+  `read-only`, Gemini `default`; Full auto → `bypassPermissions`, `full-access`, `yolo`. OpenCode (build/plan)
+  has neither, so it keeps its default (logged). No agent has a reads-only mode: at Auto-approve reads and
+  Full auto the chat answers `read`/`search` permission requests with allow once (`fetch` excluded). A mode
+  picked in the composer is saved per workspace (`mode:<workspace id>`) and wins for that agent. Terminal
+  agents are not affected. Not seen on screen yet; Gemini's modes come from its source, not a live session.
 - Quit (⌘Q, new) and window close stop every live agent (`on_app_quit`): codex-acp ignores a closed stdin
   and would outlive Hangar. A crash or SIGKILL of Hangar still leaves such agents running.
 - Mono text (`TypeScale::font_mono`, terminal) turns Geist Mono's `liga`/`calt` off: its ligatures drew `--`
