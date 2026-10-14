@@ -262,6 +262,56 @@ Git access is the `git` CLI with porcelain output, not a library.
   (`app_icon::set_dock_icon`), so `cargo run` shows it. `export_icon` example writes the 1024px PNG. No .app
   bundle / .icns yet; light (9b–9g) and tinted variants not shipped.
 
+## Design gap round (2026-10-07, unit-tested, not checked on screen)
+- **Navigation:**
+  - esc leaves Overview and Settings, and the title crumb follows the screen.
+  - The right panel has one width shared by its tabs (440, min 360) and one toggle, ⌘⇧D, that remembers the last tab.
+  - Panes are columns of stacked panes (max 4): ⌘\ or ⌘D splits right, ⌘| (⌘⇧\) splits down, ⌘⌥1–4 focus a pane, and a "…" menu holds the rest.
+  - Terminal footer `pty · <program> · cols×rows`. The sidebar is resizable (256, min 200).
+- **Review:**
+  - "Full review ⌘⇧R" in the Changes panel opens the review screen on the selected file.
+  - Diffs read "→ <base branch>" (`worktree::base_branch_name`).
+  - The commit box has a subject and a body; the subject is prefilled with the workspace name.
+  - "Co-authored-by agent" trailer toggle (`review:coauthor_trailer`), ⌘⏎ commits (`changes::init`).
+  - "Request changes" and "Ask agent about this file" type a prompt into the agent without sending it.
+  - The PR toast and button read "PR #N".
+  - Viewed files fade in the list.
+  - The Files viewer has syntax highlighting and an added-line background.
+  - The chat shows a "Ready for review" card after a turn that left changes.
+- **Device panel:**
+  - Coloured state label next to the device select, and booted dots in the picker.
+  - Screenshot ⌘S saves a PNG under `$TMPDIR/Hangar/screenshots/<ws>` and types its path into the agent.
+  - ⌘⇧H presses Home.
+  - The logs bar counts warnings and errors.
+  - An "In use by another workspace" overlay offers "Use <device> instead" (single-device mode only).
+- **Shell:**
+  - Sidebar state-count strip and a PROJECTS label.
+  - The status bar lists every booted device, plus "builds idle" and memory pressure.
+  - Design toast for info messages (2.8 s, bottom right, as in the mockup).
+  - Palette groups: Needs you / Workspaces / Actions / Device / App.
+  - Overview cards get per-state actions and tints, plus a device chip.
+  - Welcome shows agent paths and toolchain locations.
+  - Settings show agent paths and versions, a Boot button on base devices, and a keybinding search.
+  - New workspace shows each base branch's tip and age (new port method `VersionControl::branch_tips`; owner to confirm).
+- **Still open** (owner calls or not backed):
+  - Several workspaces as tabs in one pane, plus "shell" and "+" tabs.
+  - Approval mode, max concurrent agents, notify / Dock badge.
+  - Custom agent commands.
+  - Recording keybindings.
+  - Build progress and crash overlays.
+  - Clone / Take over in the in-use overlay (the pool can't do either).
+  - Phone bezel and flash ring.
+  - Project kind.
+  - Clone repository.
+  - Composer "@" attachments and context.
+  - Agent memory and system RAM in the status bar.
+  - "Approve pending request" in the palette.
+  - "Sandbox: worktree only": not shown, because agents are not sandboxed.
+  - ⌘R stays Run (the design uses it for Reload).
+  - ⌘⏎ is missing from the Settings keybinding table.
+  - The review title stays the workspace name, because workspaces store no task.
+- `changes/review.rs` calls `hangar_worktree::base_branch_name` directly instead of through a `ReviewOps` port.
+
 ## Device panel visual pass (2026-10-05)
 - Seen on screen (iOS, private backend): live frame, tap (opens Settings), Home, tooltips, logs pane (level,
   process, search, Pause/Follow/Copy/Clear), Shut down; no Rotate on iOS (unsupported). Android: the conflict
