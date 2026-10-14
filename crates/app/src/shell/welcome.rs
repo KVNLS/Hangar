@@ -20,14 +20,14 @@ static TOOLCHAINS_STARTED: AtomicBool = AtomicBool::new(false);
 fn detect_toolchains() -> Vec<(Platform, String)> {
     let mut found = Vec::new();
     #[cfg(target_os = "macos")]
-    if let Ok(dir) = hangar_devices::ios::developer_dir() {
+    if let Ok(dir) = crate::adapters::devices::ios::developer_dir() {
         // `/Applications/Xcode.app/Contents/Developer` reads better as the app bundle.
         let app = dir
             .split_once(".app/")
             .map_or(dir.clone(), |(app, _)| format!("{app}.app"));
         found.push((Platform::Ios, tilde(std::path::Path::new(&app))));
     }
-    if let Ok(sdk) = hangar_devices::android::AndroidSdk::locate() {
+    if let Ok(sdk) = crate::adapters::devices::android::AndroidSdk::locate() {
         found.push((Platform::Android, tilde(&sdk.root)));
     }
     found

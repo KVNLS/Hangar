@@ -5,7 +5,7 @@ mod options;
 mod review;
 
 use super::*;
-use hangar_devices::SavePng as _;
+use crate::adapters::devices::SavePng as _;
 
 use device::{
     DEV_BOOT_TIMEOUT, DEV_POLL, DevAction, dev_device, dev_pool_frames, dev_run, dev_show,
@@ -103,13 +103,13 @@ pub(super) async fn run_dev_hooks(
         if dev.device_home {
             inputs.push((
                 "HANGAR_DEV_DEVICE_HOME",
-                DevAction::Input(hangar_devices::Input::Home),
+                DevAction::Input(hangar_core::device::Input::Home),
             ));
         }
         if let Some((x, y)) = dev.device_tap {
             inputs.push((
                 "HANGAR_DEV_DEVICE_TAP",
-                DevAction::Input(hangar_devices::Input::Tap { x, y }),
+                DevAction::Input(hangar_core::device::Input::Tap { x, y }),
             ));
         }
         if let Some(text) = dev.device_text.clone() {

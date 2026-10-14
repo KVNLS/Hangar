@@ -105,7 +105,7 @@ impl HangarApp {
 /// The error comes from a tool that is missing or too old (an agent CLI, git, `gh`), which
 /// Settings › Setup explains how to install.
 pub(super) fn is_missing_tool(err: &anyhow::Error) -> bool {
-    use hangar_worktree::Error as Git;
+    use crate::adapters::vcs::Error as Git;
     let missing_git = |e: &(dyn std::error::Error + 'static)| {
         matches!(
             e.downcast_ref::<Git>(),
@@ -136,10 +136,10 @@ mod tests {
         })
         .context("cannot start the agent");
         assert!(is_missing_tool(&agent));
-        let git = anyhow::Error::new(PortError::new(hangar_worktree::Error::GitMissing))
+        let git = anyhow::Error::new(PortError::new(crate::adapters::vcs::Error::GitMissing))
             .context("cannot create the worktree");
         assert!(is_missing_tool(&git));
-        let other = anyhow::Error::new(hangar_worktree::Error::NothingToCommit);
+        let other = anyhow::Error::new(crate::adapters::vcs::Error::NothingToCommit);
         assert!(!is_missing_tool(&other));
     }
 }

@@ -1,7 +1,7 @@
 //! Logs, stats and hardware input of the open device.
 
 use gpui_kit::*;
-use hangar_devices::Input;
+use hangar_core::device::Input;
 
 use crate::device_view::DeviceView;
 

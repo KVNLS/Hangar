@@ -419,9 +419,9 @@ impl HangarApp {
             // Shown only when it calls for action.
             .when_some(pressure, |this, pressure| {
                 let color = match pressure {
-                    hangar_devices::capacity::Pressure::Normal => return this,
-                    hangar_devices::capacity::Pressure::Warn => t.amb,
-                    hangar_devices::capacity::Pressure::Critical => t.red,
+                    hangar_core::device::Pressure::Normal => return this,
+                    hangar_core::device::Pressure::Warn => t.amb,
+                    hangar_core::device::Pressure::Critical => t.red,
                 };
                 this.child(
                     h_flex()

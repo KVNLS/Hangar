@@ -42,7 +42,7 @@ impl HangarApp {
         };
         let booted = pool.booted_count();
         let options = std::iter::once("Auto".to_owned())
-            .chain((1..=hangar_devices::capacity::MAX_SLOTS).map(|n| n.to_string()));
+            .chain((1..=hangar_core::device::capacity::MAX_SLOTS).map(|n| n.to_string()));
         card(cx)
             .child(
                 v_flex()

@@ -1,8 +1,8 @@
 //! Device picker state, independent of the UI: the listed devices, the user's selection and
 //! which device should be open. Every change returns the [`Effect`] the panel must carry out.
 
+use hangar_core::device::DeviceInfo;
 pub use hangar_core::device::DeviceKey;
-use hangar_devices::DeviceInfo;
 
 use super::platform::Platform;
 

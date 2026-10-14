@@ -6,10 +6,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::adapters::devices::{Device, FrameReceiver, LogFilter, LogStream};
 use anyhow::Context as _;
-use hangar_devices::{
-    Capabilities, Device, DeviceInfo, FrameReceiver, Input, LogFilter, LogStream, Orientation,
-};
+use hangar_core::device::{Capabilities, DeviceInfo, Input, Orientation};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -69,29 +68,31 @@ impl PartialEq for Command {
 pub struct DeviceHandle(Option<Arc<dyn Device>>);
 
 impl DeviceHandle {
-    fn device(&self) -> hangar_devices::Result<&Arc<dyn Device>> {
+    fn device(&self) -> crate::adapters::devices::Result<&Arc<dyn Device>> {
         self.0
             .as_ref()
-            .ok_or(hangar_devices::Error::Unsupported("device released"))
+            .ok_or(crate::adapters::devices::Error::Unsupported(
+                "device released",
+            ))
     }
 
     /// Spawns the log process. Blocks: call from a background thread.
-    pub fn logs(&self, filter: &LogFilter) -> hangar_devices::Result<LogStream> {
+    pub fn logs(&self, filter: &LogFilter) -> crate::adapters::devices::Result<LogStream> {
         self.device()?.logs(filter)
     }
 
     /// Installs an `.app` bundle or an `.apk`. Blocks: call from a background thread.
-    pub fn install(&self, app: &std::path::Path) -> hangar_devices::Result<()> {
+    pub fn install(&self, app: &std::path::Path) -> crate::adapters::devices::Result<()> {
         self.device()?.install(app)
     }
 
     /// Launches an installed app by bundle id / package name. Blocks.
-    pub fn launch(&self, app_id: &str) -> hangar_devices::Result<()> {
+    pub fn launch(&self, app_id: &str) -> crate::adapters::devices::Result<()> {
         self.device()?.launch(app_id)
     }
 
     /// The orientation the guest reports (unsupported on iOS). Blocks.
-    pub fn orientation(&self) -> hangar_devices::Result<Orientation> {
+    pub fn orientation(&self) -> crate::adapters::devices::Result<Orientation> {
         self.device()?.orientation()
     }
 }
@@ -297,7 +298,8 @@ fn input_worker(device: Arc<dyn Device>, rx: mpsc::Receiver<Command>, results: S
                     let Err(err) = result else {
                         continue;
                     };
-                    let unsupported = matches!(err, hangar_devices::Error::Unsupported(_));
+                    let unsupported =
+                        matches!(err, crate::adapters::devices::Error::Unsupported(_));
                     if !unsupported || !unsupported_text_logged {
                         tracing::warn!(%err, "device text input failed");
                     }

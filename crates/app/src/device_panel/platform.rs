@@ -4,7 +4,7 @@
 
 use gpui_kit::assets::IconName;
 pub use hangar_core::device::{BackendReason, Platform};
-use hangar_devices::{DeviceInfo, Input};
+use hangar_core::device::{DeviceInfo, Input};
 
 /// A hardware control shown under the screen.
 #[derive(Clone, Copy, Debug, PartialEq)]

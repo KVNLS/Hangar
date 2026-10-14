@@ -149,3 +149,56 @@ fn core_stays_free_of_runtime_and_io_crates() {
         );
     }
 }
+
+/// Files still allowed to name adapter crates until the shell split lands.
+// TODO(m10): remove after the shell split merge
+const ADAPTER_PATH_ALLOWLIST: &[&str] = &["shell.rs", "shell/run.rs", "shell/run/"];
+
+fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// The app names adapter crates only in `app::adapters`: everything else goes through ports, core
+/// types or the re-exports there (tests aside).
+#[test]
+fn app_names_adapter_crates_only_in_adapters() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let mut offenders = Vec::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let is_test_file = rel.ends_with("tests.rs") || rel.contains("/tests/");
+        if rel == "adapters.rs"
+            || rel.starts_with("adapters/")
+            || is_test_file
+            || ADAPTER_PATH_ALLOWLIST.iter().any(|a| rel.starts_with(a))
+        {
+            continue;
+        }
+        let text = std::fs::read_to_string(&file).unwrap();
+        let code = text.split("#[cfg(test)]").next().unwrap();
+        for (n, line) in code.lines().enumerate() {
+            if line.contains("hangar_devices::") || line.contains("hangar_worktree::") {
+                offenders.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "adapter crates may be named only in app::adapters; use hangar_core::device or the \
+         re-exports in adapters::devices and adapters::vcs:\n{}",
+        offenders.join("\n")
+    );
+}

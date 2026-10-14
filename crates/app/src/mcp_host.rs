@@ -10,9 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use crate::adapters::devices::LogEntry;
 use anyhow::Context as _;
+use hangar_core::device::{Frame, Input, LogLevel};
 use hangar_core::{AgentSignal, WorkspaceId};
-use hangar_devices::{Frame, Input, LogEntry, LogLevel};
 use hangar_mcp::{
     Answer, ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost,
     ToolOutput, TranscriptEntry, encode_screenshot, new_session_secret,
@@ -31,7 +32,7 @@ pub struct ScreenFrame {
 }
 
 /// One device operation for the GPUI side. Every request targets the device of `ws`; reply
-/// with `Err` carrying a `hangar_devices::Error::Unsupported` (or a [`ToolError`]) for things
+/// with `Err` carrying a `crate::adapters::devices::Error::Unsupported` (or a [`ToolError`]) for things
 /// the device cannot do, any other error for failures. Dropping `reply` fails the call.
 #[derive(Debug)]
 pub enum McpRequest {
@@ -558,8 +559,8 @@ fn tool_error(err: &anyhow::Error) -> ToolError {
         if let Some(tool) = cause.downcast_ref::<ToolError>() {
             return tool.clone();
         }
-        if let Some(hangar_devices::Error::Unsupported(what)) =
-            cause.downcast_ref::<hangar_devices::Error>()
+        if let Some(crate::adapters::devices::Error::Unsupported(what)) =
+            cause.downcast_ref::<crate::adapters::devices::Error>()
         {
             return ToolError::Unsupported((*what).to_owned());
         }

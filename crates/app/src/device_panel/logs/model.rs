@@ -4,7 +4,8 @@
 use std::collections::VecDeque;
 use std::ops::RangeInclusive;
 
-use hangar_devices::{LogEntry, LogLevel};
+use crate::adapters::devices::LogEntry;
+use hangar_core::device::LogLevel;
 
 /// Entries kept by the view; older ones are discarded.
 pub const BUFFER_CAP: usize = 20_000;

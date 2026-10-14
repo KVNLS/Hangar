@@ -71,9 +71,9 @@ pub struct DevOptions {
     /// Boot the device first when it is a shut-down virtual device (simulator UDID, AVD id).
     pub device_boot: bool,
     /// Comma-separated hardware controls to press after the text (`lock`, `volume-up`, ...).
-    pub device_buttons: Vec<hangar_devices::Input>,
+    pub device_buttons: Vec<hangar_core::device::Input>,
     /// Comma-separated keys to press after the buttons (`Backspace`, `Enter`, `ArrowUp`, ...).
-    pub device_keys: Vec<hangar_devices::Input>,
+    pub device_keys: Vec<hangar_core::device::Input>,
     /// Shut the device down after all other device hooks.
     pub device_shutdown: bool,
     /// Open the logs pane under the device screen.
@@ -84,8 +84,8 @@ pub struct DevOptions {
 fn parse_list(
     hook: &str,
     value: Option<String>,
-    parse: impl Fn(&str) -> Option<hangar_devices::Input>,
-) -> Vec<hangar_devices::Input> {
+    parse: impl Fn(&str) -> Option<hangar_core::device::Input>,
+) -> Vec<hangar_core::device::Input> {
     let value = value.unwrap_or_default();
     value
         .split(',')
@@ -101,8 +101,8 @@ fn parse_list(
         .collect()
 }
 
-fn parse_button(name: &str) -> Option<hangar_devices::Input> {
-    use hangar_devices::Input;
+fn parse_button(name: &str) -> Option<hangar_core::device::Input> {
+    use hangar_core::device::Input;
     Some(match name {
         "home" => Input::Home,
         "back" => Input::Back,
@@ -114,9 +114,9 @@ fn parse_button(name: &str) -> Option<hangar_devices::Input> {
     })
 }
 
-fn parse_key(name: &str) -> Option<hangar_devices::Input> {
-    use hangar_devices::Key;
-    Some(hangar_devices::Input::Key(
+fn parse_key(name: &str) -> Option<hangar_core::device::Input> {
+    use hangar_core::device::Key;
+    Some(hangar_core::device::Input::Key(
         match name.to_ascii_lowercase().as_str() {
             "backspace" => Key::Backspace,
             "enter" => Key::Enter,

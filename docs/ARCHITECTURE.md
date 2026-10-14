@@ -125,9 +125,10 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
 - [x] The layering test passes with no edges between library crates.
 - [x] No `hangar_worktree::` or SQLite `Store` paths in `app/src` outside `app::adapters` (tests
   aside).
-- [ ] No `hangar_devices::` paths in `app/src` outside the adapters (today 26 files, tests aside:
-  mostly the device pool, panel and views, plus `mcp_host`, `state` and nine `shell` modules;
-  many only name types that `core::device` also exports).
+- [x] No `hangar_devices::` paths in `app/src` outside the adapters (tests aside). Shared types come
+  from `core::device`; the rest (`Device`, `LogStream`, `android`, `simctl`, `ios`, ...) is
+  re-exported by `adapters::devices` (git helpers by `adapters::vcs`). `architecture.rs` enforces it;
+  the only exceptions are `shell.rs` and `shell/run*`, allow-listed until the shell split merges.
 - [x] `HangarApp` has at most 15 fields.
 - [ ] No source file over about 800 lines (today, all in `app` unless noted: `shell.rs` 1,065,
   `shell/lifecycle.rs` 1,025, `chat_view.rs` 1,003, `chat_view/render.rs` 984, `shell/overview.rs`

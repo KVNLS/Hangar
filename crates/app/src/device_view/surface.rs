@@ -5,12 +5,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::adapters::devices::ios::LiveFramebuffer;
 use core_foundation::base::{TCFType as _, kCFAllocatorDefault};
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use core_video::pixel_buffer_io_surface::CVPixelBufferCreateWithIOSurface;
 use core_video::r#return::kCVReturnSuccess;
-use hangar_devices::LiveSurface;
-use hangar_devices::ios::LiveFramebuffer;
+use hangar_core::device::LiveSurface;
 
 /// The pixel buffer of the last live surface seen; surfaces only change when the simulator
 /// swaps its framebuffer.

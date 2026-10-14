@@ -9,6 +9,7 @@ mod model;
 use std::ops::{Range, RangeInclusive};
 use std::time::Duration;
 
+use crate::adapters::devices::{LogFilter, LogStream};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
@@ -17,7 +18,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_devices::{LogFilter, LogLevel, LogStream};
+use hangar_core::device::LogLevel;
 
 use crate::device_view::DeviceHandle;
 use model::{BUFFER_CAP, Follow, Line, LogModel};
