@@ -63,6 +63,22 @@ pub fn git_version() -> Result<GitVersion> {
     Ok(found)
 }
 
+/// Who new commits are made as: `user.name` and `user.email` from the system and global config,
+/// each `None` when unset.
+pub fn identity() -> Result<(Option<String>, Option<String>)> {
+    identity_with(&Git::new("/"))
+}
+
+fn identity_with(git: &Git) -> Result<(Option<String>, Option<String>)> {
+    let get = |key: &str| -> Result<Option<String>> {
+        Ok(git
+            .query(["config", "--get", key])?
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty()))
+    };
+    Ok((get("user.name")?, get("user.email")?))
+}
+
 /// Synchronous runner for `git -C <dir> ...`. Blocks: call it from a background thread.
 #[derive(Clone, Debug)]
 pub struct Git {
@@ -405,5 +421,21 @@ mod tests {
     #[test]
     fn installed_git_is_supported() {
         assert!(git_version().unwrap() >= MIN_GIT_VERSION);
+    }
+
+    #[test]
+    fn reads_identity_from_the_global_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("gitconfig");
+        std::fs::write(&config, "[user]\n\tname = Ada\n").unwrap();
+        let git = Git::new(dir.path())
+            .with_env("GIT_CONFIG_GLOBAL", &config)
+            .with_env("GIT_CONFIG_NOSYSTEM", "1");
+        assert_eq!(identity_with(&git).unwrap(), (Some("Ada".into()), None));
+        std::fs::write(&config, "[user]\n\tname = Ada\n\temail = ada@example.com\n").unwrap();
+        assert_eq!(
+            identity_with(&git).unwrap(),
+            (Some("Ada".into()), Some("ada@example.com".into()))
+        );
     }
 }

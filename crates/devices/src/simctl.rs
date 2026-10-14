@@ -185,6 +185,43 @@ fn run(program: &str, args: &[&str]) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
+#[derive(Deserialize)]
+struct RuntimeList {
+    runtimes: Vec<SimctlRuntime>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SimctlRuntime {
+    #[serde(default)]
+    platform: Option<String>,
+    #[serde(default)]
+    identifier: String,
+    #[serde(default)]
+    is_available: Option<bool>,
+}
+
+/// Parses `xcrun simctl list runtimes -j`; counts the available iOS runtimes.
+pub fn count_ios_runtimes(json: &str) -> Result<usize> {
+    let list: RuntimeList = serde_json::from_str(json).map_err(|e| Error::Parse(e.to_string()))?;
+    Ok(list
+        .runtimes
+        .iter()
+        .filter(|r| r.is_available != Some(false))
+        .filter(|r| match &r.platform {
+            Some(platform) => platform == "iOS",
+            None => r.identifier.contains(".SimRuntime.iOS-"),
+        })
+        .count())
+}
+
+/// How many iOS simulator runtimes are installed.
+#[cfg(target_os = "macos")]
+pub fn ios_runtime_count() -> Result<usize> {
+    let json = run("xcrun", &["simctl", "list", "runtimes", "-j"])?;
+    count_ios_runtimes(&String::from_utf8_lossy(&json))
+}
+
 /// Lists booted simulators with their screen geometry filled in when available.
 #[cfg(target_os = "macos")]
 pub fn list_booted() -> Result<Vec<DeviceInfo>> {
@@ -482,5 +519,18 @@ mod tests {
         assert_eq!(s.scale, 3.0);
         assert_eq!(s.width_pt(), 402.0);
         assert_eq!(s.height_pt(), 874.0);
+    }
+
+    #[test]
+    fn counts_available_ios_runtimes() {
+        let json = r#"{"runtimes": [
+            {"platform": "iOS", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "isAvailable": true},
+            {"platform": "iOS", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-0", "isAvailable": false},
+            {"platform": "watchOS", "identifier": "com.apple.CoreSimulator.SimRuntime.watchOS-12-0", "isAvailable": true},
+            {"identifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-5"}
+        ]}"#;
+        assert_eq!(count_ios_runtimes(json).unwrap(), 2);
+        assert_eq!(count_ios_runtimes(r#"{"runtimes": []}"#).unwrap(), 0);
+        assert!(count_ios_runtimes("nope").is_err());
     }
 }

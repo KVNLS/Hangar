@@ -20,7 +20,7 @@ pub use diff::{
 };
 pub use error::{Error, Result};
 pub use gh::{Gh, gh_available};
-pub use git::{Git, GitVersion, MIN_GIT_VERSION, git_version};
+pub use git::{Git, GitVersion, MIN_GIT_VERSION, git_version, identity};
 pub use hangar_core::changes::{
     ChangeKind, ChangedPath, DiffLine, DiffOptions, FileDiff, FileStatus, GitDirs, Hunk, LineKind,
     Status,
