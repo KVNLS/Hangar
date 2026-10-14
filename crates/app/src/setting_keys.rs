@@ -19,6 +19,8 @@ pub const APPEARANCE: Setting<Appearance> = Setting::new("appearance");
 pub const OLLAMA: Setting<OllamaSettings> = Setting::new("ollama");
 /// Whether commits from the review box credit the workspace's agent with a trailer.
 pub const COAUTHOR_TRAILER: Setting<bool> = Setting::new("review:coauthor_trailer");
+/// "Max concurrent agents": starts beyond it queue (see [`crate::agent_queue`]).
+pub const MAX_AGENTS: Setting<u32> = Setting::new("agents:max_concurrent");
 
 pub const DEVICE_LIMIT: Setting<Limit> = Setting::new("device_pool:limit");
 pub const SINGLE_DEVICE_ALERT_SHOWN: Setting<bool> = Setting::new("device_pool:single_alert_shown");
@@ -66,6 +68,7 @@ mod tests {
         assert_eq!(APPEARANCE.key(), "appearance");
         assert_eq!(OLLAMA.key(), "ollama");
         assert_eq!(COAUTHOR_TRAILER.key(), "review:coauthor_trailer");
+        assert_eq!(MAX_AGENTS.key(), "agents:max_concurrent");
         assert_eq!(DEVICE_LIMIT.key(), "device_pool:limit");
         assert_eq!(
             SINGLE_DEVICE_ALERT_SHOWN.key(),

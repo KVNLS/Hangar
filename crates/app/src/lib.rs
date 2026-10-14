@@ -1,6 +1,7 @@
 //! GPUI shell and all views. The only crate allowed to depend on GPUI.
 
 pub mod adapters;
+pub mod agent_queue;
 pub mod agents;
 pub mod app_icon;
 pub mod assets;
