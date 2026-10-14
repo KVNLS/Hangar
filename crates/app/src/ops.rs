@@ -45,6 +45,7 @@ pub struct Loaded {
     pub device: Option<DeviceLayout>,
     pub appearance: Option<Appearance>,
     pub ollama: Option<OllamaSettings>,
+    pub notify_attention: Option<bool>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -156,6 +157,16 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let notify_attention = match store
+        .get_setting(&setting_keys::NOTIFY_ATTENTION)
+        .context("failed to read the notification setting")
+    {
+        Ok(on) => on,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
+    };
     Ok(Loaded {
         entries,
         chats,
@@ -165,6 +176,7 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
         device,
         appearance,
         ollama,
+        notify_attention,
         settings_error,
     })
 }
@@ -197,6 +209,12 @@ pub fn save_ollama(store: &dyn Store, ollama: &OllamaSettings) -> anyhow::Result
     store
         .set_setting(&setting_keys::OLLAMA, ollama)
         .context("failed to save the Ollama settings")
+}
+
+pub fn save_notify_attention(store: &dyn Store, on: bool) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::NOTIFY_ATTENTION, &on)
+        .context("failed to save the notification setting")
 }
 
 pub fn save_agent(store: &dyn Store, agent: &str) -> anyhow::Result<()> {

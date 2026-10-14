@@ -104,6 +104,7 @@ impl HangarApp {
                     if this.tick_activity(cx) {
                         cx.notify();
                     }
+                    this.sync_attention(cx);
                 });
                 if alive.is_err() {
                     break;

@@ -1,5 +1,6 @@
 //! The main window: project sidebar and tiled terminal panes (one by default, split on demand).
 
+mod attention;
 mod chrome;
 mod dev;
 mod device_api;
@@ -405,6 +406,7 @@ pub struct HangarApp {
     work: WorkState,
     toast: Option<toast::Toast>,
     settings_ui: settings::SettingsUi,
+    attention: attention::Attention<WorkspaceId>,
 }
 
 impl HangarApp {
@@ -603,6 +605,7 @@ impl HangarApp {
             },
             toast: None,
             settings_ui,
+            attention: attention::Attention::new(true),
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
                 // ACP agents run in their own process group and some (codex-acp) outlive a
@@ -756,6 +759,9 @@ impl HangarApp {
                 }
                 if let Some(ollama) = loaded.ollama {
                     self.restore_ollama(ollama, window, cx);
+                }
+                if let Some(on) = loaded.notify_attention {
+                    self.attention.enabled = on;
                 }
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
