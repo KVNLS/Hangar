@@ -97,6 +97,20 @@ impl HangarApp {
     }
 
     /// Saves the queue when it differs from the last saved one.
+    /// Takes `id`'s start out of the queue (the overview's "Cancel start").
+    pub(super) fn unqueue_agent(
+        &mut self,
+        id: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.live.agent_queue.remove(id).is_some() {
+            tracing::info!(workspace = %id, "queued start cancelled");
+            self.save_agent_queue(window, cx);
+            cx.notify();
+        }
+    }
+
     fn save_agent_queue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let queue: Vec<(WorkspaceId, StartRequest)> = self
             .live
