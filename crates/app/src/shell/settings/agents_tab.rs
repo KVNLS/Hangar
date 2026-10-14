@@ -74,13 +74,21 @@ impl HangarApp {
                         .gap_0p5()
                         .child(
                             h_flex()
+                                .min_w_0()
                                 .gap_2()
                                 .items_center()
-                                .child(div().type_body_strong().child(choice.name.clone()))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .type_body_strong()
+                                        .truncate()
+                                        .child(choice.name.clone()),
+                                )
                                 .when(is_default, |this| this.child(CountBadge::new("Default"))),
                         )
                         .child(
                             div()
+                                .w_full()
                                 .type_mono_small()
                                 .text_color(t.tx3)
                                 .truncate()
@@ -89,6 +97,7 @@ impl HangarApp {
                 )
                 .child(
                     div()
+                        .flex_none()
                         .w(px(110.))
                         .font_mono()
                         .text_size(px(11.))
@@ -103,26 +112,29 @@ impl HangarApp {
                             (true, false) => "not on PATH",
                         }),
                 )
-                .child(if is_default {
-                    // The badge next to the name already says so.
-                    div().into_any_element()
-                } else {
-                    UiButton::new(SharedString::from(format!("default-{}", choice.id)))
-                        .label("Make default")
-                        .small()
-                        .disabled(!choice.installed)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.agent_setup.agent = id.clone();
-                            this.agent_setup.agent_chosen_by_user = true;
-                            let agent = this.agent_setup.agent.clone();
-                            this.agent_setup.agent_select.update(cx, |select, cx| {
-                                select.set_selected_value(&agent, window, cx)
-                            });
-                            this.save_agent(window, cx);
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                })
+                // Fixed width so the status column lines up on the default row too, whose
+                // button is hidden (the badge next to the name already says so).
+                .child(div().flex_none().w(px(96.)).flex().justify_end().when(
+                    !is_default,
+                    |this| {
+                        this.child(
+                            UiButton::new(SharedString::from(format!("default-{}", choice.id)))
+                                .label("Make default")
+                                .small()
+                                .disabled(!choice.installed)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.agent_setup.agent = id.clone();
+                                    this.agent_setup.agent_chosen_by_user = true;
+                                    let agent = this.agent_setup.agent.clone();
+                                    this.agent_setup.agent_select.update(cx, |select, cx| {
+                                        select.set_selected_value(&agent, window, cx)
+                                    });
+                                    this.save_agent(window, cx);
+                                    cx.notify();
+                                })),
+                        )
+                    },
+                ))
         });
         v_flex()
             .gap_4()
@@ -166,7 +178,7 @@ impl HangarApp {
             .child(
                 row(
                     "Notify when an agent needs me",
-                    "Approval, input and failure. Dock badge shows count.",
+                    "Approval, input and failure. Dock badge shows count; a notification while Hangar is in the background.",
                 )
                 .child(
                     Switch::new("notify-attention")
@@ -175,6 +187,21 @@ impl HangarApp {
                         .checked(self.attention.enabled)
                         .on_click(cx.listener(|this, on: &bool, window, cx| {
                             this.set_notify_attention(*on, window, cx)
+                        })),
+                ),
+            )
+            .child(
+                row(
+                    "Notify when an agent finishes",
+                    "A notification when a turn ends while Hangar is in the background.",
+                )
+                .child(
+                    Switch::new("notify-finished")
+                        .small()
+                        .color(t.acc)
+                        .checked(self.attention.notify_finished)
+                        .on_click(cx.listener(|this, on: &bool, window, cx| {
+                            this.set_notify_finished(*on, window, cx)
                         })),
                 ),
             )
