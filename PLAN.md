@@ -57,7 +57,6 @@ Git access is the `git` CLI with porcelain output, not a library.
 10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
 
 ## Explicitly unimplemented (return `Unsupported`)
-- `agents::acp`: `AcpSession::load` (`session/load`, resuming after a restart).
 - `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
   Android rotation needs a sensor-following foreground app and upside-down is usually refused (spikes/m4-android-notes.md);
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
@@ -191,7 +190,12 @@ Git access is the `git` CLI with porcelain output, not a library.
   and sends no `current_mode_update`, so the chip changes on success). Typing `/prefix` lists matching slash
   commands (from `available_commands_update`, up to 8); clicking one fills `/name `. Both are protocol- and
   build-checked; neither was seen on screen yet (the display slept during the check).
-- Gaps: no resume after a Hangar restart (`session/load`); no images or @-context in the composer, no
+- Resume: each workspace's ACP session id is saved as `chat:<workspace id>` (with the preset that ran it).
+  When the selected agent matches, the pane offers "Resume …" (`session/load`: the agent replays the history
+  as updates before answering, so the transcript comes back) next to "New conversation". A refused load
+  (e.g. -32002 unknown session) starts a new session and says so in the transcript. Checked against
+  claude-agent-acp at the protocol level (history replayed, unknown id refused); not yet clicked in the app.
+- Gaps: no images or @-context in the composer, no
   keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
   stopping a turn is esc or the Stop button; no transcript virtualization (long sessions render every item).
@@ -231,5 +235,7 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Owner reviews `m7-acp` (and looks at the mode menu and slash list). Then: `session/load` resume, slash commands, more ACP agents (Gemini `--experimental-acp`, `opencode acp` — the local
-  OpenCode install printed nothing for `opencode acp --help` within 15 s —, `codex-acp`).
+- Owner reviews `m7-acp` and looks at the mode menu, slash list and Resume in the app (not seen on screen:
+  the display slept during the check).
+- Then more ACP agents: Gemini `--experimental-acp`, `codex-acp`, `opencode acp` (the local OpenCode install
+  printed nothing for `opencode acp --help` within 15 s).
