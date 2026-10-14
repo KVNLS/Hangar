@@ -3,6 +3,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::error::{Error, Result};
 use crate::git::{Git, RawOutput, bytes_to_path};
@@ -235,6 +236,14 @@ pub struct PushOutcome {
 /// upstream it pushes there; otherwise to `remote` (default `origin`, or the only remote)
 /// with `-u`, replacing any upstream that pointed at another branch. Never forces.
 pub fn push(worktree: &Path, remote: Option<&str>) -> Result<PushOutcome> {
+    push_within(worktree, remote, PUSH_TIMEOUT)
+}
+
+/// A push that has not finished by then waits for something that will not come (a prompt, a
+/// dead network).
+const PUSH_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn push_within(worktree: &Path, remote: Option<&str>, timeout: Duration) -> Result<PushOutcome> {
     let branch = current_branch(worktree)?.ok_or(Error::DetachedHead)?;
     let git = Git::new(worktree);
     let upstream = branch_upstream(worktree, &branch)?.filter(|u| !u.gone);
@@ -276,7 +285,7 @@ pub fn push(worktree: &Path, remote: Option<&str>) -> Result<PushOutcome> {
         args.push("--set-upstream");
     }
     args.extend(["--", target.as_str(), refspec.as_str()]);
-    let out = git.output(&args, None)?;
+    let out = git.output_timeout(&args, timeout)?;
     let report = parse_push_porcelain(&out.stdout_text());
     if let Some(rejected) = report.iter().find(|r| r.flag == '!') {
         let reason = rejected.summary.clone();
@@ -562,6 +571,66 @@ fn rollback_merge(git: &Git, checkout: &BaseCheckout, err: Error, no_ff: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repository on branch `task` with one commit and an ssh remote run by `ssh_command`.
+    fn ssh_remote_repo(ssh_command: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q", "-b", "task"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "c",
+        ]);
+        git(&["remote", "add", "origin", "ssh://hangar.invalid/repo.git"]);
+        git(&["config", "core.sshCommand", ssh_command]);
+        dir
+    }
+
+    #[test]
+    fn push_gives_up_after_the_timeout_and_kills_ssh() {
+        let marker = tempfile::tempdir().unwrap();
+        let pid_file = marker.path().join("ssh.pid");
+        let repo = ssh_remote_repo(&format!(
+            "sh -c 'echo $$ > {}; exec sleep 30' --",
+            pid_file.display()
+        ));
+        let started = std::time::Instant::now();
+        let err = push_within(repo.path(), None, Duration::from_millis(800)).unwrap_err();
+        assert!(matches!(err, Error::Timeout { .. }), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: signal 0 only checks whether the process exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(!alive, "the fake ssh ({pid}) still runs");
+    }
+
+    #[test]
+    fn ssh_cannot_prompt_on_a_terminal() {
+        // Opening /dev/tty fails without a controlling terminal: the push fails at once instead
+        // of waiting for a passphrase.
+        let repo = ssh_remote_repo("sh -c ': > /dev/tty || exit 7; exec sleep 30' --");
+        let err = push_within(repo.path(), None, Duration::from_secs(20)).unwrap_err();
+        assert!(!matches!(err, Error::Timeout { .. }), "{err:?}");
+    }
 
     #[test]
     fn parses_push_porcelain() {
