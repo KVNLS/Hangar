@@ -94,11 +94,15 @@ pub fn encode_key(key: Key, mods: Modifiers, mode: KeyMode) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Wraps pasted text in bracketed-paste markers when the program enabled them, stripping
-/// any embedded end marker so pasted content cannot terminate the paste early.
+/// Wraps pasted text in bracketed-paste markers when the program enabled them. Escapes and
+/// other control characters (tab and line breaks aside) are dropped, as xterm does, so pasted
+/// content can neither end the paste early nor reach the program as keystrokes.
 pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
-        let clean = text.replace("\x1b[201~", "");
+        let clean: String = text
+            .chars()
+            .filter(|&c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
+            .collect();
         let mut out = Vec::with_capacity(clean.len() + 12);
         out.extend_from_slice(b"\x1b[200~");
         out.extend_from_slice(clean.as_bytes());
@@ -288,6 +292,19 @@ mod tests {
         assert_eq!(encode_paste("a\nb", false), b"a\rb");
         assert_eq!(encode_paste("a\r\nb", false), b"a\rb");
         assert_eq!(encode_paste("hi", true), b"\x1b[200~hi\x1b[201~");
-        assert_eq!(encode_paste("x\x1b[201~y", true), b"\x1b[200~xy\x1b[201~");
+        assert_eq!(
+            encode_paste("x\x1b[201~y", true),
+            b"\x1b[200~x[201~y\x1b[201~"
+        );
+    }
+
+    #[test]
+    fn bracketed_paste_cannot_be_ended_early() {
+        let pasted = encode_paste("a\x1b[20\x1b[201~1~rm -rf ~\r", true);
+        assert_eq!(pasted, b"\x1b[200~a[20[201~1~rm -rf ~\r\x1b[201~");
+        assert_eq!(
+            encode_paste("tab\tnl\nbell\x07c1\u{9b}x", true),
+            "\x1b[200~tab\tnl\nbellc1x\x1b[201~".as_bytes()
+        );
     }
 }
