@@ -32,6 +32,15 @@ use crate::setting_keys;
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
 use crate::ui::theme::Appearance;
 
+mod chats;
+mod run_config;
+pub use chats::{
+    forget_chat, record_usage, save_chat, save_session_cost, save_usage_settings, usage_since,
+};
+pub use run_config::{
+    RunChoice, RunConfig, forget_run_config, run_config, save_run_choice, save_run_config,
+};
+
 /// Local models served by Ollama, offered to OpenCode as an extra provider.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OllamaSettings {
@@ -397,6 +406,19 @@ pub fn save_flag(
     store
         .set_setting(key, &on)
         .with_context(|| format!("failed to save the {} setting", key.key()))
+}
+
+/// Whether review commits credit the agent with a trailer; `None` when never set.
+pub fn coauthor_trailer(store: &dyn Store) -> anyhow::Result<Option<bool>> {
+    store
+        .get_setting(&setting_keys::COAUTHOR_TRAILER)
+        .context("unreadable co-author trailer setting")
+}
+
+pub fn save_coauthor_trailer(store: &dyn Store, on: bool) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::COAUTHOR_TRAILER, &on)
+        .context("failed to save the co-author trailer setting")
 }
 
 pub fn save_orchestration(store: &dyn Store, on: bool) -> anyhow::Result<()> {

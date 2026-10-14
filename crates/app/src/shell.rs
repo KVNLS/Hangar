@@ -57,7 +57,6 @@ use hangar_core::{
     AgentState, Project, ProjectId, Session, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
 use hangar_terminal::ExitInfo;
-use hangar_usecases::settings::SettingsExt as _;
 
 use crate::agents::{self, AgentChoice, AgentPreset};
 use crate::changes::review::ReviewTarget;
@@ -87,7 +86,6 @@ pub use dev::DevOptions;
 use dev::run_dev_hooks;
 pub use device_api::{DeviceFrame, DeviceStatusInfo};
 use dialogs::DeleteWorkspaceDialog;
-pub use run::RunConfig;
 use state::*;
 use types::*;
 

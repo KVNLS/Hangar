@@ -40,7 +40,7 @@ impl HangarApp {
         };
         self.live.saved_chats.insert(workspace_id, chat.clone());
         self.persist(window, cx, move |store| {
-            Ok(store.set_setting(&setting_keys::chat(workspace_id), &chat)?)
+            ops::save_chat(store, workspace_id, &chat)
         });
         let root = self
             .work
@@ -128,17 +128,11 @@ impl HangarApp {
             .map(|chat| chat.session.clone())
     }
 
+    /// Forgets the workspace's conversation and agent here; the store forgets them with
+    /// [`ops::forget_chat`] when the workspace is deleted.
     pub(in crate::shell) fn forget_chat(&mut self, workspace_id: WorkspaceId) {
         self.live.saved_chats.remove(&workspace_id);
         self.live.workspace_agents.remove(&workspace_id);
-        if let Some(store) = &self.store {
-            if let Err(err) = store.delete_setting(&setting_keys::chat(workspace_id)) {
-                tracing::warn!(%err, "failed to forget the saved conversation");
-            }
-            if let Err(err) = store.delete_setting(&setting_keys::workspace_agent(workspace_id)) {
-                tracing::warn!(%err, "failed to forget the workspace's agent");
-            }
-        }
     }
 
     /// Saves what the workspace's session has cost when the agent reported a new total, so the
@@ -162,9 +156,7 @@ impl HangarApp {
         live.saved_cost = Some(cost.clone());
         let session = live.session.id;
         self.persist(window, cx, move |store| {
-            store
-                .record_session_cost(session, &cost)
-                .map_err(|err| anyhow!("failed to save the session's cost: {err}"))
+            ops::save_session_cost(store, session, &cost)
         });
     }
 
@@ -191,13 +183,7 @@ impl HangarApp {
         if rows.is_empty() {
             return;
         }
-        self.persist(window, cx, move |store| {
-            rows.iter().try_for_each(|row| {
-                store
-                    .record_usage(row)
-                    .map_err(|err| anyhow!("failed to save usage: {err}"))
-            })
-        });
+        self.persist(window, cx, move |store| ops::record_usage(store, &rows));
     }
 
     /// The agent to start in `workspace_id`: the one last chosen or run there, else the default (Settings › Agents).

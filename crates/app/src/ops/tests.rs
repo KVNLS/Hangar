@@ -95,8 +95,10 @@ impl Fixture {
 
 mod add_project;
 mod archive_project;
+mod chats;
 mod create_workspace;
 mod delete;
 mod modes_queue;
+mod run_config;
 mod sessions;
 mod settings;

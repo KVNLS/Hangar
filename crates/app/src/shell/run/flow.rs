@@ -47,39 +47,44 @@ impl HangarApp {
         self.track_workspace(id, cx);
         let acquire = self.device_pool.update(cx, |pool, cx| pool.acquire(id, cx));
         let store = self.store.clone();
-        let saved: RunConfig = store
-            .as_ref()
-            .and_then(|s| {
-                s.get_setting(&setting_keys::run(workspace.id))
-                    .ok()
-                    .flatten()
-            })
-            .unwrap_or_default();
-        // Picked here, not while preparing, so two runs started together get different ports.
-        let taken: Vec<u16> = self
-            .live
-            .runs
-            .iter()
-            .map(|(id, run)| (id, run.port))
-            .chain(self.live.port_holds.iter().map(|(id, port)| (id, *port)))
-            .filter(|(id, _)| **id != workspace.id)
-            .map(|(_, port)| port)
-            .collect();
-        let port = match hangar_runner::pick_port(saved.port, &taken) {
-            Ok(port) => port,
-            Err(err) => {
-                let err = anyhow::Error::from(err);
-                self.report(&err, window, cx);
-                return Task::ready(Err(err));
-            }
-        };
-        self.live.port_holds.insert(id, port);
         let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
         let root = workspace.worktree_path.clone();
         tracing::info!(workspace = %id, "run requested");
-        cx.notify();
         let (done_tx, done_rx) = oneshot::channel();
         cx.spawn_in(window, async move |this, cx| {
+            let saved = match store.clone() {
+                Some(store) => {
+                    cx.background_executor()
+                        .spawn(async move { ops::run_config(&*store, id) })
+                        .await
+                }
+                None => RunConfig::default(),
+            };
+            // Picked and held in one main-thread update, not while preparing, so two runs
+            // started together get different ports.
+            let port = this.update_in(cx, |this, window, cx| {
+                let taken: Vec<u16> = this
+                    .live
+                    .runs
+                    .iter()
+                    .map(|(id, run)| (id, run.port))
+                    .chain(this.live.port_holds.iter().map(|(id, port)| (id, *port)))
+                    .filter(|(other, _)| **other != id)
+                    .map(|(_, port)| port)
+                    .collect();
+                match hangar_runner::pick_port(saved.port, &taken) {
+                    Ok(port) => {
+                        this.live.port_holds.insert(id, port);
+                        cx.notify();
+                        Ok(port)
+                    }
+                    Err(err) => {
+                        let err = anyhow::Error::from(err);
+                        this.report(&err, window, cx);
+                        Err(err)
+                    }
+                }
+            })??;
             let fail = |this: &WeakEntity<Self>, err: anyhow::Error, cx: &mut AsyncWindowContext| {
                 let _ = this.update_in(cx, |this, window, cx| {
                     this.live.port_holds.remove(&id);
@@ -136,14 +141,18 @@ impl HangarApp {
                     return fail(&this, err, cx);
                 }
             };
-            if let Some(store) = &store {
+            if let Some(store) = store {
                 let config = RunConfig {
                     port: Some(prepared.port),
                     scheme: prepared.scheme.clone(),
                     stack: Some(prepared.stack_key.clone()),
                 };
-                if let Err(err) = store.set_setting(&setting_keys::run(id), &config) {
-                    tracing::warn!(%err, "run: failed to save the run config");
+                let saved = cx
+                    .background_executor()
+                    .spawn(async move { ops::save_run_config(&*store, id, &config) })
+                    .await;
+                if let Err(err) = saved {
+                    tracing::warn!("run: {err:#}");
                 }
             }
             for step in &prepared.plan.before {
@@ -212,19 +221,16 @@ impl HangarApp {
             };
             tracing::info!(workspace = %id, ?kind, %label, "run choice");
             if let Some(store) = store {
-                let key = setting_keys::run(id);
-                let mut config: RunConfig =
-                    store.get_setting(&key).ok().flatten().unwrap_or_default();
-                match kind {
-                    ChoiceKind::Stack => {
-                        config.stack = Some(value);
-                        // Another app has its own schemes.
-                        config.scheme = None;
-                    }
-                    ChoiceKind::Scheme => config.scheme = Some(value),
-                }
-                if let Err(err) = store.set_setting(&key, &config) {
-                    tracing::warn!(%err, "run: failed to save the choice");
+                let choice = match kind {
+                    ChoiceKind::Stack => ops::RunChoice::Stack(value),
+                    ChoiceKind::Scheme => ops::RunChoice::Scheme(value),
+                };
+                let saved = cx
+                    .background_executor()
+                    .spawn(async move { ops::save_run_choice(&*store, id, choice) })
+                    .await;
+                if let Err(err) = saved {
+                    tracing::warn!("run: failed to save the choice: {err:#}");
                 }
             }
             let _ = this.update_in(cx, |this, window, cx| {

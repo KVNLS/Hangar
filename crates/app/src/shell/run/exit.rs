@@ -174,15 +174,6 @@ impl HangarApp {
         self.live.pane_tabs.remove(&id);
     }
 
-    /// Drops the saved port so another workspace can take it (delete).
-    pub(in crate::shell) fn forget_run_config(&self, id: WorkspaceId) {
-        if let Some(store) = &self.store
-            && let Err(err) = store.delete_setting(&setting_keys::run(id))
-        {
-            tracing::warn!(%err, "failed to forget the run config");
-        }
-    }
-
     /// The tab a pane shows for `id`, falling back to the agent when that run tab is gone.
     pub(in crate::shell) fn pane_tab(&self, id: WorkspaceId) -> PaneTab {
         let tab = self.live.pane_tabs.get(&id).copied().unwrap_or_default();

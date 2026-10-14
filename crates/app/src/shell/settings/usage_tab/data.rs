@@ -15,25 +15,7 @@ impl HangarApp {
         ui.load = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    let settings = if read_settings {
-                        // Unreadable settings fall back to the defaults; the history still shows.
-                        store
-                            .get_setting(&setting_keys::USAGE)
-                            .unwrap_or_else(|err| {
-                                tracing::warn!(
-                                    "usage settings unreadable, using defaults: {err:#}"
-                                );
-                                None
-                            })
-                    } else {
-                        None
-                    };
-                    let entries = store
-                        .list_usage_since(since)
-                        .context("failed to read the usage history")?;
-                    anyhow::Ok((settings, entries))
-                })
+                .spawn(async move { ops::usage_since(&*store, since, read_settings) })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 match result {
@@ -98,9 +80,7 @@ impl HangarApp {
     pub(super) fn save_usage_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self.settings_ui.usage.settings.clone();
         self.persist(window, cx, move |store| {
-            store
-                .set_setting(&setting_keys::USAGE, &settings)
-                .context("failed to save the usage settings")
+            ops::save_usage_settings(store, &settings)
         });
     }
 

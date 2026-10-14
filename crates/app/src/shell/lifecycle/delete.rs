@@ -99,7 +99,17 @@ impl HangarApp {
                     if let Some(session) = session {
                         ops::stop_session(&store, session, "workspace deleted", None)?;
                     }
-                    ops::delete_workspace(&store, workspace_id, options)
+                    let outcome = ops::delete_workspace(&store, workspace_id, options)?;
+                    // The saved port goes too, so another workspace can take it.
+                    for forgotten in [
+                        ops::forget_run_config(&store, workspace_id),
+                        ops::forget_chat(&store, workspace_id),
+                    ] {
+                        if let Err(err) = forgotten {
+                            tracing::warn!("{err:#}");
+                        }
+                    }
+                    anyhow::Ok(outcome)
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
@@ -114,7 +124,6 @@ impl HangarApp {
                             "workspace deleted"
                         );
                         this.work.projects.remove_workspace(workspace_id);
-                        this.forget_run_config(workspace_id);
                         this.forget_chat(workspace_id);
                         let device = this
                             .device_pool
