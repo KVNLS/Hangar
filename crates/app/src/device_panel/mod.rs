@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
@@ -1197,6 +1197,11 @@ impl DevicePanel {
                 .text_size(px(11.))
                 .text_color(t.tx2)
         };
+        if self.device_state(cx) == Some(DeviceState::InUse)
+            && let Some(overlay) = self.render_in_use(ws, cx)
+        {
+            return overlay;
+        }
         if let Some(a) = &self.attached {
             return div()
                 .flex_1()
@@ -1276,6 +1281,82 @@ impl DevicePanel {
             }
         }
         .into_any_element()
+    }
+
+    /// Another workspace's run or tool call holds this workspace's device. The pool can neither
+    /// revoke a lease (no "take over") nor give a workspace its own device while the cap shares
+    /// one (no "clone"); in single-device mode it can switch to another booted device.
+    fn render_in_use(&self, ws: WorkspaceId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = cx.tokens();
+        let pool = self.pool.read(cx);
+        let (_, holder) = pool.held_by_other(ws)?;
+        let text = format!("“{holder}” is running on this device.");
+        let assignment = pool.assignment(ws)?;
+        let platform = assignment.platform;
+        let alternative = pool
+            .single_device(platform)
+            .then(|| {
+                self.picker.entries().iter().find(|e| {
+                    e.key.platform == platform
+                        && e.ready
+                        && e.key.id != assignment.base
+                        && !e
+                            .info
+                            .name
+                            .starts_with(crate::device_pool::backend::CLONE_PREFIX)
+                        && !pool.base_held_by_other(&e.key, ws)
+                })
+            })
+            .flatten()
+            .map(|e| (e.key.clone(), e.info.name.clone()));
+        let switch = alternative.map(|(key, name)| {
+            UiButton::new("device-use-other")
+                .label(format!("Use {name} instead"))
+                .ghost()
+                .full_width()
+                .tooltip("Make it this workspace's device")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let key = key.clone();
+                    this.pool.update(cx, |pool, cx| {
+                        pool.assign(ws, key.platform, key.id, cx);
+                    });
+                    this.start_workspace_device(ws, cx);
+                }))
+        });
+        Some(
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .px(px(18.))
+                .gap(px(10.))
+                .items_center()
+                .justify_center()
+                .text_center()
+                .text_size(px(11.))
+                .text_color(t.tx)
+                .child(
+                    div()
+                        .size(px(32.))
+                        .rounded(px(8.))
+                        .bg(t.viobg)
+                        .text_color(t.vio)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(Lucide::Lock).size(px(15.)).text_color(t.vio)),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("In use by another workspace"),
+                )
+                .child(div().text_color(t.tx2).line_height(rems(1.4)).child(text))
+                .when_some(switch, |this, switch| {
+                    this.child(div().w_full().max_w(px(280.)).mt_1().child(switch))
+                })
+                .into_any_element(),
+        )
     }
 
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1452,7 +1533,11 @@ impl Render for DevicePanel {
         let t = cx.tokens();
         let waiting = self
             .workspace
-            .filter(|ws| self.attached.is_some() && self.pool.read(cx).is_waiting(*ws))
+            .filter(|ws| {
+                let pool = self.pool.read(cx);
+                // The in-use overlay already says so.
+                self.attached.is_some() && pool.is_waiting(*ws) && pool.held_by_other(*ws).is_none()
+            })
             .map(|_| {
                 div()
                     .px_3()
