@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -48,14 +49,53 @@ impl Status {
 }
 
 pub fn status(worktree: &Path) -> Result<Status> {
-    let out = Git::new(worktree).run_bytes([
+    status_paths(worktree, &[])
+}
+
+/// [`status`] limited to `paths` (literal pathspecs; empty means all). Much cheaper than a
+/// full status on large trees; branch headers are still complete.
+pub fn status_paths(worktree: &Path, paths: &[PathBuf]) -> Result<Status> {
+    let mut args: Vec<OsString> = [
+        "--literal-pathspecs",
         "status",
         "--porcelain=v2",
         "--branch",
         "--untracked-files=all",
         "-z",
-    ])?;
+        "--",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    args.extend(paths.iter().map(|p| p.as_os_str().to_owned()));
+    let out = Git::new(worktree).run_bytes(&args)?;
     parse_status(&out)
+}
+
+impl Status {
+    /// Replaces the changes under `paths` with those of `partial` (a [`status_paths`] result
+    /// for the same paths) and takes its branch headers.
+    pub fn merge_partial(&mut self, partial: Status, paths: &[PathBuf]) {
+        let covered = |p: &Path| paths.iter().any(|spec| p.starts_with(spec));
+        self.changes
+            .retain(|c| !covered(&c.path) && !c.orig_path.as_deref().is_some_and(covered));
+        self.changes.extend(partial.changes);
+        self.changes.sort_by(|a, b| a.path.cmp(&b.path));
+        self.changes.dedup_by(|a, b| a.path == b.path);
+        self.branch = partial.branch;
+        self.oid = partial.oid;
+        self.upstream = partial.upstream;
+        self.ahead = partial.ahead;
+        self.behind = partial.behind;
+        self.staged = self.changes.iter().filter(|c| c.staged).count();
+        self.unstaged = self.changes.iter().filter(|c| c.unstaged).count();
+        self.untracked = self.count(ChangeKind::Untracked);
+        self.conflicted = self.count(ChangeKind::Conflicted);
+    }
+
+    fn count(&self, kind: ChangeKind) -> usize {
+        self.changes.iter().filter(|c| c.kind == kind).count()
+    }
 }
 
 /// Parses `git status --porcelain=v2 --branch -z`.
