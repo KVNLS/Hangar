@@ -5,9 +5,9 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui_kit::HighlightStyle;
 use gpui_kit::base::input::Rope;
 use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
+use gpui_kit::{HighlightStyle, SharedString};
 use hangar_core::changes::FileDiff;
 
 use super::model::{DiffRow, DisplayLine, Side, side_sources, split_runs};
@@ -42,6 +42,41 @@ pub fn highlight_rows(
         .collect()
 }
 
+/// Per-line styles of a whole file shown line by line (`lines` as displayed: one style list per
+/// line, in that line's byte offsets).
+pub fn highlight_lines(
+    lines: &[SharedString],
+    language: &str,
+    theme: &HighlightTheme,
+) -> Vec<RowStyles> {
+    let text = lines
+        .iter()
+        .map(SharedString::as_ref)
+        .collect::<Vec<&str>>()
+        .join("\n");
+    let runs = side_runs(&text, language, theme);
+    let mut start = 0;
+    lines
+        .iter()
+        .map(|line| {
+            let row = start..start + line.len();
+            start = row.end + 1;
+            let first = runs.partition_point(|(r, _)| r.end <= row.start);
+            runs[first..]
+                .iter()
+                .take_while(|(r, _)| r.start < row.end)
+                .map(|(r, style)| {
+                    (
+                        r.start.max(row.start) - row.start..r.end.min(row.end) - row.start,
+                        *style,
+                    )
+                })
+                .filter(|(r, _)| !r.is_empty())
+                .collect()
+        })
+        .collect()
+}
+
 /// Styled runs over a whole side, without unstyled gaps.
 fn side_runs(
     text: &str,
@@ -69,6 +104,36 @@ mod tests {
     use super::*;
     use crate::changes::model::flatten;
     use hangar_core::changes::{DiffLine, FileStatus, Hunk, LineKind};
+
+    #[test]
+    fn whole_file_lines_get_styles() {
+        let lines: Vec<SharedString> = ["fn main() {", "    let x = \"new\";", "", "}"]
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        let theme = HighlightTheme::default_dark();
+        let styles = highlight_lines(&lines, "rust", &theme);
+        assert_eq!(styles.len(), lines.len());
+        assert!(
+            styles[0].iter().any(|(r, _)| *r == (0..2)),
+            "{:?}",
+            styles[0]
+        );
+        assert!(
+            styles[1].iter().any(|(r, _)| *r == (12..17)),
+            "{:?}",
+            styles[1]
+        );
+        assert!(styles[2].is_empty());
+        for (line, runs) in lines.iter().zip(&styles) {
+            assert!(runs.iter().all(|(r, _)| r.end <= line.len()));
+        }
+        assert!(
+            highlight_lines(&lines, "text", &theme)
+                .iter()
+                .all(Vec::is_empty)
+        );
+    }
 
     #[test]
     fn rust_rows_get_styles_from_both_sides() {
