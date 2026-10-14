@@ -11,5 +11,6 @@ pub mod orchestration;
 pub mod review;
 pub mod sessions;
 pub mod settings;
+pub mod setup;
 pub mod usage;
 pub mod workspaces;

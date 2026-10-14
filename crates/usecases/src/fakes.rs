@@ -6,9 +6,11 @@ use std::sync::Mutex;
 
 use hangar_core::changes::{Cost, DiffStat, UsageEntry};
 use hangar_core::ports::{
-    BranchTip, ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, Store,
+    BranchTip, ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, Store, ToolProbe,
     VersionControl,
 };
+use hangar_core::review::GhStatus;
+use hangar_core::setup::{AgentFact, AndroidFact, GitFact, ToolFacts, XcodeFact};
 use hangar_core::{
     Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
     WorkspaceStatus,
@@ -269,5 +271,41 @@ impl VersionControl for FakeGit {
     }
     fn commits_ahead(&self, _: &Path, _: &str) -> PortResult<u32> {
         Ok(0)
+    }
+}
+
+/// A machine with nothing set up but one agent CLI known (not installed).
+pub struct FakeToolProbe {
+    pub facts: ToolFacts,
+}
+
+impl Default for FakeToolProbe {
+    fn default() -> Self {
+        Self {
+            facts: ToolFacts {
+                path_error: None,
+                homebrew: true,
+                git: GitFact::Missing,
+                gh: GhStatus::Missing,
+                agents: vec![AgentFact {
+                    id: "claude".into(),
+                    name: "Claude Code".into(),
+                    program: "claude".into(),
+                    path: None,
+                    install_hint: "install claude".into(),
+                    drives: None,
+                }],
+                xcode: XcodeFact::Missing,
+                android: AndroidFact::Missing,
+                jdk: None,
+                node: None,
+            },
+        }
+    }
+}
+
+impl ToolProbe for FakeToolProbe {
+    fn probe(&self) -> ToolFacts {
+        self.facts.clone()
     }
 }
