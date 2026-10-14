@@ -62,6 +62,66 @@ pub fn from_config(id: &str, dir: Option<PathBuf>, config: &str) -> Avd {
     }
 }
 
+/// What one running instance of an AVD asks of the host, from its `config.ini`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvdCost {
+    pub ram_mb: u64,
+    pub cores: u32,
+}
+
+impl AvdCost {
+    /// Used for keys missing from `config.ini`.
+    pub const DEFAULT: Self = Self {
+        ram_mb: 2048,
+        cores: 2,
+    };
+}
+
+/// `hw.ramSize` (MB, or with an `M`/`G` suffix) and `hw.cpu.ncore` from `config.ini` contents.
+pub fn parse_cost(config: &str) -> AvdCost {
+    let kv = parse_ini(config);
+    let ram_mb = kv
+        .get("hw.ramSize")
+        .and_then(|v| parse_ram_mb(v))
+        .unwrap_or(AvdCost::DEFAULT.ram_mb);
+    let cores = kv
+        .get("hw.cpu.ncore")
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(AvdCost::DEFAULT.cores);
+    AvdCost { ram_mb, cores }
+}
+
+fn parse_ram_mb(value: &str) -> Option<u64> {
+    let v = value.trim().to_ascii_uppercase();
+    let v = v.strip_suffix('B').unwrap_or(&v);
+    let (digits, factor) = match v.strip_suffix('G') {
+        Some(d) => (d, 1024),
+        None => (v.strip_suffix('M').unwrap_or(v), 1),
+    };
+    digits
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n > 0)
+        .map(|n| n * factor)
+}
+
+/// [`AvdCost`] of the AVD in `dir` (defaults when `config.ini` cannot be read).
+pub fn cost_dir(dir: &Path) -> AvdCost {
+    parse_cost(&std::fs::read_to_string(dir.join("config.ini")).unwrap_or_default())
+}
+
+/// [`AvdCost`] of AVD `id` under `home` (see [`avd_home`]).
+pub fn cost(home: &Path, id: &str) -> AvdCost {
+    let ini = std::fs::read_to_string(home.join(format!("{id}.ini"))).unwrap_or_default();
+    let dir = parse_ini(&ini)
+        .get("path")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(format!("{id}.avd")));
+    cost_dir(&dir)
+}
+
 /// `android-37.0` → `Android API 37.0`; anything else is returned as is.
 pub fn target_label(target: &str) -> String {
     match target.strip_prefix("android-") {
@@ -176,6 +236,41 @@ mod tests {
             parse_list_avds(text),
             vec!["Pixel_10_Pro", "Medium_Phone_API_35"]
         );
+    }
+
+    #[test]
+    fn avd_costs() {
+        let cost = |text: &str| parse_cost(text);
+        assert_eq!(
+            cost("hw.ramSize=4096\nhw.cpu.ncore=4\n"),
+            AvdCost {
+                ram_mb: 4096,
+                cores: 4
+            }
+        );
+        assert_eq!(cost("hw.ramSize=4096M\n").ram_mb, 4096);
+        assert_eq!(cost("hw.ramSize = 4G\n").ram_mb, 4096);
+        assert_eq!(cost("hw.ramSize=3g\n").ram_mb, 3072);
+        assert_eq!(cost("hw.ramSize=2048MB\n").ram_mb, 2048);
+        assert_eq!(cost(""), AvdCost::DEFAULT);
+        assert_eq!(cost("hw.ramSize=lots\nhw.cpu.ncore=0\n"), AvdCost::DEFAULT);
+    }
+
+    #[test]
+    fn avd_cost_from_home() -> Result<(), Box<dyn std::error::Error>> {
+        let home = tempfile::tempdir()?;
+        let dir = home.path().join("P.avd");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("config.ini"), "hw.ramSize=6144\nhw.cpu.ncore=6\n")?;
+        assert_eq!(
+            cost(home.path(), "P"),
+            AvdCost {
+                ram_mb: 6144,
+                cores: 6
+            }
+        );
+        assert_eq!(cost(home.path(), "Missing"), AvdCost::DEFAULT);
+        Ok(())
     }
 
     #[test]

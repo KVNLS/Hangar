@@ -1,4 +1,4 @@
-//! Run loop (⌘R): build the focused workspace and run it on the device open in the panel. The
+//! Run loop (⌘R): build a workspace and run it on its own device (from the device pool). The
 //! commands come from `hangar_runner` and run in terminal tabs next to the agent (a dev server
 //! tab for Metro, a build tab); installs and launches go through the device.
 
@@ -9,10 +9,23 @@ use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext};
 use hangar_core::SessionStatus;
 use hangar_runner::{RunPlan, Stack, Step};
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
 use super::*;
-use crate::device_panel::RunTarget;
+use crate::device_panel::Platform;
+use crate::device_pool::Lease;
 use crate::device_view::DeviceHandle;
+
+/// Expo prints this once the app is open on the device and the dev server is attached.
+const EXPO_LAUNCHED: &str = "Logs for your project will appear below";
+/// Lines of build output quoted when a build fails.
+const FAILURE_LINES: usize = 25;
+
+/// Who waits for a run to end, and the device lease it holds until then.
+struct Completion {
+    done: oneshot::Sender<anyhow::Result<String>>,
+    _lease: Lease,
+}
 
 /// Which terminal a pane shows for its workspace.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -70,7 +83,7 @@ impl RunTab {
 pub(super) struct WorkspaceRun {
     pub(super) stack: &'static str,
     pub(super) port: u16,
-    /// The build tab keeps running as the dev server (`expo run`, `flutter run`).
+    /// The build tab keeps running as the dev server (`expo run`).
     build_serves: bool,
     pub(super) server: Option<RunTab>,
     pub(super) build: Option<RunTab>,
@@ -83,6 +96,10 @@ pub(super) struct WorkspaceRun {
     handle: Option<DeviceHandle>,
     /// Install and launch in flight or done.
     pub(super) phase: AfterPhase,
+    /// Resolved (and the lease released) once the app is launched or the run failed.
+    completion: Option<Completion>,
+    /// Watches the build tab for Expo's "launched" line.
+    _watch: Option<Task<()>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,7 +169,7 @@ fn prepare(
     let stacks = hangar_runner::detect(root);
     let stack = hangar_runner::pick_stack(&stacks, target.platform).ok_or_else(|| {
         anyhow!(
-            "no app to run on {} in {} (looked for Expo, React Native, Flutter, Xcode and Gradle projects)",
+            "no app to run on {} in {} (looked for Expo, React Native, Xcode and Gradle projects)",
             match target.platform {
                 P::Ios => "iOS",
                 P::Android => "Android",
@@ -174,8 +191,9 @@ fn prepare(
         Some(port) => port,
         None => hangar_runner::allocate_port(taken)?,
     };
-    // The serial of a running emulator changes per boot: look it up by AVD now.
+    // The serial of a running emulator changes per boot: look it up by AVD when not known.
     if let Some(avd) = &target.avd
+        && !target.id.starts_with("emulator-")
         && let Some(found) = hangar_devices::android::discovery::scan()
             .into_iter()
             .find(|d| &d.avd_id == avd)
@@ -234,26 +252,48 @@ fn spawn_command(
 }
 
 impl HangarApp {
-    /// ⌘R: build and run the focused workspace on the open device.
+    /// ⌘R: build and run the focused workspace on its device.
     pub(super) fn run_focused(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((_, workspace)) = self.focused_workspace() else {
             window.push_notification("Focus a workspace to run it.", cx);
             return;
         };
-        let workspace = workspace.clone();
-        let Some(RunTarget {
-            target,
-            name,
-            handle,
-        }) = self.device_panel.read(cx).run_target(cx)
+        let id = workspace.id;
+        // Failures are reported by the run itself.
+        self.run_workspace(id, window, cx).detach();
+    }
+
+    /// Builds and runs workspace `id` (shown or not) on its device, the same as ⌘R: takes the
+    /// device's lease (waiting in line in single-device mode), boots and opens the device if
+    /// needed, then builds in the workspace's tabs. Resolves once the app is launched (with a
+    /// short summary) or the run failed (with the reason and, for a failed build, its last
+    /// lines). Failures are also reported in the window.
+    pub fn run_workspace(
+        &mut self,
+        id: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<anyhow::Result<String>> {
+        let Some(workspace) = self
+            .projects
+            .workspace(id)
+            .filter(|_| self.projects.is_active(id))
+            .cloned()
         else {
-            window.push_notification("Open a device in the Device tab (⌘1) to run on it.", cx);
-            return;
+            return Task::ready(Err(anyhow!("unknown or archived workspace")));
         };
+        if self.busy.contains(&id) {
+            return Task::ready(Err(anyhow!(
+                "the workspace is being archived, restored or deleted"
+            )));
+        }
         let Some(build_dir) = paths::builds_root().map(|r| r.join(workspace.id.to_string())) else {
-            self.report(&anyhow!("no build directory (HOME is not set)"), window, cx);
-            return;
+            let err = anyhow!("no build directory (HOME is not set)");
+            self.report(&err, window, cx);
+            return Task::ready(Err(err));
         };
+        self.track_workspace(id, cx);
+        let acquire = self.device_pool.update(cx, |pool, cx| pool.acquire(id, cx));
         let store = self.store.clone();
         let saved: RunConfig = store
             .as_ref()
@@ -267,9 +307,46 @@ impl HangarApp {
             .collect();
         let path = self.path.as_ref().map(|p| p.value.clone());
         let root = workspace.worktree_path.clone();
-        let id = workspace.id;
-        tracing::info!(workspace = %id, device = %name, "run");
+        tracing::info!(workspace = %id, "run requested");
+        cx.notify();
+        let (done_tx, done_rx) = oneshot::channel();
         cx.spawn_in(window, async move |this, cx| {
+            let fail = |this: &WeakEntity<Self>, err: anyhow::Error, cx: &mut AsyncWindowContext| {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.report(&err, window, cx);
+                    cx.notify();
+                });
+                Err(err)
+            };
+            let acquired = match acquire.await {
+                Ok(acquired) => acquired,
+                Err(err) => {
+                    tracing::warn!(workspace = %id, "run: no device: {err:#}");
+                    return fail(&this, err.context("no device to run on"), cx);
+                }
+            };
+            let info = acquired.session.info().clone();
+            let name: SharedString = info.name.clone().into();
+            let handle = acquired.session.handle();
+            let target = hangar_runner::Target {
+                platform: match acquired.platform {
+                    Platform::Ios => hangar_devices::Platform::Ios,
+                    Platform::Android => hangar_devices::Platform::Android,
+                },
+                id: info.udid.clone(),
+                avd: acquired.avd.clone(),
+            };
+            tracing::info!(workspace = %id, device = %info.udid, name = %info.name, borrowed = acquired.borrowed, "run");
+            if acquired.borrowed {
+                let message = format!("Running on {name}, shared with another workspace.");
+                let _ = this.update_in(cx, |_, window, cx| {
+                    window.push_notification(Notification::info(message), cx);
+                });
+            }
+            let completion = Completion {
+                done: done_tx,
+                _lease: acquired.lease,
+            };
             let prepared = cx
                 .background_executor()
                 .spawn({
@@ -281,8 +358,8 @@ impl HangarApp {
                 Ok(p) => p,
                 Err(err) => {
                     tracing::warn!(%err, "run: prepare failed");
-                    let _ = this.update_in(cx, |this, window, cx| this.report(&err, window, cx));
-                    return;
+                    drop(completion);
+                    return fail(&this, err, cx);
                 }
             };
             if let Some(store) = &store {
@@ -313,10 +390,24 @@ impl HangarApp {
                 }
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                this.start_run(id, root, prepared, name, handle, window, cx)
+                this.start_run(id, root, prepared, name, handle, completion, window, cx)
             });
+            done_rx
+                .await
+                .unwrap_or_else(|_| Err(anyhow!("the run was dropped")))
         })
-        .detach();
+    }
+
+    /// Resolves the run's completion (releasing its device lease).
+    fn finish_run(&mut self, id: WorkspaceId, result: anyhow::Result<String>) {
+        let Some(completion) = self.runs.get_mut(&id).and_then(|r| r.completion.take()) else {
+            return;
+        };
+        match &result {
+            Ok(summary) => tracing::info!(workspace = %id, %summary, "run finished"),
+            Err(err) => tracing::info!(workspace = %id, "run failed: {err:#}"),
+        }
+        let _ = completion.done.send(result);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -327,10 +418,14 @@ impl HangarApp {
         prepared: Prepared,
         device: SharedString,
         handle: DeviceHandle,
+        completion: Completion,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !self.projects.is_active(id) || self.busy.contains(&id) {
+            let _ = completion
+                .done
+                .send(Err(anyhow!("the workspace was closed before the build")));
             return;
         }
         let Prepared {
@@ -343,7 +438,12 @@ impl HangarApp {
         } = prepared;
         let previous = self.runs.remove(&id);
         let (mut server, old_build) = match previous {
-            Some(run) => (run.server, run.build),
+            Some(mut run) => {
+                if let Some(old) = run.completion.take() {
+                    let _ = old.done.send(Err(anyhow!("replaced by a new run")));
+                }
+                (run.server, run.build)
+            }
             None => (None, None),
         };
         if let Some(old) = old_build {
@@ -370,6 +470,8 @@ impl HangarApp {
             device,
             handle: Some(handle),
             phase: AfterPhase::Pending,
+            completion: Some(completion),
+            _watch: None,
         };
         if let Some(setup) = setup {
             let title = format!("Install · {}", setup.program);
@@ -383,7 +485,11 @@ impl HangarApp {
                 window,
                 cx,
             );
+            let started = run.build.is_some();
             self.runs.insert(id, run);
+            if !started {
+                self.finish_run(id, Err(anyhow!("the dependency install did not start")));
+            }
         } else {
             self.runs.insert(id, run);
             self.launch_tabs(id, window, cx);
@@ -429,14 +535,55 @@ impl HangarApp {
             window,
             cx,
         );
+        let started = build.is_some();
+        let watch = build
+            .as_ref()
+            .filter(|_| self.runs.get(&id).is_some_and(|r| r.build_serves))
+            .map(|tab| self.watch_launch(id, tab.view.clone(), cx));
         if let Some(run) = self.runs.get_mut(&id) {
             if server.is_some() {
                 run.server = server;
             }
             run.build = build;
+            run._watch = watch;
+        }
+        if !started {
+            self.finish_run(id, Err(anyhow!("the build did not start")));
         }
         self.focus_terminal(window, cx);
         cx.notify();
+    }
+
+    /// `expo run` keeps running as the dev server: the run is done once it says the app is open.
+    fn watch_launch(
+        &mut self,
+        id: WorkspaceId,
+        view: Entity<TerminalView>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let done = this.update(cx, |this, cx| {
+                    let launched = terminal_lines(&view, cx)
+                        .iter()
+                        .any(|l| l.contains(EXPO_LAUNCHED));
+                    if launched {
+                        let summary = this.runs.get(&id).map(|r| {
+                            format!(
+                                "{} dev server on :{}, app open on {}",
+                                r.stack, r.port, r.device
+                            )
+                        });
+                        this.finish_run(id, Ok(summary.unwrap_or_default()));
+                    }
+                    launched || this.runs.get(&id).is_none_or(|r| r.completion.is_none())
+                });
+                if done.unwrap_or(true) {
+                    break;
+                }
+            }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -500,13 +647,35 @@ impl HangarApp {
         };
         tracing::info!(workspace = %id, title = %tab.title, ?status, "run command ended");
         tab.exit = Some(status.clone());
+        let title = tab.title.clone();
+        let view = tab.view.clone();
         cx.notify();
-        if kind == PaneTab::Build && status == (SessionStatus::Exited { code: 0 }) {
+        if kind != PaneTab::Build {
+            return;
+        }
+        if status == (SessionStatus::Exited { code: 0 }) {
             if run.pending.is_some() {
                 self.launch_tabs(id, window, cx);
-            } else {
+            } else if run
+                .after
+                .iter()
+                .any(|s| matches!(s, Step::InstallAndLaunch(_)))
+            {
                 self.after_build(id, window, cx);
+            } else {
+                // The JS CLIs install and launch themselves.
+                let summary = format!("{} launched the app on {}", run.stack, run.device);
+                self.finish_run(id, Ok(summary));
             }
+        } else {
+            let tail = terminal_lines(&view, cx);
+            let tail = tail[tail.len().saturating_sub(FAILURE_LINES)..].join("\n");
+            let what = match status {
+                SessionStatus::Exited { code } => format!("exit {code}"),
+                SessionStatus::Failed { message } => message,
+                other => format!("{other:?}"),
+            };
+            self.finish_run(id, Err(anyhow!("{title} failed ({what}):\n{tail}")));
         }
     }
 
@@ -527,6 +696,10 @@ impl HangarApp {
             return;
         }
         let Some(handle) = run.handle.clone() else {
+            self.finish_run(
+                id,
+                Err(anyhow!("the device was released before the install")),
+            );
             return;
         };
         run.phase = AfterPhase::Installing;
@@ -553,28 +726,25 @@ impl HangarApp {
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 let ok = result.is_ok();
-                match result {
-                    Ok(apps) => {
-                        tracing::info!(?apps, %device, "run: launched");
-                        window.push_notification(
-                            Notification::success(format!(
-                                "Launched {} on {device}",
-                                apps.join(", ")
-                            )),
-                            cx,
-                        );
-                    }
-                    Err(err) => {
-                        tracing::warn!(%err, "run: install/launch failed");
-                        this.report(&err, window, cx);
-                    }
-                }
                 if let Some(run) = this.runs.get_mut(&id) {
                     run.phase = if ok {
                         AfterPhase::Launched
                     } else {
                         AfterPhase::Failed
                     };
+                }
+                match result {
+                    Ok(apps) => {
+                        tracing::info!(?apps, %device, "run: launched");
+                        let summary = format!("Launched {} on {device}", apps.join(", "));
+                        window.push_notification(Notification::success(summary.clone()), cx);
+                        this.finish_run(id, Ok(summary));
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, "run: install/launch failed");
+                        this.report(&err, window, cx);
+                        this.finish_run(id, Err(err));
+                    }
                 }
                 cx.notify();
             });
@@ -605,8 +775,13 @@ impl HangarApp {
 
     /// Kills the workspace's run commands and frees its port (archive, delete).
     pub(super) fn close_run(&mut self, id: WorkspaceId) {
-        if let Some(run) = self.runs.remove(&id) {
+        if let Some(mut run) = self.runs.remove(&id) {
             run.stop();
+            if let Some(completion) = run.completion.take() {
+                let _ = completion
+                    .done
+                    .send(Err(anyhow!("the workspace was closed during the run")));
+            }
         }
         self.pane_tabs.remove(&id);
     }
@@ -640,4 +815,16 @@ impl HangarApp {
             PaneTab::Agent => None,
         }
     }
+}
+
+/// The lines on a terminal's screen, trailing blank lines dropped.
+fn terminal_lines(view: &Entity<TerminalView>, cx: &App) -> Vec<String> {
+    let snapshot = view.read(cx).session().terminal().snapshot();
+    let mut lines: Vec<String> = (0..snapshot.rows)
+        .map(|r| snapshot.row_text(r).trim_end().to_owned())
+        .collect();
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines
 }

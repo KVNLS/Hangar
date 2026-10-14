@@ -116,6 +116,12 @@ impl HangarApp {
                     .child("Simulators and emulators are listed in the Device tab (⌘1)."),
             )
         };
+        let single = self
+            .device_pool
+            .read(cx)
+            .single_device_explanation()
+            .map(|text| div().text_size(px(12.)).text_color(t.amb).child(text));
+        let devices = devices.children(single);
         div()
             .flex()
             .flex_1()
@@ -158,7 +164,7 @@ impl HangarApp {
                                     v_flex()
                                         .gap(px(10.))
                                         .child(div().type_secondary().text_color(t.tx2).child(
-                                            "A Git repository: Xcode, Gradle, React Native or Flutter.",
+                                            "A Git repository: Xcode, Gradle, React Native or Expo.",
                                         ))
                                         .child(
                                             h_flex().child(

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub mod android;
+pub mod capacity;
 pub mod geometry;
 pub mod logs;
 pub mod simctl;

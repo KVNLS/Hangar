@@ -1,5 +1,10 @@
 //! Hangar desktop app.
 //!
+//! `hangar mcp-bridge` runs the MCP stdio bridge instead of the app (checked before anything
+//! GPUI starts): agents launched from a workspace start it as their `hangar` MCP server. It
+//! relays stdin/stdout to the running app's socket (`HANGAR_MCP_SOCKET`) with the workspace's
+//! session secret (`HANGAR_MCP_SESSION`), prints errors to stderr and exits non-zero on failure.
+//!
 //! Environment:
 //! - `HANGAR_DB` — database file (default `~/Library/Application Support/Hangar/hangar.db`).
 //! - `HANGAR_WORKTREES` — worktree root (default `~/Library/Application Support/Hangar/worktrees`).
@@ -33,10 +38,22 @@
 //!
 //! `HANGAR_DEV_SHOW=<screen>` runs last and leaves the window on `workspace`, `review` (split),
 //! `review-inline`, `overview`, `settings-{agents,devices,appearance,keybindings}`, `palette` or
-//! `sheet` (New workspace), for screenshots.
+//! `sheet` (New workspace) or `device` (device panel), for screenshots.
 //!
-//! `HANGAR_DEV_RUN=1` waits for the device panel to show a device (see `HANGAR_DEV_DEVICE`), then
-//! builds and runs the dev workspace on it (⌘R) and logs each step.
+//! Device pool (one device per workspace):
+//! - `HANGAR_DEV_WORKSPACES=a,b` — `HANGAR_DEV_OPEN` creates these workspaces instead of
+//!   `HANGAR_DEV_WORKSPACE`.
+//! - `HANGAR_DEV_TARGET=ios:<UDID>|android:<AVD id>` — base device of the created workspaces.
+//! - `HANGAR_DEV_DEVICE_LIMIT=auto|1..8` — "Devices at once" for this launch only (not saved).
+//! - `HANGAR_DEV_RUN=1` — builds and runs every created workspace (else the focused one) on its
+//!   own device at the same time (⌘R), logs `HANGAR_DEV_RUN done/failed`; `=<slug,slug>` runs
+//!   those workspaces.
+//! - `HANGAR_DEV_POOL_FRAMES=<dir>` — per created workspace, through the device API: status, a
+//!   frame saved as `<slug>.png`, a tap at the screen centre, the next frame as `<slug>-tap.png`,
+//!   then 5 log lines.
+//! - `HANGAR_DEV_SELECT=<slug>` — shows that workspace after the runs.
+//! - `HANGAR_PRESSURE=normal|warn|critical` — overrides the memory pressure reading for the boot
+//!   guard and the 10 s monitor (testing only; the real reading is used otherwise).
 //!
 //! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run; a
 //! worktree-relative path instead of `1` also selects that file once it shows up.
@@ -79,7 +96,24 @@ use gpui_kit::*;
 use hangar_app::shell::{DevOptions, HangarApp};
 use tracing_subscriber::EnvFilter;
 
-fn main() {
+fn main() -> std::process::ExitCode {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "mcp-bridge")
+    {
+        return match hangar_mcp::run_bridge_from_env() {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("hangar mcp-bridge: {err}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+    run_app();
+    std::process::ExitCode::SUCCESS
+}
+
+fn run_app() {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),

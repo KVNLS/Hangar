@@ -18,7 +18,7 @@ pub mod logcat;
 pub mod sdk;
 
 pub use adb_backend::{AdbDevice, Capture};
-pub use avd::Avd;
+pub use avd::{Avd, AvdCost};
 pub use emulator::{
     BootOptions, BootStage, RunningEmulator, WindowMode, find_running, list_running, state,
 };

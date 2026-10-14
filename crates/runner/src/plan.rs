@@ -82,10 +82,10 @@ pub struct RunPlan {
     /// Long-running dev server (Metro), in its own tab.
     pub server: Option<Command>,
     pub before: Vec<Step>,
-    /// The build (and, for the JS and Flutter CLIs, the install and launch too).
+    /// The build (and, for the JS CLIs, the install and launch too).
     pub build: Command,
-    /// The build command keeps running as the dev server once the app is up (`expo run`,
-    /// `flutter run`): its tab is the place for reload keys.
+    /// The build command keeps running as the dev server once the app is up (`expo run`):
+    /// its tab is the place for reload keys.
     pub build_serves: bool,
     pub after: Vec<Step>,
 }
@@ -182,13 +182,6 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
                 after: Vec::new(),
             }
         }
-        Stack::Flutter { dir } => RunPlan {
-            server: None,
-            before: Vec::new(),
-            build: with_target_env(Command::new("flutter", &["run", "-d", &target.id], dir)),
-            build_serves: true,
-            after: Vec::new(),
-        },
         Stack::Xcode { container } => {
             if android {
                 return Err(mismatch(target.platform));
@@ -248,7 +241,7 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
 pub fn setup(stack: &Stack, root: &Path) -> Option<Command> {
     let dir = match stack {
         Stack::Expo { dir } | Stack::ReactNative { dir } => dir,
-        Stack::Flutter { .. } | Stack::Xcode { .. } | Stack::Gradle { .. } => return None,
+        Stack::Xcode { .. } | Stack::Gradle { .. } => return None,
     };
     let abs = root.join(dir);
     if abs.join("node_modules").is_dir() {
@@ -385,13 +378,6 @@ mod tests {
             "npx react-native run-android --deviceId emulator-5554 --port 8100 --no-packager"
         );
         assert_eq!(android_plan.before, vec![Step::AdbReverse(8100)]);
-    }
-
-    #[test]
-    fn flutter_runs_interactively_without_a_server() {
-        let plan = run(&Stack::Flutter { dir: root() }, &android(), None).unwrap();
-        assert!(plan.server.is_none());
-        assert_eq!(plan.build.shell_line(), "flutter run -d emulator-5554");
     }
 
     #[test]

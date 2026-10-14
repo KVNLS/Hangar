@@ -9,7 +9,7 @@ Scratch projects in the session scratchpad, driven with `HANGAR_DEV_OPEN` + `HAN
   the agent, with the login `PATH`, the Android SDK `platform-tools`/`emulator` prepended (adb is not on the
   login PATH here), `ANDROID_HOME`, `ANDROID_SERIAL` and `RCT_METRO_PORT`.
 - Native builds then install and launch through the device (`DeviceHandle::install/launch`, off the input
-  queue). The JS and Flutter CLIs install and launch themselves.
+  queue). The JS CLIs install and launch themselves.
 - Ports: 8100–8199, one per workspace, saved as `run:<workspace id>` in `settings`. An allocated port must
   also bind on localhost, so a Metro started outside Hangar is skipped. 8081 stays free.
 - Xcode derived data goes to `<data>/builds/<workspace id>`, outside the worktree, so builds never show up
@@ -26,8 +26,7 @@ Scratch projects in the session scratchpad, driven with `HANGAR_DEV_OPEN` + `HAN
 - Worktrees are fresh checkouts: no `node_modules`. JS stacks run an install first (lockfile picks
   bun/pnpm/yarn/`npm ci`, else `npm install`) in the build tab; Metro and the build start when it succeeds.
 - `expo run:* --port P --no-bundler` is refused ("mutually exclusive"). `expo run` therefore starts Metro
-  itself on the workspace port and its tab stays open as the dev server (reload keys work there), like
-  `flutter run`.
+  itself on the workspace port and its tab stays open as the dev server (reload keys work there).
 - `expo run` prebuilds: it writes `ios/` (and `android/`) into the worktree, so the changes panel shows
   thousands of added lines unless the project ignores them (continuous native generation).
 - AGP 9.2 needs Gradle 9.4.1; AGP's jlink step fails on JDK 27. The scratch project pins JDK 21 with
@@ -37,5 +36,5 @@ Scratch projects in the session scratchpad, driven with `HANGAR_DEV_OPEN` + `HAN
 
 ## Not run live
 - Two workspaces running at once: port allocation (taken and bound ports) is unit-tested, not run live.
-- React Native CLI (`run-ios`/`run-android` with `--no-packager`) and Flutter (`flutter` not installed):
-  command lines are unit-tested only.
+- React Native CLI (`run-ios`/`run-android` with `--no-packager`): command lines are unit-tested only.
+- Flutter support was dropped (owner decision).

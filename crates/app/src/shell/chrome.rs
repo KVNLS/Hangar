@@ -197,17 +197,34 @@ impl HangarApp {
             .values()
             .filter(|l| !l.session.status.is_terminal())
             .count();
-        let device = self
-            .device_panel
-            .read(cx)
-            .picker()
-            .selected_entry()
-            .map(|entry| format!("{} · {}", entry.info.name, entry.info.state.to_lowercase()));
-        let run = self
-            .panes
-            .slot(self.panes.focused())
-            .and_then(|id| self.runs.get(&id))
-            .map(|run| run.summary());
+        let focused = self.panes.slot(self.panes.focused());
+        let pool = self.device_pool.read(cx);
+        let device = match focused {
+            Some(id) => {
+                let name = pool.device_name(id).map(str::to_owned);
+                let state = match pool.status(id) {
+                    crate::device_pool::DeviceStatus::Open { .. } => Some("open"),
+                    crate::device_pool::DeviceStatus::Opening { .. } => Some("starting"),
+                    crate::device_pool::DeviceStatus::ShuttingDown { .. } => Some("shutting down"),
+                    crate::device_pool::DeviceStatus::Closed { .. } => Some("off"),
+                    crate::device_pool::DeviceStatus::Unknown => None,
+                };
+                name.zip(state).map(|(n, s)| format!("{n} · {s}"))
+            }
+            None => self
+                .device_panel
+                .read(cx)
+                .picker()
+                .selected_entry()
+                .map(|entry| format!("{} · {}", entry.info.name, entry.info.state.to_lowercase())),
+        };
+        let run = match focused {
+            Some(id) if pool.is_waiting(id) => {
+                Some(("Waiting for the device".to_owned(), AgentState::Working))
+            }
+            Some(id) => self.runs.get(&id).map(|run| run.summary()),
+            None => None,
+        };
         h_flex()
             .flex_none()
             .h(STATUS_BAR_HEIGHT)

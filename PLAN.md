@@ -19,8 +19,8 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |
 | files    | file watching (notify, debounced, git-ignore aware), LiveDiff model              | worktree       |
 | devices  | Device trait; iOS (private + simctl fallback), Android (M4)                      | —              |
-| runner   | build/run per stack: Xcode, Gradle, React Native, Flutter                        | devices        |
-| mcp      | MCP server exposing device tools to agents (M8)                                  | devices        |
+| runner   | build/run per stack: Xcode, Gradle, React Native, Expo                           | devices        |
+| mcp      | MCP device tools for agents: protocol engine, socket server, stdio bridge (M8)   | devices        |
 | app      | GPUI shell, all views (terminal, diff, device), wiring                           | all            |
 
 Views (terminal, diff, device) live in `app`; library crates expose plain data and input enums.
@@ -90,7 +90,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - [x] UI v0.1 — design system + views, merged into main 2026-10-05
 - [x] M6 Mobile run loop (first cut) — detection, ports, Run ⌘R in terminal tabs, native install/launch
 - [ ] M7 ACP structured agents
-- [ ] M8 MCP device tools
+- [x] M8 MCP device tools (first cut) — per-workspace devices, capacity guard, tools over `hangar mcp-bridge`
 
 ## Done since M2 first cut
 - Terminal: selection (drag/word/line/shift-extend, auto-scroll), Cmd-C/Cmd-A, mouse reporting (1000/1002/1003,
@@ -128,17 +128,46 @@ Git access is the `git` CLI with porcelain output, not a library.
   (spikes/device-logs-notes.md).
 
 ## M6 run loop (first cut)
-- `hangar-runner`: `detect` (Expo, React Native, Flutter, Xcode, Gradle at the root, `ios/`, `android/`),
+- `hangar-runner`: `detect` (Expo, React Native, Xcode, Gradle at the root, `ios/`, `android/`; Flutter dropped
+  by the owner),
   `pick_stack` by device platform, `allocate_port`, `plan` (command lines + install/launch steps), `setup`
   (JS dependency install), `resolve_artifact` (xcodebuild build settings, AGP `output-metadata.json`).
 - App: Run (⌘R, pane tab bar, palette) builds the focused workspace for the device open in the panel; Stop
   (⌘.), Restart dev server (palette). Build, install and dev-server terminals are tabs next to the agent;
   native builds install and launch through the device; the status bar shows the run state.
 - Live: Xcode on the simulator, Gradle on the emulator, Expo on the simulator (spikes/m6-run-notes.md).
-  React Native CLI and Flutter are unit-tested only.
-- Gaps: no device pool or per-workspace target (Run uses the panel's device); several Xcode schemes need a
+  React Native CLI is unit-tested only.
+- Gaps: several Xcode schemes need a
   saved choice but there is no picker yet (the error lists them); no parsed build progress or crash overlay;
   `expo run` prebuild output lands in the worktree; the JDK/Gradle setup is the user's.
+
+## Device pool and MCP device tools (first cut)
+- One device per workspace (`device:<workspace id>` in settings): iOS = a simulator created from the base
+  device's type + runtime (`Hangar · <project>/<slug>`), Android = a `-read-only` instance of the base AVD (the
+  emulator allows several instances of one AVD only if all are read-only; a normally booted base AVD blocks them
+  and the panel offers to shut it down). Booted on demand, shut down on archive, deleted with the workspace.
+  The device panel shows the focused workspace's device; ⌘R runs each workspace on its own device.
+- Capacity (`devices::capacity`): RAM, available memory, P/E cores and memory pressure from macOS; per-device
+  cost (iOS 2.5 GB/1 core, Android AVD RAM + 1.5 GB / its cores) after an 8 GB + 4 core reserve gives the
+  recommended number of devices at once. Settings › Devices: Auto or 1–8 (warning above the recommendation).
+  Limit 1 = single-device mode: workspaces share the base device through FIFO leases ("Waiting for the device");
+  Auto detecting 1 alerts once. Runtime guard: no boot under memory pressure or low free memory (falls back to
+  a running device), and at critical pressure idle unfocused devices are shut down.
+- MCP (`crates/mcp` + `app::mcp_host`): agents start `hangar mcp-bridge`, which relays MCP stdio to the app's
+  0700/0600 Unix socket with a per-workspace session secret (`HANGAR_MCP_SESSION`, in the agent's env only).
+  Tools: device_info, screenshot, tap, swipe, type_text, press, logs, build_and_run, launch_app. Wiring:
+  Claude Code `--mcp-config` (inline), OpenCode `OPENCODE_CONFIG_CONTENT`, Codex `-c mcp_servers.hangar=…`
+  (`env_vars`), Gemini `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` + `--skip-trust` (owner decision). Nothing is written
+  in the worktree. Agents also get `HANGAR_DEVICE_PLATFORM`, `HANGAR_DEVICE_ID`, `ANDROID_SERIAL`.
+- Live (2026-10-05, scratch repo): a shell agent in a workspace ran `hangar mcp-bridge` with only its own env:
+  initialize, tools/list, build_and_run (built and launched on the workspace's own new simulator), device_info,
+  screenshot, tap (the counter went 0 → 1), screenshot; a wrong session got -32001.
+- Not verified live: Codex and Gemini wiring (not installed), OpenCode's MCP permission default, a real agent
+  session calling the tools (would use the owner's account); Gradle/Expo builds on a pool Android instance.
+- Gaps: `HANGAR_DEVICE_ID`/`ANDROID_SERIAL` are empty when the agent starts before its device exists (created
+  on first use; agents can call `device_info`); iOS `logs` only returns what is logged during a ~1.5 s capture; no queue position in single-device
+  mode; `AvdCost` can understate RAM (the emulator raises it for new API levels); Expo picks Android devices by
+  AVD name, ambiguous with several instances; MCP cancellation and resources/prompts not implemented.
 
 ## UI v0.1 (design/Hangar.dc.html)
 - Design system in `crates/app/src/ui`: tokens (dark/light, `cx.tokens()`), gpui-component theme mapping,
@@ -151,7 +180,7 @@ Git access is the `git` CLI with porcelain output, not a library.
   changes; Failed = exited non-zero.
 - Deferred until backed (not rendered, no placeholders): chat stream, tool-call cards, permission prompts and
   the Approval/Input states (M7); parsed build progress, crash and "in use" device overlays; status bar RAM;
-  per-workspace target device and device pool; Clone repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
+  Clone repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
 - Visual pass 2026-10-05 (Claude, screenshots through `HANGAR_DEV_SHOW`): every screen in dark and light, plus
   the device panel on the iOS simulator and the Pixel_10_Pro emulator, compared with design/Hangar.dc.html.
   Fixed: title bar ⌘K search field and button order, changes/review footer (commit box and actions under the
@@ -171,4 +200,4 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Owner checks the visual pass and M6 branches, then M7 (ACP structured agents) or the M6 gaps above.
+- Owner reviews `device-pool`; a real agent session using the device tools; then M7 (ACP structured agents).

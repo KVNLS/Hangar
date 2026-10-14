@@ -21,6 +21,8 @@ pub struct Discovery {
     /// Present when the emulator was started with `-grpc-use-token`.
     pub grpc_token: Option<String>,
     pub emulator_version: Option<String>,
+    /// Started with `-read-only` (read from the advertised command line).
+    pub read_only: bool,
     pub file: PathBuf,
 }
 
@@ -66,6 +68,10 @@ pub fn parse(text: &str, pid: u32, file: PathBuf) -> Result<Discovery> {
             .filter(|t| !t.is_empty())
             .map(|t| t.to_string()),
         emulator_version: kv.get("emulator.version").map(|s| s.to_string()),
+        read_only: kv.get("cmdline").is_some_and(|line| {
+            line.split_whitespace()
+                .any(|word| word.trim_matches('"') == "-read-only")
+        }),
         file,
     })
 }
@@ -187,6 +193,13 @@ grpc.port=8554
         // Base64 tokens contain '=', only the first '=' separates key and value.
         assert!(d.grpc_token.as_deref().is_some_and(|t| t.ends_with("ZQ==")));
         assert_eq!(d.emulator_version.as_deref(), Some("36.5.11.0"));
+        assert!(!d.read_only);
+        let ro = parse(
+            &SAMPLE.replace(r#""-grpc" "8554""#, r#""-grpc" "8554" "-read-only""#),
+            1,
+            "f".into(),
+        )?;
+        assert!(ro.read_only);
         assert_eq!(
             d.avd_dir,
             Some(PathBuf::from("/Users/u/.android/avd/Pixel_10_Pro.avd"))

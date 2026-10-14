@@ -9,29 +9,42 @@ impl HangarApp {
         dev: DevOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Task<Option<()>> {
+    ) -> Task<Vec<WorkspaceId>> {
         tracing::info!(repo = %repo.display(), "HANGAR_DEV_OPEN");
         let add = self.add_project(ops::canonical(&repo), window, cx);
         cx.spawn_in(window, async move |this, cx| {
-            let project = add.await?;
-            let create = this
-                .update_in(cx, |this, window, cx| {
-                    this.create_workspace(project.id, dev.workspace, dev.agent, window, cx)
-                })
-                .ok()?;
-            let workspace_id = create.await?;
-            if let Some(input) = dev.input {
-                this.update(cx, |this, _| {
-                    let Some(live) = this.sessions.get(&workspace_id) else {
-                        return;
-                    };
-                    if let Err(err) = live.handle.session().write(format!("{input}\r")) {
-                        tracing::error!(%err, "HANGAR_DEV_INPUT: write failed");
-                    }
-                })
-                .ok()?;
+            let Some(project) = add.await else {
+                return Vec::new();
+            };
+            let names = if dev.workspaces.is_empty() {
+                vec![dev.workspace.clone()]
+            } else {
+                dev.workspaces.clone()
+            };
+            let mut created = Vec::new();
+            for name in names {
+                let (agent, target) = (dev.agent.clone(), dev.target.clone());
+                let Ok(create) = this.update_in(cx, |this, window, cx| {
+                    this.create_workspace(project.id, name, agent, target, window, cx)
+                }) else {
+                    break;
+                };
+                let Some(workspace_id) = create.await else {
+                    continue;
+                };
+                created.push(workspace_id);
+                if let Some(input) = dev.input.clone() {
+                    let _ = this.update(cx, |this, _| {
+                        let Some(live) = this.sessions.get(&workspace_id) else {
+                            return;
+                        };
+                        if let Err(err) = live.handle.session().write(format!("{input}\r")) {
+                            tracing::error!(%err, "HANGAR_DEV_INPUT: write failed");
+                        }
+                    });
+                }
             }
-            Some(())
+            created
         })
     }
 }
@@ -41,6 +54,14 @@ impl HangarApp {
 pub struct DevOptions {
     pub open: Option<PathBuf>,
     pub workspace: String,
+    /// Several workspaces to create instead of `workspace` (comma-separated names).
+    pub workspaces: Vec<String>,
+    /// Base device of the created workspaces (`ios:<UDID>` or `android:<AVD id>`).
+    pub target: Option<crate::device_panel::DeviceKey>,
+    /// "Devices at once" for this run (`auto` or 1–8), not saved.
+    pub device_limit: Option<crate::device_pool::policy::Limit>,
+    /// After the runs: save each dev workspace's latest frame here and log its device status.
+    pub pool_frames: Option<PathBuf>,
     pub agent: String,
     pub input: Option<String>,
     pub archive: Option<String>,
@@ -66,8 +87,11 @@ pub struct DevOptions {
     pub appearance: Option<String>,
     /// Screen to leave the window on once every other hook has run (for screenshots).
     pub show: Option<String>,
-    /// Build and run the dev workspace once the device panel has a device open.
-    pub run: bool,
+    /// Build and run on their devices: `1` = the workspaces `HANGAR_DEV_OPEN` created (else the
+    /// focused one), or comma-separated slugs.
+    pub run: Option<String>,
+    /// Slug of a workspace to show in the focused pane after the runs.
+    pub select: Option<String>,
     pub merge: Option<MergeStrategy>,
     /// Device id (simulator UDID) to open in the device panel.
     pub device: Option<String>,
@@ -148,6 +172,40 @@ impl DevOptions {
         Self {
             open: var("HANGAR_DEV_OPEN").map(PathBuf::from),
             workspace: var("HANGAR_DEV_WORKSPACE").unwrap_or_else(|| "dev".to_owned()),
+            workspaces: var("HANGAR_DEV_WORKSPACES")
+                .map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|n| !n.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            target: var("HANGAR_DEV_TARGET").and_then(|v| {
+                let parsed = v.split_once(':').and_then(|(p, id)| {
+                    let platform = match p {
+                        "ios" => crate::device_panel::Platform::Ios,
+                        "android" => crate::device_panel::Platform::Android,
+                        _ => return None,
+                    };
+                    Some(crate::device_panel::DeviceKey {
+                        platform,
+                        id: id.to_owned(),
+                    })
+                });
+                if parsed.is_none() {
+                    tracing::error!(value = %v, "HANGAR_DEV_TARGET: expected ios:<UDID> or android:<AVD id>");
+                }
+                parsed
+            }),
+            device_limit: var("HANGAR_DEV_DEVICE_LIMIT").and_then(|v| {
+                let parsed = crate::device_pool::policy::Limit::parse(&v);
+                if parsed.is_none() {
+                    tracing::error!(value = %v, "HANGAR_DEV_DEVICE_LIMIT: expected auto or 1-8");
+                }
+                parsed
+            }),
+            pool_frames: var("HANGAR_DEV_POOL_FRAMES").map(PathBuf::from),
             agent: var("HANGAR_DEV_AGENT").unwrap_or_else(|| agents::FALLBACK_AGENT.to_owned()),
             input: var("HANGAR_DEV_INPUT"),
             archive: var("HANGAR_DEV_ARCHIVE"),
@@ -165,7 +223,8 @@ impl DevOptions {
             files: var("HANGAR_DEV_FILES"),
             appearance: var("HANGAR_DEV_APPEARANCE"),
             show: var("HANGAR_DEV_SHOW"),
-            run: flag("HANGAR_DEV_RUN"),
+            run: var("HANGAR_DEV_RUN"),
+            select: var("HANGAR_DEV_SELECT"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
                 "squash" => Some(MergeStrategy::Squash),
@@ -247,17 +306,45 @@ pub(super) async fn run_dev_hooks(
         cx.spawn(async move |cx| dev_device(this, id, boot, logs, shutdown, inputs, cx).await)
             .detach();
     }
+    let mut created = Vec::new();
     if let Some(repo) = dev.open.clone() {
         let open = dev.clone();
         if let Ok(task) =
             this.update_in(cx, |this, window, cx| this.dev_open(repo, open, window, cx))
         {
-            task.await;
+            created = task.await;
         }
     }
-    if dev.run {
-        let this = this.clone();
-        cx.spawn(async move |cx| dev_run(this, cx).await).detach();
+    if let Some(run) = dev.run.as_deref() {
+        let mut targets = created.clone();
+        if run != "1" {
+            targets = this
+                .update(cx, |this, _| {
+                    run.split(',')
+                        .filter_map(|slug| {
+                            let found = this.workspace_by_slug(slug.trim());
+                            if found.is_none() {
+                                tracing::error!(%slug, "HANGAR_DEV_RUN: no such workspace");
+                            }
+                            found
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+        dev_run(&this, &targets, cx).await;
+    }
+    if let Some(dir) = dev.pool_frames.clone() {
+        dev_pool_frames(&this, &created, &dir, cx).await;
+    }
+    if let Some(slug) = dev.select.clone() {
+        let _ = this.update_in(cx, |this, window, cx| match this.workspace_by_slug(&slug) {
+            Some(id) => {
+                tracing::info!(%slug, "HANGAR_DEV_SELECT");
+                this.select_workspace(id, window, cx);
+            }
+            None => tracing::error!(%slug, "HANGAR_DEV_SELECT: no such workspace"),
+        });
     }
     run_review_hooks(&this, &dev, cx).await;
     if dev.review {
@@ -371,28 +458,137 @@ pub(super) async fn run_dev_hooks(
     }
 }
 
-/// `HANGAR_DEV_RUN`: waits for an open device, then runs the focused workspace (⌘R). Outcomes
-/// are logged by the run itself (`run command ended`, `run: launched`).
-async fn dev_run(this: WeakEntity<HangarApp>, cx: &mut AsyncWindowContext) {
-    let deadline = std::time::Instant::now() + DEV_BOOT_TIMEOUT;
-    loop {
-        let ready = this
-            .update(cx, |this, cx| {
-                this.focused_workspace().is_some()
-                    && this.device_panel.read(cx).run_target(cx).is_some()
-            })
-            .unwrap_or(false);
-        if ready {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            tracing::error!("HANGAR_DEV_RUN: no open device and focused workspace in time");
-            return;
-        }
-        cx.background_executor().timer(DEV_POLL).await;
+/// The workspaces created by `HANGAR_DEV_OPEN`, else the focused one.
+fn dev_targets(
+    this: &WeakEntity<HangarApp>,
+    created: &[WorkspaceId],
+    cx: &mut AsyncWindowContext,
+) -> Vec<(WorkspaceId, String)> {
+    this.update(cx, |this, _| {
+        let ids: Vec<WorkspaceId> = if created.is_empty() {
+            this.focused_workspace()
+                .map(|(_, w)| w.id)
+                .into_iter()
+                .collect()
+        } else {
+            created.to_vec()
+        };
+        ids.into_iter()
+            .filter_map(|id| this.projects.workspace(id).map(|w| (id, w.slug.clone())))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// `HANGAR_DEV_RUN`: builds and runs every dev workspace at once (as ⌘R on each), on each
+/// workspace's own device, and logs each outcome (`HANGAR_DEV_RUN <slug> ...`) once all ended.
+async fn dev_run(
+    this: &WeakEntity<HangarApp>,
+    created: &[WorkspaceId],
+    cx: &mut AsyncWindowContext,
+) {
+    let targets = dev_targets(this, created, cx);
+    if targets.is_empty() {
+        tracing::error!("HANGAR_DEV_RUN: no workspace to run");
+        return;
     }
-    tracing::info!("HANGAR_DEV_RUN");
-    let _ = this.update_in(cx, |this, window, cx| this.run_focused(window, cx));
+    let mut runs = Vec::new();
+    for (id, slug) in targets {
+        tracing::info!(%slug, "HANGAR_DEV_RUN");
+        if let Ok(task) = this.update_in(cx, |this, window, cx| this.run_workspace(id, window, cx))
+        {
+            runs.push((slug, std::time::Instant::now(), task));
+        }
+    }
+    for (slug, started, task) in runs {
+        match task.await {
+            Ok(summary) => tracing::info!(
+                %slug,
+                %summary,
+                secs = started.elapsed().as_secs(),
+                "HANGAR_DEV_RUN done"
+            ),
+            Err(err) => {
+                tracing::error!(%slug, secs = started.elapsed().as_secs(), "HANGAR_DEV_RUN failed: {err:#}")
+            }
+        }
+    }
+}
+
+/// `HANGAR_DEV_POOL_FRAMES=<dir>`: through the device API, logs each dev workspace's device
+/// status, saves its latest frame as `<dir>/<slug>.png`, taps the screen centre and saves the
+/// next frame as `<slug>-tap.png`.
+async fn dev_pool_frames(
+    this: &WeakEntity<HangarApp>,
+    created: &[WorkspaceId],
+    dir: &std::path::Path,
+    cx: &mut AsyncWindowContext,
+) {
+    if let Err(err) = std::fs::create_dir_all(dir) {
+        tracing::error!(%err, "HANGAR_DEV_POOL_FRAMES: cannot create {}", dir.display());
+        return;
+    }
+    for (id, slug) in dev_targets(this, created, cx) {
+        let Ok(status) = this.update(cx, |this, cx| this.device_status(id, cx)) else {
+            return;
+        };
+        match status.await {
+            Ok(status) => tracing::info!(%slug, ?status, "HANGAR_DEV_POOL_FRAMES status"),
+            Err(err) => tracing::error!(%slug, "HANGAR_DEV_POOL_FRAMES status: {err:#}"),
+        }
+        let Ok(frame) = this.update(cx, |this, cx| this.latest_frame(id, cx)) else {
+            return;
+        };
+        let shot = match frame.await {
+            Ok(shot) => shot,
+            Err(err) => {
+                tracing::error!(%slug, "HANGAR_DEV_POOL_FRAMES frame: {err:#}");
+                continue;
+            }
+        };
+        let path = dir.join(format!("{slug}.png"));
+        match shot.frame.save_png(&path) {
+            Ok(()) => tracing::info!(
+                %slug,
+                path = %path.display(),
+                width = shot.frame.width,
+                height = shot.frame.height,
+                width_pt = shot.width_pt,
+                height_pt = shot.height_pt,
+                "HANGAR_DEV_POOL_FRAMES saved"
+            ),
+            Err(err) => tracing::error!(%slug, "HANGAR_DEV_POOL_FRAMES save: {err}"),
+        }
+        let tap = hangar_devices::Input::Tap {
+            x: shot.width_pt / 2.0,
+            y: shot.height_pt / 2.0,
+        };
+        let Ok(sent) = this.update(cx, |this, cx| this.send_input(id, tap, cx)) else {
+            return;
+        };
+        match sent.await {
+            Ok(()) => tracing::info!(%slug, ?tap, "HANGAR_DEV_POOL_FRAMES tap sent"),
+            Err(err) => tracing::error!(%slug, "HANGAR_DEV_POOL_FRAMES tap: {err:#}"),
+        }
+        cx.background_executor().timer(Duration::from_secs(1)).await;
+        if let Ok(frame) = this.update(cx, |this, cx| this.latest_frame(id, cx))
+            && let Ok(after) = frame.await
+        {
+            let path = dir.join(format!("{slug}-tap.png"));
+            let diff = after.frame.diff_ratio(&shot.frame);
+            let _ = after.frame.save_png(&path);
+            tracing::info!(%slug, diff_percent = diff * 100.0, path = %path.display(), "HANGAR_DEV_POOL_FRAMES after tap");
+        }
+        let Ok(logs) = this.update(cx, |this, cx| this.recent_logs(id, 5, None, None, cx)) else {
+            return;
+        };
+        match logs.await {
+            Ok(text) => {
+                tracing::info!(%slug, lines = text.lines().count(), "HANGAR_DEV_POOL_FRAMES logs")
+            }
+            Err(err) => tracing::error!(%slug, "HANGAR_DEV_POOL_FRAMES logs: {err:#}"),
+        }
+    }
 }
 
 /// `HANGAR_DEV_SHOW`: leaves the window on one screen or overlay.
@@ -414,7 +610,7 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
     let shown = this.update_in(cx, |this, window, cx| {
         let settings = |tab| (Screen::Settings, Some(tab));
         let (screen, tab) = match name {
-            "workspace" => (Screen::Workspace, None),
+            "workspace" | "device" => (Screen::Workspace, None),
             "review" | "review-inline" => (Screen::Review, None),
             "overview" => (Screen::Overview, None),
             "settings" | "settings-agents" => settings(SettingsTab::Agents),
@@ -434,6 +630,7 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
                 .update(cx, |panel, cx| panel.set_split_view(split, cx));
         }
         match name {
+            "device" => this.set_device_open(true, window, cx),
             "palette" => this.open_palette(window, cx),
             "sheet" => match this.current_project() {
                 Some(project) => this.open_new_workspace(project, window, cx),

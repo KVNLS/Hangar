@@ -2,9 +2,11 @@
 
 mod chrome;
 mod dev;
+mod device_api;
 mod dialogs;
 mod layout;
 mod lifecycle;
+mod mcp;
 mod new_workspace;
 mod overview;
 mod palette;
@@ -42,6 +44,7 @@ use crate::agents::{self, AgentChoice};
 use crate::changes::review::ReviewTarget;
 use crate::changes::{ChangesEvent, ChangesPanel, ExitReview, PanelSource, WorkspaceDiff};
 use crate::device_panel::{DevicePanel, DevicePanelEvent};
+use crate::device_pool::{DevicePool, NoticeLevel, PoolEvent, WorkspaceRef};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
@@ -54,6 +57,7 @@ use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, Ter
 pub use chrome::titlebar_options;
 pub use dev::DevOptions;
 use dev::run_dev_hooks;
+pub use device_api::{DeviceFrame, DeviceStatusInfo};
 use dialogs::DeleteWorkspaceDialog;
 use view::agent_options;
 
@@ -233,8 +237,14 @@ pub struct HangarApp {
     files_panel: Entity<crate::files_view::FilesPanel>,
     files_open: bool,
     save_changes: Option<Task<()>>,
-    /// The window's single device panel, shared by all workspaces.
+    /// The window's device panel; it shows the focused workspace's device.
     device: DeviceLayout,
+    /// Every workspace's device.
+    device_pool: Entity<DevicePool>,
+    /// Serves the MCP device tools of `hangar mcp-bridge`; `None` if the socket could not be bound.
+    mcp: Option<crate::mcp_host::McpHandle>,
+    /// `HANGAR_DEV_DEVICE_LIMIT`, applied when the pool loads.
+    device_limit_override: Option<crate::device_pool::policy::Limit>,
     device_panel: Entity<DevicePanel>,
     save_device: Option<Task<()>>,
     focus: FocusHandle,
@@ -306,7 +316,23 @@ impl HangarApp {
                 ChangesEvent::ExitReview => this.set_screen(Screen::Workspace, window, cx),
             },
         );
-        let device_panel = cx.new(|cx| DevicePanel::new(window, cx));
+        let device_pool = cx.new(DevicePool::new);
+        let pool_sub = cx.subscribe_in(
+            &device_pool,
+            window,
+            |_, _, event: &PoolEvent, window, cx| match event {
+                PoolEvent::Notice(level, message) => {
+                    let notification = match level {
+                        NoticeLevel::Info => Notification::info(message.clone()),
+                        NoticeLevel::Warning => Notification::warning(message.clone()),
+                        NoticeLevel::Error => Notification::error(message.clone()),
+                    };
+                    window.push_notification(notification, cx);
+                }
+            },
+        );
+        let pool_observer = cx.observe(&device_pool, |_, _, cx| cx.notify());
+        let device_panel = cx.new(|cx| DevicePanel::new(device_pool.clone(), window, cx));
         let device_sub = cx.subscribe_in(
             &device_panel,
             window,
@@ -337,6 +363,7 @@ impl HangarApp {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
+        let device_limit_override = dev.device_limit;
         let db = paths::db_path();
         cx.spawn_in(window, async move |this, cx| {
             let executor = cx.background_executor().clone();
@@ -397,6 +424,9 @@ impl HangarApp {
             files_open: false,
             save_changes: None,
             device: DeviceLayout::default(),
+            device_pool,
+            mcp: mcp::start(window, cx),
+            device_limit_override,
             device_panel,
             save_device: None,
             focus,
@@ -406,7 +436,15 @@ impl HangarApp {
             collapsed_projects: HashSet::new(),
             show_archived: HashSet::new(),
             _activity: Self::track_activity(cx),
-            _subscriptions: vec![select_sub, resize_sub, changes_sub, device_sub, filter_sub],
+            _subscriptions: vec![
+                select_sub,
+                resize_sub,
+                changes_sub,
+                device_sub,
+                filter_sub,
+                pool_sub,
+                pool_observer,
+            ],
         }
     }
 
@@ -451,8 +489,21 @@ impl HangarApp {
         self.loading = false;
         match loaded {
             Ok((store, loaded)) => {
-                self.store = Some(store);
+                self.store = Some(store.clone());
                 self.projects = ProjectList::new(loaded.entries);
+                let workspaces: Vec<WorkspaceRef> = self
+                    .projects
+                    .entries()
+                    .iter()
+                    .flat_map(|e| {
+                        e.workspaces
+                            .iter()
+                            .map(move |w| workspace_ref(&e.project, w))
+                    })
+                    .collect();
+                let limit = self.device_limit_override;
+                self.device_pool
+                    .update(cx, |pool, cx| pool.load(store, workspaces, limit, cx));
                 if let Some(layout) = loaded.layout {
                     self.restore_layout(&layout, window, cx);
                 }
@@ -481,6 +532,7 @@ impl HangarApp {
                     self.changes.open = false;
                 }
                 self.sync_diffs(cx);
+                self.sync_device_focus(window, cx);
                 if let Some(agent) = loaded.agent.filter(|a| agents::preset(a).is_some()) {
                     self.agent = agent.into();
                     self.agent_chosen_by_user = true;
@@ -611,6 +663,50 @@ impl HangarApp {
             .ok()
             .flatten()
         })
+    }
+}
+
+fn workspace_ref(project: &Project, ws: &Workspace) -> WorkspaceRef {
+    WorkspaceRef {
+        id: ws.id,
+        name: ws.name.clone(),
+        project: project.name.clone(),
+        slug: ws.slug.clone(),
+        root: ws.worktree_path.clone(),
+    }
+}
+
+impl HangarApp {
+    /// Tells the pool about the workspace (name, worktree) before it is asked for its device.
+    pub(super) fn track_workspace(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
+        let Some(entry) = self
+            .projects
+            .entries()
+            .iter()
+            .find(|e| e.workspaces.iter().any(|w| w.id == id))
+        else {
+            return;
+        };
+        let Some(ws) = entry.workspaces.iter().find(|w| w.id == id) else {
+            return;
+        };
+        let r = workspace_ref(&entry.project, ws);
+        self.device_pool.update(cx, |pool, _| pool.track(r));
+    }
+
+    /// Points the pool and the device panel at the focused pane's workspace.
+    pub(super) fn sync_device_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self
+            .panes
+            .slot(self.panes.focused())
+            .filter(|id| self.projects.is_active(*id));
+        if let Some(id) = focused {
+            self.track_workspace(id, cx);
+        }
+        self.device_pool
+            .update(cx, |pool, cx| pool.set_focused(focused, cx));
+        self.device_panel
+            .update(cx, |panel, cx| panel.set_workspace(focused, window, cx));
     }
 }
 
