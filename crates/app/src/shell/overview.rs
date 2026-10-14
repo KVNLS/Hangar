@@ -1,4 +1,4 @@
-//! Overview (⌘⇧O): every active workspace as a card, grouped by agent state (or by project).
+//! Overview (⇧⌘O): every active workspace as a card, grouped by agent state (or by project).
 
 use gpui_kit::assets::IconName as Lucide;
 use hangar_core::{Session, Timestamp};

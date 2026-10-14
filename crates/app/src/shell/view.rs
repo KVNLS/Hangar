@@ -364,7 +364,7 @@ impl HangarApp {
                     .ghost()
                     .small()
                     .disabled(full)
-                    .tooltip("Split down ⌘⇧\\")
+                    .tooltip("Split down ⌘|")
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.layout.panes.focus(pane);
                         this.split_pane_down(window, cx)
@@ -599,7 +599,7 @@ impl HangarApp {
                     .icon(Lucide::PanelRightClose)
                     .ghost()
                     .small()
-                    .tooltip("Hide panel ⌘⇧D")
+                    .tooltip("Hide panel ⇧⌘D")
                     .on_click(cx.listener(|this, _, window, cx| this.hide_panel(window, cx))),
             );
         let handle = div()

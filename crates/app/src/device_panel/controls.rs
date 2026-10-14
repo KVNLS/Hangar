@@ -95,7 +95,7 @@ impl DevicePanel {
         }
     }
 
-    /// The Home button (⌘⇧H), when the shown device takes it.
+    /// The Home button (⇧⌘H), when the shown device takes it.
     pub(super) fn press_home(&mut self, cx: &mut Context<Self>) {
         let accepts = self
             .view()

@@ -211,28 +211,38 @@ pub(super) fn shortcut_matches(label: &str, keys: &str, context: &str, query: &s
     }
     let caps = key_caps(keys).concat().to_lowercase();
     let compact: String = query.chars().filter(|c| !c.is_whitespace()).collect();
+    // Typed key caps match in any modifier order (`⌘⇧R` finds `⇧⌘R`).
+    let typed_caps = compact.chars().any(|c| "⌘⇧⌥⌃⏎".contains(c))
+        && compact.chars().all(|c| caps.contains(c))
+        && compact.chars().count() == caps.chars().count();
     label.to_lowercase().contains(&query)
         || context.to_lowercase().contains(&query)
         || keys.contains(&query)
         || caps.contains(&compact)
+        || typed_caps
 }
 
 /// `cmd-shift-r` → `["⌘", "⇧", "R"]`.
 pub(super) fn key_caps(keystroke: &str) -> Vec<String> {
-    keystroke
-        .split('-')
-        .flat_map(|part| match part {
-            "cmd" => vec!["⌘".to_owned()],
-            "shift" => vec!["⇧".to_owned()],
-            "alt" => vec!["⌥".to_owned()],
-            "ctrl" => vec!["⌃".to_owned()],
-            "enter" => vec!["⏎".to_owned()],
-            "escape" => vec!["esc".to_owned()],
-            // macOS reports ⇧\ as `|`; show the keys the user presses.
-            "|" => vec!["⇧".to_owned(), "\\".to_owned()],
-            other => vec![other.to_uppercase()],
-        })
-        .collect()
+    let parts: Vec<&str> = keystroke.split('-').collect();
+    let (mods, key) = match parts.split_last() {
+        // `cmd--` (minus) splits into an empty last part.
+        Some((&"", rest)) if !rest.is_empty() => (&rest[..rest.len() - 1], "-"),
+        Some((key, mods)) => (mods, *key),
+        None => (&[][..], ""),
+    };
+    // macOS order: ⌃ ⌥ ⇧ ⌘, then the key (as menus and gpui's own hints show them).
+    let mut caps: Vec<String> = [("ctrl", "⌃"), ("alt", "⌥"), ("shift", "⇧"), ("cmd", "⌘")]
+        .into_iter()
+        .filter(|(name, _)| mods.contains(name))
+        .map(|(_, cap)| cap.to_owned())
+        .collect();
+    caps.push(match key {
+        "enter" => "⏎".to_owned(),
+        "escape" => "esc".to_owned(),
+        other => other.to_uppercase(),
+    });
+    caps
 }
 
 impl HangarApp {
@@ -619,10 +629,11 @@ mod tests {
 
     #[test]
     fn caps() {
-        assert_eq!(key_caps("cmd-shift-r"), ["⌘", "⇧", "R"]);
+        assert_eq!(key_caps("cmd-shift-r"), ["⇧", "⌘", "R"]);
         assert_eq!(key_caps("escape"), ["esc"]);
         assert_eq!(key_caps("cmd-,"), ["⌘", ","]);
-        assert_eq!(key_caps("cmd-|"), ["⌘", "⇧", "\\"]);
+        assert_eq!(key_caps("cmd-|"), ["⌘", "|"]);
+        assert_eq!(key_caps("cmd-alt-shift-p"), ["⌥", "⇧", "⌘", "P"]);
     }
 
     /// The keybindings page lists exactly what `init` binds.

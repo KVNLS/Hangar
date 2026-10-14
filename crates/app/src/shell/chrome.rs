@@ -20,11 +20,12 @@ pub fn titlebar_options() -> TitlebarOptions {
 }
 
 /// The title of a screen that replaces the workspace (settings, overview, review).
-/// The project name in the crumbs: truncated and capped, so a long name never pushes the
-/// workspace crumb or the title bar buttons away.
+/// The project name in the crumbs: capped and truncated, so a long name never pushes the
+/// title bar buttons away.
 fn project_crumb(name: impl Into<SharedString>, color: Hsla) -> Div {
+    // Kept whole up to the cap; the workspace name gives way first.
     div()
-        .min_w_0()
+        .flex_shrink_0()
         .max_w(px(240.))
         .truncate()
         .text_color(color)
@@ -209,7 +210,7 @@ impl HangarApp {
                                 UiButton::new("overview-toggle")
                                     .icon(Lucide::LayoutGrid)
                                     .label("Overview")
-                                    .kbd("⌘⇧O")
+                                    .kbd("⇧⌘O")
                                     .ghost()
                                     .selected(self.layout.screen == Screen::Overview)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -236,9 +237,9 @@ impl HangarApp {
                                     .ghost()
                                     .selected(device_open)
                                     .tooltip(if device_open {
-                                        "Hide device ⌘⇧P"
+                                        "Hide device ⇧⌘P"
                                     } else {
-                                        "Show device ⌘⇧P"
+                                        "Show device ⇧⌘P"
                                     })
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.set_device_open(!device_open, window, cx)

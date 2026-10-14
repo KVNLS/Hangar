@@ -459,7 +459,7 @@ impl FilesPanel {
                                 .icon(Lucide::Maximize2)
                                 .ghost()
                                 .small()
-                                .tooltip("Open full width (⌘⇧E)")
+                                .tooltip("Open full width (⇧⌘E)")
                                 .on_click(cx.listener(|_, _, _, cx| cx.emit(FilesEvent::OpenWide))),
                         )
                     }),

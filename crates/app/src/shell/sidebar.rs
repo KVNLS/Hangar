@@ -161,14 +161,17 @@ impl HangarApp {
                     .justify_center()
                     .child(leading),
             )
-            .child(
-                div()
+            .child({
+                // A long name is cut before its number, so `dev 2` and `dev 3` stay apart.
+                let (base, number) = split_number(&row.name);
+                let (base, number) = (base.to_owned(), number.map(str::to_owned));
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
                     .when(row.active, |this| this.font_weight(FontWeight::SEMIBOLD))
-                    .child(row.name),
-            )
+                    .child(div().min_w_0().truncate().child(base))
+                    .children(number.map(|n| div().flex_none().child(n)))
+            })
             .children(row.mark.map(AgentMark::new))
             .child(trailing)
             .when(!busy, |this| {
@@ -480,5 +483,37 @@ impl HangarApp {
                             .child("⌘O"),
                     ),
             )
+    }
+}
+
+/// `("dev", Some(" 2"))` for `dev 2`: the number Hangar appends to a repeated name.
+fn split_number(name: &str) -> (&str, Option<&str>) {
+    match name.rfind(' ') {
+        Some(at)
+            if at > 0
+                && name[at + 1..].len() <= 3
+                && !name[at + 1..].is_empty()
+                && name[at + 1..].bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            (&name[..at], Some(&name[at..]))
+        }
+        _ => (name, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_number;
+
+    #[test]
+    fn the_number_of_a_repeated_name_is_kept_apart() {
+        assert_eq!(split_number("dev 2"), ("dev", Some(" 2")));
+        assert_eq!(
+            split_number("Fix the login screen 12"),
+            ("Fix the login screen", Some(" 12"))
+        );
+        assert_eq!(split_number("dev"), ("dev", None));
+        assert_eq!(split_number("iOS 2026"), ("iOS 2026", None));
+        assert_eq!(split_number(" 2"), (" 2", None));
     }
 }

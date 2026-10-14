@@ -36,7 +36,9 @@ fn colors(p: &Palette<u32>) -> Value {
         ("selection.background", alpha(p.acc, 0x40)),
         ("muted.background", h(p.hover)),
         ("muted.foreground", h(p.tx2)),
-        ("accent.background", h(p.hover)),
+        // The highlighted row of lists, menus and the palette: the accent tint, which stands
+        // out from the elevated surfaces (hover grey did not, in dark mode).
+        ("accent.background", h(p.accbg)),
         ("accent.foreground", h(p.tx)),
         ("popover.background", h(p.elev)),
         ("popover.foreground", h(p.tx)),
