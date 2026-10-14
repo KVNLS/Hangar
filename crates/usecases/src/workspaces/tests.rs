@@ -262,3 +262,19 @@ fn initialized_submodules_need_force_and_are_named() {
         .needs_force()
     );
 }
+
+#[test]
+fn a_repeated_name_gets_a_number() {
+    let (store, git) = (FakeStore::default(), FakeGit::default());
+    let proj = project(&store);
+    let workspaces = Workspaces::new(&store, &git);
+    let names: Vec<String> = (0..3)
+        .map(|_| {
+            workspaces
+                .create(&proj, &root(), &NewWorkspace::named("dev"))
+                .unwrap()
+                .name
+        })
+        .collect();
+    assert_eq!(names, ["dev", "dev 2", "dev 3"]);
+}

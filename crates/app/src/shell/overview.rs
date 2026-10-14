@@ -24,11 +24,21 @@ pub(super) enum CardAction {
     Review,
     /// Start the agent again (resuming its conversation when it can), then show it.
     Restart,
+    /// Take a queued start out of the queue.
+    Unqueue,
 }
 
 /// Button label and action of an overview card. Approval and input are answered in the agent's
 /// pane, so they open it. An idle agent that is still alive (quiet terminal) is opened, not resumed.
-pub(super) fn card_action(state: AgentState, alive: bool) -> (&'static str, CardAction) {
+/// A queued start already waits for a slot: it can only be cancelled.
+pub(super) fn card_action(
+    state: AgentState,
+    alive: bool,
+    queued: bool,
+) -> (&'static str, CardAction) {
+    if queued {
+        return ("Cancel start", CardAction::Unqueue);
+    }
     match state {
         AgentState::Idle if alive => ("Open", CardAction::Open),
         AgentState::Approval => ("Review request", CardAction::Open),
@@ -327,6 +337,10 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if action == CardAction::Unqueue {
+            self.unqueue_agent(id, window, cx);
+            return;
+        }
         let stopped = self
             .live
             .sessions
@@ -504,8 +518,11 @@ impl HangarApp {
         let attempts = self.attempts_of(id);
         let allow_inline = request.is_some();
         let asks = self.question(id).is_some();
-        let (action_label, action) =
-            card_action(state, live.is_some_and(|l| !l.session.status.is_terminal()));
+        let (action_label, action) = card_action(
+            state,
+            live.is_some_and(|l| !l.session.status.is_terminal()),
+            self.queued_ahead(id).is_some(),
+        );
         let (action_fg, action_bg, action_border) = if card_action_tinted(state) {
             let (fg, bg) = state_colors(state, t);
             (fg, bg, bg)
@@ -859,7 +876,7 @@ mod tests {
     fn action_labels_follow_the_state() {
         let labels: Vec<&str> = AgentState::ORDER
             .into_iter()
-            .map(|s| card_action(s, false).0)
+            .map(|s| card_action(s, false, false).0)
             .collect();
         assert_eq!(
             labels,
@@ -872,11 +889,16 @@ mod tests {
                 "Resume"
             ]
         );
-        assert_eq!(card_action(Review, false).1, CardAction::Review);
-        assert_eq!(card_action(Failed, false).1, CardAction::Restart);
-        assert_eq!(card_action(Idle, false).1, CardAction::Restart);
-        assert_eq!(card_action(Idle, true), ("Open", CardAction::Open));
-        assert_eq!(card_action(Approval, false).1, CardAction::Open);
+        assert_eq!(card_action(Review, false, false).1, CardAction::Review);
+        assert_eq!(card_action(Failed, false, false).1, CardAction::Restart);
+        assert_eq!(card_action(Idle, false, false).1, CardAction::Restart);
+        assert_eq!(card_action(Idle, true, false), ("Open", CardAction::Open));
+        assert_eq!(card_action(Approval, false, false).1, CardAction::Open);
+        // Queued: never Resume, which would only ask for the start it already waits for.
+        assert_eq!(
+            card_action(Idle, false, true),
+            ("Cancel start", CardAction::Unqueue)
+        );
     }
 
     #[test]
