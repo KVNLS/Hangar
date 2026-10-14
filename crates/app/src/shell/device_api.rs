@@ -175,6 +175,9 @@ impl HangarApp {
         let acquire = self.acquire_device(ws, cx);
         cx.spawn(async move |_, _| {
             let acquired = acquire.await?;
+            if let Some(missing) = acquired.session.capabilities().missing_for(&input) {
+                return Err(hangar_devices::Error::Unsupported(missing).into());
+            }
             acquired
                 .session
                 .send_acked(input)
@@ -194,6 +197,9 @@ impl HangarApp {
         let acquire = self.acquire_device(ws, cx);
         cx.spawn(async move |_, _| {
             let acquired = acquire.await?;
+            if !acquired.session.capabilities().text {
+                return Err(hangar_devices::Error::Unsupported("text input on this device").into());
+            }
             acquired
                 .session
                 .send_text_acked(text)

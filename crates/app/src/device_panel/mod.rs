@@ -544,7 +544,7 @@ impl DevicePanel {
         let Connection::Open { key, view, .. } = &self.connection else {
             return;
         };
-        if self.shutting_down || !key.platform.can_shutdown(view.read(cx).info()) {
+        if self.shutting_down || !view.read(cx).session().capabilities().shutdown {
             return;
         }
         tracing::info!(device = %key.id, "shutting device down");
@@ -1190,21 +1190,26 @@ impl DevicePanel {
 
     fn render_controls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (platform, view, _) = self.shown(cx)?;
-        let can_shutdown = platform.can_shutdown(view.read(cx).info());
-        let can_rotate = platform.can_rotate();
+        let capabilities = view.read(cx).session().capabilities();
+        let can_shutdown = capabilities.shutdown;
+        let can_rotate = capabilities.rotate;
         let rotate_view = view.clone();
         let t = cx.tokens();
-        let buttons = platform.controls().iter().map(|control| {
-            let input = control.input;
-            UiButton::new(SharedString::from(format!("device-control-{}", control.id)))
-                .ghost()
-                .small()
-                .icon(control.icon)
-                .tooltip(control.tooltip)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.send(input, cx);
-                }))
-        });
+        let buttons = platform
+            .controls()
+            .iter()
+            .filter(|control| capabilities.accepts(&control.input))
+            .map(|control| {
+                let input = control.input;
+                UiButton::new(SharedString::from(format!("device-control-{}", control.id)))
+                    .ghost()
+                    .small()
+                    .icon(control.icon)
+                    .tooltip(control.tooltip)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.send(input, cx);
+                    }))
+            });
         // The row is always there so the controls above do not jump when a status appears.
         let status = div()
             .h(px(16.))

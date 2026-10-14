@@ -187,6 +187,21 @@ impl Device for PrivateSimulator {
         "private"
     }
 
+    /// Indigo HID: text, keys and side buttons; no Back, rotation or log history on iOS.
+    fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities {
+            text: true,
+            keys: true,
+            side_buttons: true,
+            boot: true,
+            shutdown: true,
+            install: true,
+            launch: true,
+            logs: true,
+            ..crate::Capabilities::default()
+        }
+    }
+
     fn frames(&self) -> FrameReceiver {
         self.frames.clone()
     }

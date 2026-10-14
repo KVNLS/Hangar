@@ -217,6 +217,15 @@ pub fn input_command(input: Input, px: impl Fn(f64, f64) -> (i32, i32)) -> Strin
     }
 }
 
+/// Everything but boot (adb attaches to running devices); shutdown only for emulators.
+fn capabilities(serial: &str) -> crate::Capabilities {
+    crate::Capabilities {
+        boot: false,
+        shutdown: serial.starts_with("emulator-"),
+        ..crate::Capabilities::ALL
+    }
+}
+
 impl Device for AdbDevice {
     fn info(&self) -> &DeviceInfo {
         &self.info
@@ -228,6 +237,10 @@ impl Device for AdbDevice {
 
     fn backend(&self) -> &'static str {
         "adb"
+    }
+
+    fn capabilities(&self) -> crate::Capabilities {
+        capabilities(&self.info.udid)
     }
 
     fn platform(&self) -> Platform {
@@ -307,6 +320,14 @@ impl Drop for AdbDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_devices_cannot_be_shut_down() {
+        assert!(capabilities("emulator-5554").shutdown);
+        let phone = capabilities("R58M123ABC");
+        assert!(!phone.shutdown && !phone.boot);
+        assert!(phone.rotate && phone.navigation_buttons && phone.log_history);
+    }
 
     fn raw(header_words: &[u32], pixels: &[u8]) -> Vec<u8> {
         let mut v: Vec<u8> = header_words.iter().flat_map(|w| w.to_le_bytes()).collect();
