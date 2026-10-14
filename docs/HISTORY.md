@@ -312,6 +312,18 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - `changes/review.rs` calls `hangar_worktree::base_branch_name` directly instead of through a `ReviewOps` port.
 
 
+## System notifications (2026-10-08, branch `agent-notifications`)
+- Owner decisions: `notify-rust` (macOS `NSUserNotificationCenter`, Windows toasts, freedesktop D-Bus);
+  only while no Hangar window is key; "finished" is any turn end.
+- Done: `Attention::observe` returns which workspaces started waiting (with their state) and which
+  finished a turn (Working → Review or Idle; never on first sight). `app::notify` builds the text
+  ("<workspace>", "Waiting for approval · <project>", "Ready for review · …", "Finished · …"), merges more
+  than 3 into one, and posts off the UI thread. Settings › Permissions: "Notify when an agent needs me"
+  now also gates these notifications; new "Notify when an agent finishes" (`permissions:notify_finished`,
+  default on). A bundled .app attributes them to its bundle id; unbundled they come from Finder.
+- Checked: unit tests (policy, text, settings round trip); an unbundled `notify-rust` send on macOS
+  returned Ok. Not run on Windows or Linux.
+
 ## Zero-copy simulator frames (2026-10-08, branch `zero-copy-frames`)
 - Owner decisions: vendor-patch GPUI's Metal renderer in the repo (`third_party/gpui-pre-apple`, port of zed
   PR #61291 with linear sampling) until the gpui-component pin ships BGRA surfaces; `core-video` and
