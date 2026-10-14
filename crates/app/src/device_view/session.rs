@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use hangar_devices::{Device, DeviceInfo, FrameReceiver, Input};
+use hangar_devices::{Device, DeviceInfo, FrameReceiver, Input, LogFilter, LogStream};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// Outcome of one input sent to the device. Successful `TouchMove`s are not reported.
@@ -42,8 +42,39 @@ enum Command {
     Shutdown,
 }
 
+/// A shared handle on the device for starting log streams. Releasing the last reference of a
+/// device can block (backends join threads), so it never happens on the caller's thread.
+pub struct LogSource(Option<Arc<dyn Device>>);
+
+impl LogSource {
+    /// Spawns the log process. Blocks: call from a background thread.
+    pub fn start(&self, filter: &LogFilter) -> hangar_devices::Result<LogStream> {
+        match &self.0 {
+            Some(device) => device.logs(filter),
+            None => Err(hangar_devices::Error::Unsupported("device released")),
+        }
+    }
+}
+
+impl Clone for LogSource {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for LogSource {
+    fn drop(&mut self) {
+        if let Some(device) = self.0.take() {
+            let _ = std::thread::Builder::new()
+                .name("device-release".into())
+                .spawn(move || drop(device));
+        }
+    }
+}
+
 pub struct DeviceSession {
     info: DeviceInfo,
+    logs: LogSource,
     backend: &'static str,
     frames: FrameReceiver,
     input: mpsc::Sender<Command>,
@@ -58,12 +89,14 @@ impl DeviceSession {
         let frames = device.frames();
         let (input, rx) = mpsc::channel();
         let (results_tx, results) = unbounded_channel();
+        let logs = LogSource(Some(device.clone()));
         std::thread::Builder::new()
             .name("device-input".into())
             .spawn(move || input_worker(device, rx, results_tx))
             .context("failed to start the device input thread")?;
         Ok(Self {
             info,
+            logs,
             backend,
             frames,
             input,
@@ -77,6 +110,10 @@ impl DeviceSession {
 
     pub fn backend(&self) -> &'static str {
         self.backend
+    }
+
+    pub fn log_source(&self) -> LogSource {
+        self.logs.clone()
     }
 
     pub fn frames(&self) -> FrameReceiver {
