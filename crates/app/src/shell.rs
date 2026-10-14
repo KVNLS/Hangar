@@ -294,6 +294,13 @@ impl LiveSession {
     }
 }
 
+/// How terminals treat Option and programs' clipboard writes (both off by default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TerminalPrefs {
+    option_as_meta: bool,
+    clipboard_write: bool,
+}
+
 /// Opens the database at `db` and reads what the app restores. Blocks.
 fn open_and_load(db: Option<PathBuf>) -> anyhow::Result<(Arc<dyn Store>, Loaded)> {
     let db =
@@ -400,6 +407,8 @@ struct Layout {
     _appearance_observer: Subscription,
     changes: ChangesLayout,
     files_open: bool,
+    /// Settings › Appearance › Terminal.
+    terminal: TerminalPrefs,
     /// The window's device panel; it shows the focused workspace's device.
     device: DeviceLayout,
     /// The right panel's width, shared by its tabs.
@@ -631,6 +640,7 @@ impl HangarApp {
                 _appearance_observer: appearance_observer,
                 changes: ChangesLayout::default(),
                 files_open: false,
+                terminal: TerminalPrefs::default(),
                 device: DeviceLayout::default(),
                 panel_width: PANEL_DEFAULT_WIDTH,
                 panel_tab: Default::default(),
@@ -871,6 +881,10 @@ impl HangarApp {
                 if let Some(on) = loaded.notify_finished {
                     self.attention.notify_finished = on;
                 }
+                self.layout.terminal = TerminalPrefs {
+                    option_as_meta: loaded.option_as_meta.unwrap_or_default(),
+                    clipboard_write: loaded.clipboard_write.unwrap_or_default(),
+                };
                 if let Some(on) = loaded.orchestration {
                     self.apply_orchestration(on);
                 }

@@ -262,7 +262,11 @@ impl TerminalView {
             self.title = title;
         }
         if let Some(text) = clipboard {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            if self.options.clipboard_write {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            } else {
+                tracing::debug!("ignored a program's clipboard write (OSC 52 is off)");
+            }
         }
 
         let focused = self.focus_handle.is_focused(window);

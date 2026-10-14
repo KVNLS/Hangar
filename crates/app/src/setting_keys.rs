@@ -38,6 +38,12 @@ pub const AGENT_QUEUE: Setting<Vec<(WorkspaceId, StartRequest)>> = Setting::new(
 /// "Let agents create and drive workspaces": the MCP orchestration tools (default off).
 pub const ORCHESTRATION: Setting<bool> = Setting::new("agents:orchestration");
 
+/// Terminals send Option+key as Meta (ESC-prefixed) instead of composing characters
+/// (default off).
+pub const OPTION_AS_META: Setting<bool> = Setting::new("terminal:option_as_meta");
+/// Programs in a terminal may write the clipboard (OSC 52) (default off).
+pub const CLIPBOARD_WRITE: Setting<bool> = Setting::new("terminal:clipboard_write");
+
 pub const DEVICE_LIMIT: Setting<Limit> = Setting::new("device_pool:limit");
 pub const SINGLE_DEVICE_ALERT_SHOWN: Setting<bool> = Setting::new("device_pool:single_alert_shown");
 pub const LAST_DEVICE_TARGET: Setting<DeviceKey> = Setting::new("device_pool:last_target");

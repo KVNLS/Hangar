@@ -62,6 +62,8 @@ pub struct Loaded {
     pub agent_queue: Vec<(WorkspaceId, StartRequest)>,
     /// "Let agents create and drive workspaces".
     pub orchestration: Option<bool>,
+    pub option_as_meta: Option<bool>,
+    pub clipboard_write: Option<bool>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -312,6 +314,18 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let mut terminal_flag = |key: &hangar_core::Setting<bool>| match store
+        .get_setting(key)
+        .with_context(|| format!("failed to read the {} setting", key.key()))
+    {
+        Ok(on) => on,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
+    };
+    let option_as_meta = terminal_flag(&setting_keys::OPTION_AS_META);
+    let clipboard_write = terminal_flag(&setting_keys::CLIPBOARD_WRITE);
     Ok(Loaded {
         entries,
         chats,
@@ -327,6 +341,8 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
         max_agents,
         agent_queue,
         orchestration,
+        option_as_meta,
+        clipboard_write,
         settings_error,
     })
 }
@@ -371,6 +387,16 @@ pub fn save_notify_finished(store: &dyn Store, on: bool) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::NOTIFY_FINISHED, &on)
         .context("failed to save the notification setting")
+}
+
+pub fn save_flag(
+    store: &dyn Store,
+    key: &hangar_core::Setting<bool>,
+    on: bool,
+) -> anyhow::Result<()> {
+    store
+        .set_setting(key, &on)
+        .with_context(|| format!("failed to save the {} setting", key.key()))
 }
 
 pub fn save_orchestration(store: &dyn Store, on: bool) -> anyhow::Result<()> {

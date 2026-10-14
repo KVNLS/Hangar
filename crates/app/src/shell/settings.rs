@@ -321,6 +321,116 @@ impl HangarApp {
                         ),
                 ),
             )
+            .child(self.render_terminal_prefs(cx))
+    }
+
+    fn render_terminal_prefs(&self, cx: &mut Context<Self>) -> Div {
+        let t = cx.tokens();
+        let prefs = self.layout.terminal;
+        let row = |title: &'static str, detail: &'static str| {
+            h_flex()
+                .px(px(14.))
+                .py_3()
+                .gap_3()
+                .items_center()
+                .justify_between()
+                .child(
+                    v_flex()
+                        .gap_0p5()
+                        .child(title)
+                        .child(div().type_secondary().text_color(t.tx3).child(detail)),
+                )
+        };
+        v_flex()
+            .gap(px(10.))
+            .child(div().type_body_strong().child("Terminal"))
+            .child(
+                card(cx)
+                    .child(
+                        row(
+                            "Use Option as Meta",
+                            "Option+key sends ESC and the key (Emacs, readline) instead of \
+                             typing a special character.",
+                        )
+                        .child(
+                            Switch::new("option-as-meta")
+                                .small()
+                                .color(t.acc)
+                                .checked(prefs.option_as_meta)
+                                .on_click(cx.listener(move |this, on: &bool, window, cx| {
+                                    let prefs = TerminalPrefs {
+                                        option_as_meta: *on,
+                                        ..this.layout.terminal
+                                    };
+                                    this.set_terminal_prefs(prefs, window, cx)
+                                })),
+                        ),
+                    )
+                    .child(
+                        row(
+                            "Let programs copy to the clipboard",
+                            "Programs in a terminal may replace the clipboard (OSC 52), up \
+                             to 1 MB at a time.",
+                        )
+                        .child(
+                            Switch::new("clipboard-write")
+                                .small()
+                                .color(t.acc)
+                                .checked(prefs.clipboard_write)
+                                .on_click(cx.listener(move |this, on: &bool, window, cx| {
+                                    let prefs = TerminalPrefs {
+                                        clipboard_write: *on,
+                                        ..this.layout.terminal
+                                    };
+                                    this.set_terminal_prefs(prefs, window, cx)
+                                })),
+                        ),
+                    ),
+            )
+    }
+
+    /// Options for a new terminal view of `program`, with the Settings › Appearance switches.
+    pub(super) fn terminal_options(&self, program: &std::path::Path) -> TerminalViewOptions {
+        TerminalViewOptions {
+            option_as_meta: self.layout.terminal.option_as_meta,
+            clipboard_write: self.layout.terminal.clipboard_write,
+            ..TerminalViewOptions::for_program(program)
+        }
+    }
+
+    fn set_terminal_prefs(
+        &mut self,
+        prefs: TerminalPrefs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.layout.terminal = prefs;
+        let views = self
+            .live
+            .sessions
+            .values()
+            .filter_map(|live| match &live.surface {
+                AgentSurface::Terminal { view, .. } => Some(view.clone()),
+                AgentSurface::Chat { .. } => None,
+            })
+            .chain(
+                self.live
+                    .runs
+                    .values()
+                    .flat_map(|run| run.server.iter().chain(&run.build))
+                    .map(|tab| tab.view.clone()),
+            )
+            .collect::<Vec<_>>();
+        for view in views {
+            view.update(cx, |view, _| {
+                view.set_input_options(prefs.option_as_meta, prefs.clipboard_write)
+            });
+        }
+        self.persist(window, cx, move |store| {
+            ops::save_flag(store, &setting_keys::OPTION_AS_META, prefs.option_as_meta)?;
+            ops::save_flag(store, &setting_keys::CLIPBOARD_WRITE, prefs.clipboard_write)
+        });
+        cx.notify();
     }
 
     fn render_settings_keys(&self, cx: &mut Context<Self>) -> Div {
