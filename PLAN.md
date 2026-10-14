@@ -48,6 +48,9 @@ output, not a library.
     `HostResources` ports; `DevicePool` as a sans-IO state machine; `HangarApp` groups as controllers so views
     do no I/O; `changes/review.rs` reaches `base_branch_name` through `ReviewOps`.
   - On-screen verification: walk the checklist below with the dev hooks, fix what breaks.
+  - Onboarding (done 2026-10-08): a setup checklist on the welcome screen and in Settings › Setup (git and
+    its identity, agents and ACP adapters, `gh` and its sign-in, Xcode, iOS runtimes, Android SDK and AVDs,
+    JDK, Node), each with the command that fixes it; Hangar never runs installers itself.
   - Distribution: .app bundle, .icns (light/tinted variants), signing and notarisation (question 6).
   - Done when: ARCHITECTURE "Done when" all ticked, the checklist seen, a signed .app runs on a clean user.
 
@@ -115,6 +118,9 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - Agents: Claude Code Resume click; Claude Code mode chip and slash list; Ollama settings and model chip;
   overview subagent rows and subagent chat; Input from `elicitation_dialog`; terminal transcripts read by a
   lead; ACP watchdog after a Hangar crash.
+- Setup: copy button pasted in a terminal; re-check on coming back to the front after `gh auth logout`;
+  the review screen's "Open Setup" row; the "Open Setup" action on a missing-agent error; the Command Line
+  Tools and Xcode-missing states.
 - MCP: Codex and Gemini wiring; OpenCode's MCP permission default; a real agent session using the device
   tools; Gradle/Expo builds on a pool Android instance; `ask_user` waits over a minute on agents other than
   Claude Code.

@@ -111,6 +111,9 @@ Requirements:
 - `git`, and `gh` for pull requests (optional)
 - At least one of the agents above
 
+On first launch the welcome screen checks these for you and shows the command for anything missing;
+Settings › Setup keeps the full list and re-checks after you install something.
+
 ```sh
 git clone git@github.com:KVNLS/Hangar.git
 cd Hangar
