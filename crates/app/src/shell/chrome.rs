@@ -306,7 +306,7 @@ impl HangarApp {
             &hangar_usecases::history::cost_today(&self.live.done_today.sessions, &session_costs),
         );
         let focused = self.layout.panes.slot(self.layout.panes.focused());
-        let pool = self.device_pool.read(cx);
+        let pool = self.devices.pool.read(cx);
         // Every device the pool runs, booted or on its way: one count, names in the tooltip.
         let mut devices: Vec<String> = Vec::new();
         let mut transitioning = 0;

@@ -246,7 +246,7 @@ pub(super) async fn dev_device(
     tracing::info!(%id, "HANGAR_DEV_DEVICE");
     let Ok(panel) = this.update_in(cx, |this, window, cx| {
         this.set_device_open(true, window, cx);
-        this.device_panel.clone()
+        this.devices.panel.clone()
     }) else {
         return;
     };

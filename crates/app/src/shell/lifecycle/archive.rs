@@ -30,7 +30,8 @@ impl HangarApp {
         self.sync_diffs(cx);
         self.sync_device_focus(window, cx);
         let device = self
-            .device_pool
+            .devices
+            .pool
             .update(cx, |pool, cx| pool.archive(workspace_id, cx));
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {

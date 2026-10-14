@@ -88,7 +88,7 @@ impl HangarApp {
                 .child(tabs)
                 .child(div().flex_1().min_h_0().map(|this| {
                     if device_tab {
-                        this.child(self.device_panel.clone())
+                        this.child(self.devices.panel.clone())
                     } else if changes_tab {
                         this.child(self.changes_panel.clone())
                     } else {

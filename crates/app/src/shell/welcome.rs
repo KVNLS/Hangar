@@ -154,7 +154,7 @@ impl HangarApp {
         let ready = self.setup.report.as_ref().is_some_and(|r| r.is_ready());
         let setup = agents.child(self.render_welcome_todo(cx));
         let toolchains = Platform::ALL.map(|platform| self.toolchain_path(platform, cx));
-        let picker = self.device_panel.read(cx).picker();
+        let picker = self.devices.panel.read(cx).picker();
         let devices =
             if picker.listed() {
                 v_flex()
@@ -195,7 +195,8 @@ impl HangarApp {
                 )
             };
         let single = self
-            .device_pool
+            .devices
+            .pool
             .read(cx)
             .single_device_explanation()
             .map(|text| div().text_size(px(12.)).text_color(t.amb).child(text));

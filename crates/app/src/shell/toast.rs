@@ -31,11 +31,11 @@ impl HangarApp {
         let dismiss = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(TOAST_DURATION).await;
             let _ = this.update(cx, |this, cx| {
-                this.toast = None;
+                this.layout.toast = None;
                 cx.notify();
             });
         });
-        self.toast = Some(Toast {
+        self.layout.toast = Some(Toast {
             kind,
             message: message.into(),
             _dismiss: dismiss,
@@ -44,7 +44,7 @@ impl HangarApp {
     }
 
     pub(super) fn render_toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let current = self.toast.as_ref()?;
+        let current = self.layout.toast.as_ref()?;
         let t = cx.tokens();
         let (icon, color) = match current.kind {
             ToastKind::Info => (IconName::Info, t.acc),

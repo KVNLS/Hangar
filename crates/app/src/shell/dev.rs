@@ -387,7 +387,7 @@ async fn dev_screenshot(this: &WeakEntity<HangarApp>, cx: &mut AsyncWindowContex
     loop {
         let ready = this
             .update(cx, |this, cx| {
-                let panel = this.device_panel.read(cx);
+                let panel = this.devices.panel.read(cx);
                 let ws = panel.workspace()?;
                 panel
                     .view()

@@ -184,7 +184,7 @@ impl HangarApp {
                     Switch::new("notify-attention")
                         .small()
                         .color(t.acc)
-                        .checked(self.attention.enabled)
+                        .checked(self.live.attention.enabled)
                         .on_click(cx.listener(|this, on: &bool, window, cx| {
                             this.set_notify_attention(*on, window, cx)
                         })),
@@ -199,7 +199,7 @@ impl HangarApp {
                     Switch::new("notify-finished")
                         .small()
                         .color(t.acc)
-                        .checked(self.attention.notify_finished)
+                        .checked(self.live.attention.notify_finished)
                         .on_click(cx.listener(|this, on: &bool, window, cx| {
                             this.set_notify_finished(*on, window, cx)
                         })),

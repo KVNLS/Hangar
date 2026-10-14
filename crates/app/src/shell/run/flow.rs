@@ -45,7 +45,10 @@ impl HangarApp {
             return Task::ready(Err(err));
         };
         self.track_workspace(id, cx);
-        let acquire = self.device_pool.update(cx, |pool, cx| pool.acquire(id, cx));
+        let acquire = self
+            .devices
+            .pool
+            .update(cx, |pool, cx| pool.acquire(id, cx));
         let store = self.store.clone();
         let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
         let root = workspace.worktree_path.clone();

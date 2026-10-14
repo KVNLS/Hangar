@@ -144,7 +144,7 @@ impl HangarApp {
             ),
         ];
         name.update(cx, |state, cx| state.focus(window, cx));
-        let last = self.device_pool.read(cx).last_target().cloned();
+        let last = self.devices.pool.read(cx).last_target().cloned();
         self.work.new_workspace = Some(NewWorkspaceSheet {
             project_id,
             name,
@@ -260,7 +260,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let settings_base = self.device_pool.read(cx).base(platform).map(str::to_owned);
+        let settings_base = self.devices.pool.read(cx).base(platform).map(str::to_owned);
         let Some(sheet) = &mut self.work.new_workspace else {
             return;
         };

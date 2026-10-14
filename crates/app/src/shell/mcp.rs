@@ -194,7 +194,7 @@ impl HangarApp {
     /// `HANGAR_DEVICE_*` (and `ANDROID_SERIAL`) for the workspace's assigned device, as far as it
     /// is known: an Android serial only exists once an instance has booted.
     fn device_env(&self, ws: WorkspaceId, cx: &App) -> Vec<(String, String)> {
-        let Some(assignment) = self.device_pool.read(cx).assignment(ws) else {
+        let Some(assignment) = self.devices.pool.read(cx).assignment(ws) else {
             return Vec::new();
         };
         let mut env = Vec::new();

@@ -110,7 +110,7 @@ impl HangarApp {
                 this.work.projects.upsert_workspace(workspace.clone());
                 this.track_workspace(id, cx);
                 if let Some(target) = target {
-                    this.device_pool.update(cx, |pool, cx| {
+                    this.devices.pool.update(cx, |pool, cx| {
                         pool.assign(id, target.platform, target.id, cx)
                     });
                 }

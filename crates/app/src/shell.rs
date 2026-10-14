@@ -185,13 +185,9 @@ pub struct HangarApp {
     store: Option<Arc<dyn Store>>,
     changes_panel: Entity<ChangesPanel>,
     files_panel: Entity<FilesPanel>,
-    /// Every workspace's device.
-    device_pool: Entity<DevicePool>,
+    devices: Devices,
     /// Serves the MCP device tools of `Hangar mcp-bridge`; `None` if the socket could not be bound.
     mcp: Option<crate::mcp_host::McpHandle>,
-    /// `HANGAR_DEV_DEVICE_LIMIT`, applied when the pool loads.
-    device_limit_override: Option<crate::device_pool::policy::Limit>,
-    device_panel: Entity<DevicePanel>,
     focus: FocusHandle,
     _activity: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -200,9 +196,7 @@ pub struct HangarApp {
     setup: setup::SetupState,
     live: LiveState,
     work: WorkState,
-    toast: Option<toast::Toast>,
     settings_ui: settings::SettingsUi,
-    attention: attention::Attention<WorkspaceId>,
 }
 
 fn workspace_ref(project: &Project, ws: &Workspace) -> WorkspaceRef {
@@ -270,7 +264,7 @@ impl HangarApp {
             return;
         };
         let r = workspace_ref(&entry.project, ws);
-        self.device_pool.update(cx, |pool, _| pool.track(r));
+        self.devices.pool.update(cx, |pool, _| pool.track(r));
     }
 
     /// Points the pool and the device panel at the focused pane's workspace.
@@ -283,10 +277,7 @@ impl HangarApp {
         if let Some(id) = focused {
             self.track_workspace(id, cx);
         }
-        self.device_pool
-            .update(cx, |pool, cx| pool.set_focused(focused, cx));
-        self.device_panel
-            .update(cx, |panel, cx| panel.set_workspace(focused, window, cx));
+        self.devices.focus(focused, window, cx);
     }
 }
 

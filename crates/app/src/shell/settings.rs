@@ -225,8 +225,9 @@ impl HangarApp {
         if tab == SettingsTab::Usage {
             self.load_usage(window, cx);
         }
-        if tab == SettingsTab::Devices && !self.device_panel.read(cx).picker().listed() {
-            self.device_panel
+        if tab == SettingsTab::Devices && !self.devices.panel.read(cx).picker().listed() {
+            self.devices
+                .panel
                 .update(cx, |panel, cx| panel.refresh(window, cx));
         }
         cx.notify();

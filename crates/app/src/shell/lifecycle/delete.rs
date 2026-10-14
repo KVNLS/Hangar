@@ -126,7 +126,7 @@ impl HangarApp {
                         this.work.projects.remove_workspace(workspace_id);
                         this.forget_chat(workspace_id);
                         let device = this
-                            .device_pool
+                            .devices.pool
                             .update(cx, |pool, cx| pool.delete(workspace_id, cx));
                         cx.spawn(async move |_, _| match device.await {
                             Ok(()) => tracing::info!(workspace = %workspace_id, "workspace device deleted"),
@@ -233,7 +233,7 @@ impl HangarApp {
                             // Its simulator clone and assignment go with it, as on delete.
                             let id = ws.id;
                             let deleted =
-                                this.device_pool.update(cx, |pool, cx| pool.delete(id, cx));
+                                this.devices.pool.update(cx, |pool, cx| pool.delete(id, cx));
                             cx.spawn(async move |_, _| {
                                 if let Err(err) = deleted.await {
                                     tracing::warn!(workspace = %id, "device not deleted: {err:#}");
