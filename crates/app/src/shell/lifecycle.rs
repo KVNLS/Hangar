@@ -589,6 +589,7 @@ impl HangarApp {
         tracing::info!(workspace = %workspace_id, session = %live.session.id, ?status, "session ended");
         live.session.status = status.clone();
         let session_id = live.session.id;
+        self.mark_asking(workspace_id, false, cx);
         self.withdraw_question(workspace_id, "the agent exited");
         cx.notify();
         let changes = self.diff_stat(workspace_id, cx);

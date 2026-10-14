@@ -497,8 +497,10 @@ Git access is the `git` CLI with porcelain output, not a library.
     a typed answer sends with ⌘⏎, esc keeps it for later. The call waits up to 30 min
     (`Timeouts.ask`); the question is withdrawn when the agent stops or the workspace closes; a lead hears
     when a child asks. Codex gets `tool_timeout_sec=1800` (its default is 60 s). `HANGAR_DEV_ANSWER`.
-    Live: Claude Code (structured) asked with two choices, choice 1 was picked, it created that file.
-    Not seen on screen (session locked): the sheet, banner and card. Other agents' MCP timeouts unchecked.
+    Live: Claude Code (structured) asked with two choices, choice 1 was picked, it created that file. Seen
+    on screen: the pane banner, the answer sheet (question, choice buttons, typed answer, Later / Send ⌘⏎),
+    Needs input in sidebar/tab/status bar, and the chat's "Waiting for your answer" line. Other agents'
+    MCP timeouts for a long wait are unchecked (only waits under a minute were tried).
   - **Terminal transcripts**: terminal Claude Code's hooks pass `transcript_path`, accepted only as a
     `.jsonl` under `~/.claude/projects` after resolving links (`mcp_host::accept_transcript`), parsed by
     `agents::claude_transcript` off the UI thread. Other terminal agents return their recent screen and
@@ -508,7 +510,8 @@ Git access is the `git` CLI with porcelain output, not a library.
     `Store::record_session_cost`) saved when an agent reports a new total; status bar "$X today"
     (`history::cost_today`: today's ended sessions + this run's, each once), Done-today rows show cost.
     Live: a turn's $0.25 was saved while running and kept after a relaunch closed the session. A session
-    started yesterday and still running counts fully today. Not seen on screen (session locked).
+    started yesterday and still running counts fully today. Seen on screen: "$0.27 live · $0.27 today",
+    and "$0.27 today" again after a relaunch; card chip "ctx 4% · $0.27".
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a

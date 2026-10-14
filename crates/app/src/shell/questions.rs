@@ -35,6 +35,17 @@ pub(super) fn question_line(text: &str) -> &str {
 }
 
 impl HangarApp {
+    /// Tells a structured agent's chat whether it waits on the user.
+    pub(super) fn mark_asking(&self, ws: WorkspaceId, asking: bool, cx: &mut Context<Self>) {
+        if let Some(LiveSession {
+            surface: AgentSurface::Chat { view, .. },
+            ..
+        }) = self.live.sessions.get(&ws)
+        {
+            view.update(cx, |chat, cx| chat.set_asking(asking, cx));
+        }
+    }
+
     /// A new question from `ws`'s agent. A question still open in that workspace is replaced.
     pub(super) fn on_question(
         &mut self,
@@ -80,6 +91,7 @@ impl HangarApp {
                 cx,
             );
         }
+        self.mark_asking(ws, true, cx);
         self.sync_attention(cx);
         cx.notify();
     }
@@ -111,6 +123,7 @@ impl HangarApp {
             return;
         };
         tracing::info!(workspace = %ws, choice = ?answer.choice, "user answered");
+        self.mark_asking(ws, false, cx);
         let _ = question.reply.send(Ok(answer));
         self.close_answer_sheet(window, cx);
         self.sync_attention(cx);

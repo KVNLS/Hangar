@@ -120,7 +120,9 @@ impl ChatView {
             .text_color(t.tx3)
             .child(Spinner::new().with_size(px(10.)).color(t.acc))
             // In a subagent's view esc goes back instead.
-            .child(if self.focus.is_some() {
+            .child(if self.asking {
+                "Waiting for your answer"
+            } else if self.focus.is_some() {
                 "Working…"
             } else {
                 "Working · esc to interrupt"
