@@ -113,6 +113,8 @@ pub(super) struct SettingsUi {
     /// "Max concurrent agents" (see `queue.rs`).
     pub(super) max_agents: Entity<InputState>,
     _max_agents_sub: Subscription,
+    /// The settings page's scroll position.
+    pub(super) scroll: ScrollHandle,
 }
 
 impl SettingsUi {
@@ -130,6 +132,7 @@ impl SettingsUi {
                 approval_started: Cell::new(false),
                 max_agents,
                 _max_agents_sub: max_agents_sub,
+                scroll: ScrollHandle::new(),
             },
             sub,
         )
@@ -1155,6 +1158,7 @@ impl HangarApp {
                     .min_w_0()
                     .h_full()
                     .overflow_y_scroll()
+                    .track_scroll(&self.settings_ui.scroll)
                     .bg(t.app)
                     .child(div().max_w(px(820.)).px_10().py_7().child(page)),
             )

@@ -747,7 +747,9 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
             "workspace" | "device" => (Screen::Workspace, None),
             "review" | "review-inline" => (Screen::Review, None),
             "overview" | "compare" => (Screen::Overview, None),
-            "settings" | "settings-agents" => settings(SettingsTab::Agents),
+            "settings" | "settings-agents" | "settings-permissions" => {
+                settings(SettingsTab::Agents)
+            }
             "settings-devices" => settings(SettingsTab::Devices),
             "settings-appearance" => settings(SettingsTab::Appearance),
             "settings-keybindings" => settings(SettingsTab::Keybindings),
@@ -770,6 +772,14 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
                 Some(project) => this.open_new_workspace(project, window, cx),
                 None => tracing::error!("HANGAR_DEV_SHOW sheet: no project"),
             },
+            // Permissions sit at the bottom of the Agents page; the page is laid out next frame.
+            "settings-permissions" => {
+                let scroll = this.settings_ui.scroll.clone();
+                cx.on_next_frame(window, move |_, _, cx| {
+                    scroll.scroll_to_bottom();
+                    cx.notify();
+                });
+            }
             "compare" => match this.focused_workspace().and_then(|(_, ws)| ws.group) {
                 Some(group) => this.open_compare(group, window, cx),
                 None => tracing::error!("HANGAR_DEV_SHOW compare: the workspace has no attempts"),

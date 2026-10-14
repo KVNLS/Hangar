@@ -469,8 +469,9 @@ Git access is the `git` CLI with porcelain output, not a library.
     children (in-flight creates count); worktree creation is serialized. Creates and prompts show as a notice
     in a structured lead's chat or a toast for a terminal lead; children's overview cards show "↳ <lead>".
     Live (scratch repo, Claude Code structured as lead, Full auto): `workspace_create` made a shell child
-    with `parent_id` set and the child ran its task. Not seen on screen (the session was locked): the
-    Settings switch, the chat notices, the "↳" line, `workspaces_list` output.
+    with `parent_id` set and the child ran its task. Seen on screen: the "Created workspace “…” with Shell"
+    notice and the `workspaces_list` card (task, branch, agent, state, +1/−0, queued) in the lead's chat,
+    "↳ lead" on the child's card, the Settings switch (`HANGAR_DEV_SHOW=settings-permissions` scrolls there).
   - **Usage and cost**: ACP `usage_update` `{used, size, cost?}` parsed into `SessionUpdate::Usage` and
     folded into `acp::usage::SessionUsage`; cost is the agent's running session total (a drop is treated as
     a restart and the earlier total is kept). Overview cards and the composer show "ctx 4% · $0.27", the
@@ -490,7 +491,7 @@ Git access is the `git` CLI with porcelain output, not a library.
     operations, so a streaming chunk remeasures one row. Seen on screen with a 40-line reply and a tool call.
     Known limit: a cross-message selection drops the parts scrolled well off screen (gpui-component sweeps
     unpainted selection participants).
-- Next: an on-screen pass of the orchestration UI; `ask_user`; persisting cost per day.
+- Next: `ask_user`; persisting cost per day; merge `orchestration-core` into main.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a
