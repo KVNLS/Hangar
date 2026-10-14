@@ -1152,7 +1152,8 @@ mod tests {
         let layout = PaneLayout {
             panes: vec![Some(WorkspaceId::new()), None],
             focused: 1,
-            split: Some(0.4),
+            sizes: vec![0.4, 0.6],
+            split: None,
         };
         save_layout(&f.store, &layout).unwrap();
         save_agent(&f.store, "codex").unwrap();

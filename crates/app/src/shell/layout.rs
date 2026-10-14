@@ -4,7 +4,7 @@ use super::*;
 
 impl HangarApp {
     pub(super) fn save_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let layout = self.panes.layout(self.split);
+        let layout = self.panes.layout(&self.pane_shares);
         self.persist(window, cx, move |store| ops::save_layout(store, &layout));
     }
 
@@ -23,7 +23,7 @@ impl HangarApp {
         let busy = &self.busy;
         self.diffs
             .retain(|id, _| projects.is_active(*id) && !busy.contains(id));
-        for pane in 0..PANE_COUNT {
+        for pane in 0..self.panes.count() {
             let Some(id) = self.panes.slot(pane) else {
                 continue;
             };
@@ -286,7 +286,7 @@ impl HangarApp {
         }));
     }
 
-    /// Shows the saved workspaces (without starting agents) and re-applies the split once the
+    /// Shows the saved workspaces (without starting agents) and re-applies their widths once the
     /// pane group has been laid out.
     pub(super) fn restore_layout(
         &mut self,
@@ -295,22 +295,107 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         let projects = &self.projects;
-        self.panes = Panes::from_layout(layout, |id| projects.is_active(id));
-        self.split = sanitize_split(layout.split);
-        let Some(split) = self.split else {
+        let (panes, shares) = layout.restore(|id| projects.is_active(id));
+        self.panes = panes;
+        self.pane_shares = shares;
+        self.apply_pane_shares(window, cx);
+    }
+
+    /// Splits the focused pane in two; the new, empty pane on its right gets focus and half its
+    /// width.
+    pub(super) fn split_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut shares = self.current_shares();
+        let Some(pane) = self.panes.split() else {
+            tracing::info!("not splitting: {MAX_PANES} panes already");
             return;
         };
-        cx.spawn_in(window, async move |this, cx| {
+        let half = shares[pane - 1] / 2.;
+        shares[pane - 1] = half;
+        shares.insert(pane, half);
+        self.pane_shares = shares;
+        self.focus_terminal(window, cx);
+        self.panes_changed(window, cx);
+        self.apply_pane_shares(window, cx);
+        cx.notify();
+    }
+
+    /// Closes a pane; its workspace keeps running and can be shown again from the sidebar. Its
+    /// width goes to its neighbours.
+    pub(super) fn close_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let mut shares = self.current_shares();
+        if !self.panes.close(pane) {
+            return;
+        }
+        shares.remove(pane);
+        self.pane_shares = sanitize_shares(&shares, self.panes.count());
+        self.focus_terminal(window, cx);
+        self.panes_changed(window, cx);
+        self.apply_pane_shares(window, cx);
+        cx.notify();
+    }
+
+    /// The pane group's resizable state, saving the panes' shares whenever the user resizes them.
+    pub(super) fn new_pane_sizes(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<ResizableState>, Subscription) {
+        let pane_sizes = cx.new(|_| ResizableState::default());
+        let sub = cx.subscribe_in(
+            &pane_sizes,
+            window,
+            |this, sizes, _: &ResizablePanelEvent, window, cx| {
+                let sizes = sizes.read(cx);
+                let widths: Vec<f32> = sizes.sizes().iter().map(|s| s.as_f32()).collect();
+                let shares = pane_shares(&widths, sizes.container_size().as_f32());
+                if shares.len() == this.panes.count() {
+                    this.pane_shares = shares;
+                    this.save_layout(window, cx);
+                }
+            },
+        );
+        (pane_sizes, sub)
+    }
+
+    /// The panes' width shares, equal when none were set.
+    fn current_shares(&self) -> Vec<f32> {
+        let count = self.panes.count();
+        if self.pane_shares.len() == count {
+            self.pane_shares.clone()
+        } else {
+            vec![1. / count as f32; count]
+        }
+    }
+
+    /// Resizes the pane group to the current shares once it has as many panels as panes and they
+    /// fill its width (new panels are only measured on the next layout).
+    fn apply_pane_shares(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The group state pins the sizes it measured and appends or truncates panels when the
+        // count changes, so its old sizes never fit again: start from fresh, evenly laid out panels.
+        let (sizes, sub) = Self::new_pane_sizes(window, cx);
+        self.pane_sizes = sizes;
+        self._pane_sizes_sub = sub;
+        let count = self.panes.count();
+        if count < 2 {
+            return;
+        }
+        let shares = self.current_shares();
+        self.apply_shares = Some(cx.spawn_in(window, async move |this, cx| {
             for _ in 0..40 {
                 let applied = this
                     .update_in(cx, |this, window, cx| {
                         this.pane_sizes.update(cx, |sizes, cx| {
-                            let total = sizes.container_size();
-                            if sizes.sizes().len() < PANE_COUNT || total.as_f32() <= 0. {
+                            let total = sizes.container_size().as_f32();
+                            let laid_out: f32 = sizes.sizes().iter().map(|s| s.as_f32()).sum();
+                            if sizes.sizes().len() != count
+                                || total <= 0.
+                                || (laid_out - total).abs() > 1.
+                            {
                                 return false;
                             }
-                            sizes.resize_panel(0, total * split, window, cx);
-                            tracing::debug!(split, sizes = ?sizes.sizes(), "pane split restored");
+                            for (ix, share) in shares.iter().enumerate().take(count - 1) {
+                                sizes.resize_panel(ix, px(total * share), window, cx);
+                            }
+                            tracing::debug!(?shares, sizes = ?sizes.sizes(), "pane widths applied");
                             true
                         })
                     })
@@ -322,8 +407,7 @@ impl HangarApp {
                     .timer(Duration::from_millis(50))
                     .await;
             }
-            tracing::warn!("pane split not restored: panes were never laid out");
-        })
-        .detach();
+            tracing::warn!("pane widths not applied: panes were never laid out");
+        }));
     }
 }
