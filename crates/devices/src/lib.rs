@@ -106,7 +106,7 @@ pub trait Device: Send + Sync {
 
     /// Rotates the device and returns once the guest reports the new orientation. Frames and the
     /// space of [`Input`] follow it. Unsupported on iOS (no public or reverse-engineered route
-    /// works on Xcode 27, see spikes/m5-ios-notes.md).
+    /// works on Xcode 27, see docs/notes/m5-ios-notes.md).
     fn set_orientation(&self, _orientation: Orientation) -> Result<()> {
         Err(Error::Unsupported("set_orientation"))
     }

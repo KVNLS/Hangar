@@ -18,7 +18,7 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   dropped, `split` → shares).
 - M3 headless: unified diff parser + `diff_files`/`diff_file` (incl. untracked, renames, binary, truncation),
   `check_ignored`; `hangar-files` Watcher (150 ms debounce) + LiveDiff (incremental status).
-  Write → DiffUpdate ~220–245 ms p50 (see spikes/m3-files-notes.md).
+  Write → DiffUpdate ~220–245 ms p50 (see docs/notes/m3-files-notes.md).
 
 - M3 UI: per-workspace changes panel (file list + virtualized diff view, Swift/Kotlin/TS/... highlighting via
   gpui-component tree-sitter features), sidebar change badges, panel state persisted; LiveDiff started lazily,
@@ -30,11 +30,11 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 
 - M5 headless (iOS): `simctl::list_all`, `ios::boot/shutdown`, `Device::{boot,shutdown,install,launch}` on both
   backends, private-backend `Lock`/`VolumeUp`/`VolumeDown` and `send_text` through Indigo HID
-  (../spikes/m5-ios-notes.md).
+  (notes/m5-ios-notes.md).
 
 - M4 Android: SDK discovery, headless emulator boot/shutdown, gRPC frames/input (adb fallback), device panel
   with Boot/Shutdown, Back/Home/Apps/Power/Volume, keyboard text + `Input::Key`, rotation with landscape-aware
-  input (../spikes/m4-android-notes.md).
+  input (notes/m4-android-notes.md).
 - M4 leftovers (2026-10-05): running emulators keyed by AVD id in the picker (saved selection survives
   reboots; a booted AVD opens without reselecting), boot stage + elapsed time while booting, stylus
   handwriting turned off on emulators Hangar boots (the emulator touchscreen reports stylus support, so
@@ -44,7 +44,7 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - M5 panel: iOS boot/shutdown from the panel (all simulators listed, booted first), Home/Lock/Volume, keyboard
   text + keys. Rotation not available on iOS (Xcode 27).
 - Device logs: `Device::logs` stream (adb logcat, simctl log stream) and a logs pane in the device panel
-  (../spikes/device-logs-notes.md).
+  (notes/device-logs-notes.md).
 
 ## M6 run loop (first cut)
 - `hangar-runner`: `detect` (Expo, React Native, Xcode, Gradle at the root, `ios/`, `android/`; Flutter dropped
@@ -54,7 +54,7 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - App: Run (⌘R, pane tab bar, palette) builds the focused workspace for the device open in the panel; Stop
   (⌘.), Restart dev server (palette). Build, install and dev-server terminals are tabs next to the agent;
   native builds install and launch through the device; the status bar shows the run state.
-- Live: Xcode on the simulator, Gradle on the emulator, Expo on the simulator (../spikes/m6-run-notes.md).
+- Live: Xcode on the simulator, Gradle on the emulator, Expo on the simulator (notes/m6-run-notes.md).
   React Native CLI is unit-tested only.
 - Gaps: several Xcode schemes need a
   saved choice but there is no picker yet (the error lists them); no parsed build progress or crash overlay;
@@ -154,7 +154,7 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
   stopping a turn is esc or the Stop button. Transcript virtualization: see M9.
-- Live (2026-10-05, scratch repo, spikes/m7-acp-notes.md): streaming, tool cards, three permission prompts
+- Live (2026-10-05, scratch repo, docs/notes/m7-acp-notes.md): streaming, tool cards, three permission prompts
   (Approval in the sidebar, ⏎ approves), `device_info` over the MCP bridge, an edit → Review `+1 −0`, esc
   stops a streaming turn, quitting leaves no agent process. `claude-agent-acp` puts the MCP session secret in
   its `claude` child's argv (visible to the same user in `ps`).
@@ -408,7 +408,7 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
     folded into `acp::usage::SessionUsage`; cost is the agent's running session total (a drop is treated as
     a restart and the earlier total is kept). Overview cards and the composer show "ctx 4% · $0.27", the
     status bar "$X live" summed over running structured agents. Claude Code and OpenCode report cost, Codex
-    context only, Gemini nothing (shapes in spikes/m7-acp-notes.md). Seen on screen with Claude Code.
+    context only, Gemini nothing (shapes in docs/notes/m7-acp-notes.md). Seen on screen with Claude Code.
     Not done: per-turn `PromptResponse.usage`, cost across restarts or per day, PTY agents.
   - **Session history**: sessions record their first prompt and the workspace diff when they end, stop or
     are archived (schema v6: `sessions.prompt/files/insertions/deletions`; `Store::finish_session`,
@@ -584,3 +584,22 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   release notes give the right-click › Open / `xattr` workaround. arm64 only.
 - Checked: `codesign --verify --deep --strict` passes; the app copied out of the mounted DMG launches through
   Launch Services. Fonts and icons are embedded, and Finder launches get the login-shell PATH (`login_env`).
+
+
+## Resolved questions (moved from PLAN.md, 2026-10-14)
+2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (docs/notes/spike-b-notes.md).
+   Keep `sim_probe` to re-check each Xcode release.
+3. ~~Frame transport into GPUI~~ — resolved (2026-10-08, branch `zero-copy-frames`): the private iOS backend
+   publishes the simulator's framebuffer IOSurface itself (`FramePixels::Live`), and `device_view` paints it
+   through a `CVPixelBuffer` with `paint_surface`. No CPU copy, no atlas upload. GPUI's renderer only drew NV12
+   surfaces, so `third_party/gpui-pre-apple` carries a port of zed PR #61291 (BGRA surfaces, linear sampling)
+   until our gpui-component pin ships it (see its `HANGAR_PATCH.md`). Screenshots, PNGs and dev-hook diffs
+   snapshot the surface on demand. Measured (debug build, same app-switching workload): Hangar CPU 35% → 23%
+   of a core, capture→paint about 9 ms → 7 ms. Rejected: VideoToolbox BGRA→NV12 (extra GPU pass, 4:2:0 chroma
+   blurs text colour); a native `CALayer` showing the IOSurface (sits above GPUI's Metal layer, so popovers and
+   menus would draw under it). simctl and Android frames still go through `RenderImage` (one decode copy plus
+   the atlas upload); gRPC frames could later be written into an IOSurface-backed buffer.
+5. ~~Per-worktree ports for Metro/Expo~~ — resolved (M6): 8100–8199 per workspace, saved in `settings`, must bind
+   on localhost; passed as `--port` and `RCT_METRO_PORT`, `adb reverse` on Android (docs/notes/m6-run-notes.md).
+10. ~~Agent choice per workspace~~ — resolved (owner, 2026-10-08): each workspace remembers the agent it
+    last started (`workspace_agent:<id>`); the sidebar picker is only the default for new workspaces.

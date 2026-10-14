@@ -57,7 +57,7 @@ output, not a library.
   - Done when: ARCHITECTURE "Done when" all ticked, the checklist seen, a signed .app runs on a clean user.
 
 ## Status
-- [x] M1 Spike A — PTY terminal; Spike B — iOS simulator, private backend; simctl view-only (SPIKES.md)
+- [x] M1 Spike A — PTY terminal; Spike B — iOS simulator, private backend; simctl view-only (docs/notes/spike-b-notes.md)
 - [x] M2 (first cut) — store, worktrees, sidebar, panes
 - [x] M3 Live changes & review
 - [x] M4 Android device panel — run live 2026-10-05
@@ -73,37 +73,22 @@ output, not a library.
 What each milestone shipped and how it was checked: docs/HISTORY.md.
 
 ## Open questions
+Numbers are stable; resolved questions moved to docs/HISTORY.md ("Resolved questions").
 1. Where do worktrees live? Current default `~/Library/Application Support/Hangar/worktrees/<project>/<slug>`
    (only in `hangar-app::paths::worktrees_root`) vs `<repo>/../.hangar-worktrees/<slug>`.
-2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (SPIKES.md).
-   Keep `sim_probe` to re-check each Xcode release.
-3. ~~Frame transport into GPUI~~ — resolved (2026-10-08, branch `zero-copy-frames`): the private iOS backend
-   publishes the simulator's framebuffer IOSurface itself (`FramePixels::Live`), and `device_view` paints it
-   through a `CVPixelBuffer` with `paint_surface`. No CPU copy, no atlas upload. GPUI's renderer only drew NV12
-   surfaces, so `third_party/gpui-pre-apple` carries a port of zed PR #61291 (BGRA surfaces, linear sampling)
-   until our gpui-component pin ships it (see its `HANGAR_PATCH.md`). Screenshots, PNGs and dev-hook diffs
-   snapshot the surface on demand. Measured (debug build, same app-switching workload): Hangar CPU 35% → 23%
-   of a core, capture→paint about 9 ms → 7 ms. Rejected: VideoToolbox BGRA→NV12 (extra GPU pass, 4:2:0 chroma
-   blurs text colour); a native `CALayer` showing the IOSurface (sits above GPUI's Metal layer, so popovers and
-   menus would draw under it). simctl and Android frames still go through `RenderImage` (one decode copy plus
-   the atlas upload); gRPC frames could later be written into an IOSurface-backed buffer.
 4. Android frames: emulator gRPC console vs scrcpy protocol.
-5. ~~Per-worktree ports for Metro/Expo~~ — resolved (M6): 8100–8199 per workspace, saved in `settings`, must bind
-   on localhost; passed as `--port` and `RCT_METRO_PORT`, `adb reverse` on Android (spikes/m6-run-notes.md).
 6. Distribution: signing/notarisation implications of loading Xcode private frameworks.
 7. Terminal keys: what Shift-Enter sends (`\r`, `ESC \r`, kitty protocol); Option-as-Meta default.
 8. simctl fallback has no tap on Xcode 27 (no Simulator.app, needs Accessibility, moves the real pointer):
    ship it as view-only?
 9. Login PATH: `$SHELL -l -c` misses PATH set only in `.zshrc` (nvm, etc.); `-i -l` catches it but runs
    interactive startup scripts.
-10. ~~Agent choice per workspace~~ — resolved (owner, 2026-10-08): each workspace remembers the agent it
-    last started (`workspace_agent:<id>`); the sidebar picker is only the default for new workspaces.
 
 ## Explicitly unimplemented (return `Unsupported`)
 - `mcp` orchestration: `notifications/tools/list_changed` when the setting changes (agents see it on their
   next `tools/list` or in a new session).
-- `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
-  Android rotation needs a sensor-following foreground app and upside-down is usually refused (spikes/m4-android-notes.md);
+- `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see docs/notes/m5-ios-notes.md);
+  Android rotation needs a sensor-following foreground app and upside-down is usually refused (docs/notes/m4-android-notes.md);
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
   `Lock`/volume buttons (private backend only); iOS `AppSwitch`/`Back`; text beyond printable ASCII +
   `\n`/`\t` on the private backend.
@@ -128,7 +113,7 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   Claude Code.
 
 ## Known gaps
-- **QA sweep 2026-10, not fixed yet** (reports in the owner's notes, `qa-2026-10/`):
+- **QA sweep 2026-10, not fixed yet** (reports kept outside the repo, in the owner's notes):
   - Workspaces: a linked worktree can be added as its own project; delete stops the agent before
     checking the worktree can go; best-of-N has no rollback.
   - Review: submodule edits, mode-only and CRLF changes are shown poorly.
@@ -139,7 +124,7 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   - UI: the Keybindings page misses context-scoped bindings (terminal ⌘C/⌘A, chat esc, ⌘⏎).
   - Persistence: a read-only database has no read-only mode (move aside, continue without saving or quit);
     git version/identity probes have no deadline.
-- **Devices:** simctl and Android frames still copied into the atlas (question 3); log lines from several
+- **Devices:** simctl and Android frames still copied into the atlas (PLAN question 3 in docs/HISTORY.md); log lines from several
   processes can arrive a few ms out of order; logs: no multi-line merging, level filter client-side (low lines still fill the ring buffer),
   follow-tail ignores scrollbar drags (no scrollbar); emulators started outside Hangar keep Gboard's stylus
   sheet; iOS `logs` tool only returns a ~1.5 s capture; `AvdCost` can understate RAM; no queue position in

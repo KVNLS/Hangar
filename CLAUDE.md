@@ -1,7 +1,7 @@
 # Hangar — working notes for Claude
 
 See PLAN.md for the roadmap and known gaps, docs/ARCHITECTURE.md for architecture, docs/HISTORY.md for what
-shipped, SPIKES.md for spike results.
+shipped, docs/notes/ for spike results and per-milestone engineering notes.
 
 ## Commands
 - Build: `cargo build --workspace`
@@ -52,7 +52,7 @@ shipped, SPIKES.md for spike results.
   gpui-component, portable-pty, alacritty_terminal, notify, tree-sitter, tokio, thiserror, anyhow, rusqlite,
   serde, serde_json, uuid, tracing, tracing-subscriber, tempfile (dev), objc2 family, block2, libc, image,
   notify-rust.
-- Do not copy code from Zed's GPL crates, idb, SimView or baguette; learn from them and credit in SPIKES.md.
+- Do not copy code from Zed's GPL crates, idb, SimView or baguette; learn from them and credit in CREDITS.md.
 - Code, comments, logs and UI copy in English. Minimal comments: only the non-obvious why.
 - File layout: modules as `foo.rs` next to `foo/` (no `mod.rs`). Unit tests start inline in
   `#[cfg(test)] mod tests`; past about 150 lines (or 100 and longer than the code) they move to

@@ -371,7 +371,7 @@ impl Device for GrpcEmulator {
     /// Turns the emulator's virtual sensor (`setPhysicalModel(ROTATION)`) with auto-rotate on, so
     /// the guest rotates and the emulator hands out upright landscape frames and maps touches
     /// itself. The adb `user_rotation` lock would rotate the guest but leave `streamScreenshot`
-    /// in panel space (sideways content, no rotation info), see spikes/m4-android-notes.md.
+    /// in panel space (sideways content, no rotation info), see docs/notes/m4-android-notes.md.
     /// Apps that ignore the sensor (the Pixel launcher) stay portrait: an error after 5 s.
     fn set_orientation(&self, orientation: Orientation) -> Result<()> {
         let adb = super::adb::Adb::new(self.sdk.adb.clone());

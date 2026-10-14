@@ -188,7 +188,7 @@ HANGAR_DEV_OPEN=~/code/my-app HANGAR_DEV_AGENT=claude-acp HANGAR_DEV_INPUT="Fix 
 cargo run -p hangar-app
 ```
 
-[SPIKES.md](SPIKES.md) holds the terminal and simulator spikes (runnable from `examples/`).
+The terminal and simulator spikes are runnable from `examples/`; their results are in [docs/notes/](docs/notes/).
 
 ## Status
 
@@ -203,4 +203,4 @@ Built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [gpui-component](https://github.com/longbridge/gpui-component), with
 [alacritty_terminal](https://github.com/alacritty/alacritty) and
 [portable-pty](https://github.com/wezterm/wezterm/tree/main/pty). The simulator work learned from
-baguette, SimView and [idb](https://github.com/facebook/idb) (no code copied; see [SPIKES.md](SPIKES.md)).
+baguette, SimView and [idb](https://github.com/facebook/idb) (no code copied; see [CREDITS.md](CREDITS.md)).

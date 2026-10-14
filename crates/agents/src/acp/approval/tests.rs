@@ -6,7 +6,7 @@ fn ids(level: ApprovalLevel, modes: &[SessionMode]) -> Option<&str> {
     level.mode(modes).map(|m| m.id.as_str())
 }
 
-/// `session/new` results recorded from the agents (spikes/m7-acp-notes.md).
+/// `session/new` results recorded from the agents (docs/notes/m7-acp-notes.md).
 fn claude() -> Vec<SessionMode> {
     parse_modes(&json!({"modes": {"currentModeId": "default", "availableModes": [
         {"id": "default", "name": "Manual", "description": "Always ask before making changes"},
