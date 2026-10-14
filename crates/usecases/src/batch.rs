@@ -106,7 +106,7 @@ pub fn plan(request: &BatchRequest) -> Result<Vec<Planned>, BatchError> {
 }
 
 /// A workspace name from a task line: cut at a word boundary near [`LINE_NAME_CHARS`].
-fn name_from_line(line: &str) -> String {
+pub fn name_from_line(line: &str) -> String {
     if line.chars().count() <= LINE_NAME_CHARS {
         return line.to_owned();
     }

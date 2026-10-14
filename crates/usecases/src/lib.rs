@@ -7,6 +7,7 @@ pub mod batch;
 #[cfg(test)]
 mod fakes;
 pub mod history;
+pub mod orchestration;
 pub mod review;
 pub mod sessions;
 pub mod settings;
