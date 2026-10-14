@@ -498,7 +498,7 @@ impl HangarApp {
         });
     }
 
-    /// The agent to start in `workspace_id`: the one it last ran, else the picker's.
+    /// The agent to start in `workspace_id`: the one it last ran, else the default (Settings › Agents).
     pub(super) fn agent_for(&self, workspace_id: WorkspaceId) -> String {
         self.live
             .workspace_agents

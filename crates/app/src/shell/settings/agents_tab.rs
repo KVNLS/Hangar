@@ -125,10 +125,6 @@ impl HangarApp {
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.agent_setup.agent = id.clone();
                                     this.agent_setup.agent_chosen_by_user = true;
-                                    let agent = this.agent_setup.agent.clone();
-                                    this.agent_setup.agent_select.update(cx, |select, cx| {
-                                        select.set_selected_value(&agent, window, cx)
-                                    });
                                     this.save_agent(window, cx);
                                     cx.notify();
                                 })),
