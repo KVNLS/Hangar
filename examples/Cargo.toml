@@ -1,0 +1,17 @@
+[package]
+name = "hangar-examples"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+gpui-kit.workspace = true
+hangar-app.workspace = true
+hangar-terminal.workspace = true
+hangar-devices.workspace = true
+
+[lints]
+workspace = true

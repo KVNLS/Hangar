@@ -1,0 +1,23 @@
+[package]
+name = "hangar-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "hangar"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+hangar-core.workspace = true
+hangar-worktree.workspace = true
+hangar-agents.workspace = true
+hangar-terminal.workspace = true
+hangar-files.workspace = true
+hangar-devices.workspace = true
+
+[lints]
+workspace = true

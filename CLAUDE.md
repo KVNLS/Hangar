@@ -13,7 +13,7 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 
 ## Toolchain
 - Rust 1.99.0 pinned in `rust-toolchain.toml`, edition 2024, one Cargo workspace.
-- GPUI via gpui-component pinned to git rev `0c830f4d257e69fdd17200650533ab4ca9a40cc0` (v0.7.0), which uses
+- GPUI via the `gpui-kit` umbrella crate (gpui-component repo, re-exports gpui + gpui-component + platform) pinned to git rev `0c830f4d257e69fdd17200650533ab4ca9a40cc0` (v0.7.0), which uses
   `gpui-pre =0.3.7`. Bump both together and re-check examples. Read the pinned GPUI / gpui-component source
   (`~/.cargo/registry`, `~/.cargo/git`) before writing UI code; do not rely on memory for its API.
 
