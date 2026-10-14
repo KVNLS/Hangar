@@ -18,7 +18,7 @@ impl HangarApp {
         let changes = self.diff_stat(workspace_id, cx);
         let (session, _) = self.close_session(workspace_id);
         self.close_run(workspace_id);
-        self.close_mcp(workspace_id, cx);
+        self.close_mcp(workspace_id);
         self.work
             .projects
             .set_status(workspace_id, WorkspaceStatus::Archived);

@@ -251,16 +251,12 @@ impl HangarApp {
     }
 
     /// Forgets the workspace's MCP session and its Gemini config file (archive, delete).
-    pub(super) fn close_mcp(&self, id: WorkspaceId, cx: &App) {
+    pub(super) fn close_mcp(&self, id: WorkspaceId) {
         if let Some(mcp) = &self.mcp {
             mcp.unregister(id);
         }
         if let Some(dir) = paths::mcp_config_dir() {
-            cx.background_executor()
-                .spawn(async move {
-                    let _ = std::fs::remove_file(dir.join(format!("{id}.gemini.json")));
-                })
-                .detach();
+            let _ = std::fs::remove_file(dir.join(format!("{id}.gemini.json")));
         }
     }
 }
