@@ -107,6 +107,7 @@ impl AcpAdapter {
             .process_group(0);
         let mut child = command.spawn()?;
         let pid = child.id();
+        spawn_watchdog(std::process::id(), pid);
         let (Some(stdin), Some(stdout), Some(stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
@@ -442,6 +443,41 @@ impl std::fmt::Debug for AcpSession {
     }
 }
 
+/// Starts a watchdog in the agent's process group: if `owner` (Hangar) dies without stopping
+/// the agent (crash, SIGKILL), it signals the whole group, since some agents (codex-acp) do not
+/// exit on a closed stdin. It leaves quietly once the agent is gone, and a normal stop
+/// ([`AcpSession::kill`]) takes it down with the group.
+fn spawn_watchdog(owner: u32, agent: u32) {
+    let script = format!(
+        "while kill -0 {owner} 2>/dev/null && kill -0 {agent} 2>/dev/null; do sleep 2; done; \
+         kill -0 {agent} 2>/dev/null || exit 0; kill -TERM 0; sleep 3; kill -KILL 0"
+    );
+    let Ok(group) = i32::try_from(agent) else {
+        return;
+    };
+    let spawned = Command::new("/bin/sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(group)
+        .spawn();
+    match spawned {
+        Ok(mut watchdog) => {
+            // Reaped when it ends, so it never lingers as a zombie.
+            let reaper = std::thread::Builder::new()
+                .name("acp-watchdog".into())
+                .spawn(move || {
+                    let _ = watchdog.wait();
+                });
+            if let Err(e) = reaper {
+                tracing::warn!("acp: watchdog reaper not started: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("acp: no watchdog for agent {agent}: {e}"),
+    }
+}
+
 fn collect_stderr(mut stderr: impl Read, tail: &Mutex<VecDeque<u8>>, agent: &str) {
     let mut buf = [0u8; 4096];
     loop {
@@ -573,6 +609,49 @@ mod tests {
             .collect();
         assert_eq!(current, [("model", "big"), ("effort", "high")]);
         session.kill();
+    }
+
+    #[test]
+    fn watchdog_stops_the_agent_group_when_the_owner_dies() {
+        // A stand-in for Hangar that dies after a second, and an "agent" in its own group that
+        // would run for a minute.
+        let mut owner = Command::new("/bin/sleep").arg("1").spawn().expect("owner");
+        let mut agent = Command::new("/bin/sleep")
+            .arg("60")
+            .process_group(0)
+            .spawn()
+            .expect("agent");
+        spawn_watchdog(owner.id(), agent.id());
+        owner.wait().expect("owner exits");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if agent.try_wait().expect("try_wait").is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the agent outlived its owner"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    #[test]
+    fn watchdog_leaves_when_the_agent_exits() {
+        let mut agent = Command::new("/bin/sleep")
+            .arg("1")
+            .process_group(0)
+            .spawn()
+            .expect("agent");
+        let group = agent.id();
+        spawn_watchdog(std::process::id(), group);
+        agent.wait().expect("agent exits");
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        // SAFETY: signal 0 only checks whether the group still has a process.
+        while unsafe { libc::killpg(group as libc::pid_t, 0) } == 0 {
+            assert!(std::time::Instant::now() < deadline, "the watchdog lingers");
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     #[test]

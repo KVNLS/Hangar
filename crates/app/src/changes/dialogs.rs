@@ -194,6 +194,8 @@ pub(super) struct MergeDialog {
     title: String,
     /// Uncommitted files in the workspace (not part of the merge).
     uncommitted: usize,
+    /// Push the base branch once merged (off by default: it publishes to a shared branch).
+    push_base: bool,
     running: bool,
     error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
@@ -228,6 +230,7 @@ impl MergeDialog {
             message,
             title,
             uncommitted,
+            push_base: false,
             running: false,
             error: None,
             _subscriptions: subscriptions,
@@ -278,6 +281,8 @@ impl MergeDialog {
         self.error = None;
         cx.notify();
         let base = self.target.base_branch();
+        let push_base = self.push_base;
+        let panel = self.panel.clone();
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -294,6 +299,11 @@ impl MergeDialog {
                             .title("Merge"),
                             cx,
                         );
+                        if push_base {
+                            let _ = panel.update(cx, |panel, cx| {
+                                panel.push_merged_base(workspace, outcome.worktree, window, cx)
+                            });
+                        }
                     }
                     Err(err) => {
                         if review::is_merge_refusal(&err) {
@@ -356,9 +366,19 @@ impl Render for MergeDialog {
             )
             .child(field_label(
                 "Runs where the base branch is checked out; it must be clean. Nothing is \
-                 checked out or pushed for you.",
+                 checked out for you.",
                 cx,
             ))
+            .child(
+                Checkbox::new("merge-push-base")
+                    .label(format!("Push {base} afterwards"))
+                    .checked(self.push_base)
+                    .disabled(self.running)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.push_base = *checked;
+                        cx.notify();
+                    })),
+            )
             .when(self.uncommitted > 0, |this| {
                 this.child(div().text_color(cx.theme().warning).child(format!(
                     "{} uncommitted file(s) in this workspace will not be merged.",

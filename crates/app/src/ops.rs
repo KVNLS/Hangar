@@ -231,11 +231,39 @@ pub fn create_workspace(
     name: &str,
     worktrees_root: &Path,
 ) -> anyhow::Result<Workspace> {
+    create_workspace_from(store, project, name, worktrees_root, None, None)
+}
+
+/// As [`create_workspace`], starting from `base` (default: the project's default base) on a
+/// branch named `branch` (default: `hangar/<slug>`, suffixed until free). A given branch name is
+/// used as is and must not exist yet.
+pub fn create_workspace_from(
+    store: &Store,
+    project: &Project,
+    name: &str,
+    worktrees_root: &Path,
+    base: Option<&str>,
+    branch: Option<&str>,
+) -> anyhow::Result<Workspace> {
     let name = name.trim();
     if name.is_empty() {
         return Err(anyhow!("workspace name is empty"));
     }
     let repo = &project.repo_path;
+    let base = base
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .unwrap_or(&project.default_base)
+        .to_owned();
+    let chosen = branch.map(str::trim).filter(|b| !b.is_empty());
+    if let Some(chosen) = chosen {
+        if !hangar_worktree::is_valid_branch_name(repo, chosen)? {
+            return Err(anyhow!("`{chosen}` is not a valid branch name"));
+        }
+        if hangar_worktree::branch_exists(repo, chosen)? {
+            return Err(anyhow!("branch `{chosen}` already exists"));
+        }
+    }
     let project_slug = slugify(&project.name);
     let existing: Vec<String> = store
         .list_workspaces(project.id)?
@@ -249,6 +277,9 @@ pub fn create_workspace(
         {
             return true;
         }
+        if chosen.is_some() {
+            return false;
+        }
         match hangar_worktree::branch_exists(repo, &branch_name(candidate)) {
             Ok(taken) => taken,
             Err(err) => {
@@ -261,11 +292,11 @@ pub fn create_workspace(
         return Err(err).context("failed to check existing branches");
     }
 
-    let branch = branch_name(&slug);
+    let branch = chosen.map_or_else(|| branch_name(&slug), str::to_owned);
     let path = worktree_path(worktrees_root, &project_slug, &slug);
     let options = hangar_worktree::CreateOptions {
         branch: branch.clone(),
-        base: Some(project.default_base.clone()),
+        base: Some(base.clone()),
         path: path.clone(),
         reuse_existing_branch: false,
     };
@@ -278,7 +309,7 @@ pub fn create_workspace(
         name: name.to_owned(),
         slug,
         branch,
-        base: project.default_base.clone(),
+        base,
         worktree_path: worktree.path,
         status: WorkspaceStatus::Active,
         created_at: Timestamp::now(),
@@ -777,6 +808,63 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open_in_memory().unwrap();
         assert!(add_project(&store, dir.path()).is_err());
+    }
+
+    #[test]
+    fn create_workspace_from_a_base_on_a_chosen_branch() {
+        let repo = repo();
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let project = add_project(&store, repo.path()).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        git(&["branch", "release"]);
+        let release = git(&["rev-parse", "release"]);
+
+        let ws = create_workspace_from(
+            &store,
+            &project,
+            "Hotfix",
+            root.path(),
+            Some("release"),
+            Some("fix/crash"),
+        )
+        .unwrap();
+        assert_eq!(
+            (ws.slug.as_str(), ws.branch.as_str()),
+            ("hotfix", "fix/crash")
+        );
+        assert_eq!(ws.base, "release");
+        assert_eq!(git(&["rev-parse", "fix/crash"]), release);
+
+        let taken = create_workspace_from(
+            &store,
+            &project,
+            "again",
+            root.path(),
+            None,
+            Some("fix/crash"),
+        );
+        assert!(taken.unwrap_err().to_string().contains("already exists"));
+        let bad = create_workspace_from(&store, &project, "x", root.path(), None, Some("a..b"));
+        assert!(
+            bad.unwrap_err()
+                .to_string()
+                .contains("not a valid branch name")
+        );
+        // Blank fields fall back to the defaults.
+        let ws = create_workspace_from(&store, &project, "plain", root.path(), Some(" "), Some(""))
+            .unwrap();
+        assert_eq!(ws.branch, "hangar/plain");
+        assert_eq!(ws.base, project.default_base);
     }
 
     #[test]

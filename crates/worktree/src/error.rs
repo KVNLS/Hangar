@@ -46,6 +46,11 @@ pub enum Error {
         /// The remote branch has commits the local one lacks: pull or rebase, then push again.
         non_fast_forward: bool,
     },
+    #[error("`{0}` has no upstream branch to pull from: push it first")]
+    NoUpstream(String),
+    /// Rebasing onto the upstream conflicted; the rebase was aborted and nothing changed.
+    #[error("rebasing onto `{onto}` would conflict in: {}", .paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
+    RebaseConflicts { onto: String, paths: Vec<PathBuf> },
     /// The base branch cannot receive a merge right now (not checked out, dirty, mid-merge).
     #[error("cannot merge into the base branch: {reason}")]
     BaseNotReady { reason: String },

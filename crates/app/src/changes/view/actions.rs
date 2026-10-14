@@ -2,12 +2,13 @@
 //! merge. Git and gh run on the background executor; one operation per workspace at a time.
 
 use anyhow::anyhow;
+use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{IconName, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_worktree::{ChangedPath, Gh, MergeOutcome, MergeStrategy, PushOutcome};
+use hangar_worktree::{ChangedPath, Gh, MergeOutcome, MergeStrategy, PullOutcome, PushOutcome};
 
 use super::{ChangesPanel, CommitBox};
 use crate::changes::dialogs::{MergeDialog, PrDialog};
@@ -22,6 +23,7 @@ pub enum Busy {
     Staging,
     Committing,
     Pushing,
+    Pulling,
     CreatingPr,
     Merging,
 }
@@ -32,6 +34,7 @@ impl Busy {
             Self::Staging => "Staging…",
             Self::Committing => "Committing…",
             Self::Pushing => "Pushing…",
+            Self::Pulling => "Pulling…",
             Self::CreatingPr => "Opening pull request…",
             Self::Merging => "Merging…",
         }
@@ -197,6 +200,20 @@ impl ChangesPanel {
         )
     }
 
+    /// Fetches the upstream and rebases the branch onto it (after a rejected push).
+    pub fn pull_rebase(&mut self, cx: &mut Context<Self>) -> Task<anyhow::Result<PullOutcome>> {
+        let Some(source) = &self.source else {
+            return Task::ready(Err(anyhow!("no workspace shown")));
+        };
+        let worktree = source.target.workspace.worktree_path.clone();
+        self.run_op(
+            source.workspace,
+            Busy::Pulling,
+            move || Ok(hangar_worktree::pull_rebase(&worktree)?),
+            cx,
+        )
+    }
+
     /// Pushes if needed and opens a PR; resolves to its URL.
     pub fn create_pr(
         &mut self,
@@ -314,13 +331,85 @@ impl ChangesPanel {
 
     fn push_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let task = self.push(cx);
-        Self::notify(task, "Push", window, cx, |out, window, cx| {
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |_, window, cx| match result {
+                Ok(out) => {
+                    let text = if out.up_to_date {
+                        format!("{} is up to date on {}", out.branch, out.remote)
+                    } else if out.set_upstream {
+                        format!("Published {} to {}", out.branch, out.remote)
+                    } else {
+                        format!("Pushed {} to {}", out.branch, out.remote)
+                    };
+                    window.push_notification(Notification::success(text), cx);
+                }
+                Err(err) => {
+                    tracing::error!("Push: {err:#}");
+                    let behind = matches!(
+                        err.downcast_ref::<hangar_worktree::Error>(),
+                        Some(hangar_worktree::Error::PushRejected {
+                            non_fast_forward: true,
+                            ..
+                        })
+                    );
+                    let mut note = Notification::error(review::describe(&err)).title("Push");
+                    if behind {
+                        let panel = cx.entity().downgrade();
+                        note = note.action(move |_, _, cx| {
+                            let panel = panel.clone();
+                            gpui_kit::component::button::Button::new("pull-rebase")
+                                .primary()
+                                .label("Pull and rebase")
+                                .on_click(cx.listener(move |note, _, window, cx| {
+                                    let _ = panel.update(cx, |panel, cx| {
+                                        panel.pull_rebase_clicked(window, cx)
+                                    });
+                                    note.dismiss(window, cx);
+                                }))
+                        });
+                    }
+                    window.push_notification(note, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// After a merge: pushes the base branch from the checkout the merge was made in.
+    pub(crate) fn push_merged_base(
+        &mut self,
+        workspace: WorkspaceId,
+        checkout: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let task = self.run_op(
+            workspace,
+            Busy::Pushing,
+            move || review::run_push(&checkout),
+            cx,
+        );
+        Self::notify(task, "Push base", window, cx, |out, window, cx| {
             let text = if out.up_to_date {
                 format!("{} is up to date on {}", out.branch, out.remote)
-            } else if out.set_upstream {
-                format!("Published {} to {}", out.branch, out.remote)
             } else {
                 format!("Pushed {} to {}", out.branch, out.remote)
+            };
+            window.push_notification(Notification::success(text), cx);
+        });
+    }
+
+    fn pull_rebase_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let task = self.pull_rebase(cx);
+        Self::notify(task, "Pull and rebase", window, cx, |out, window, cx| {
+            let text = match out.pulled {
+                0 => format!("Already up to date with {}", out.upstream),
+                n => format!(
+                    "Rebased onto {} ({n} new commit{}); push again",
+                    out.upstream,
+                    if n == 1 { "" } else { "s" }
+                ),
             };
             window.push_notification(Notification::success(text), cx);
         });

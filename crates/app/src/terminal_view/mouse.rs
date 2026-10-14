@@ -74,6 +74,10 @@ impl TerminalView {
             }
             return;
         }
+        if event.button == MouseButton::Middle {
+            self.paste_selection_or_clipboard(cx);
+            return;
+        }
         if event.button != MouseButton::Left {
             return;
         }
@@ -83,6 +87,8 @@ impl TerminalView {
                 terminal.update_selection(point, side);
             } else {
                 let kind = match event.click_count {
+                    // Option-drag selects a rectangle, as in Terminal.app.
+                    0 | 1 if event.modifiers.alt => SelectionKind::Block,
                     0 | 1 => SelectionKind::Simple,
                     2 => SelectionKind::Word,
                     _ => SelectionKind::Line,

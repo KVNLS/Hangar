@@ -25,6 +25,18 @@ use model::{BUFFER_CAP, Follow, Line, LogModel};
 const POLL: Duration = Duration::from_millis(100);
 const ROW_HEIGHT: f32 = 16.;
 const LIST_HEIGHT: f32 = 180.;
+/// Range of the list height when dragged.
+const MIN_LIST_HEIGHT: f32 = 80.;
+const MAX_LIST_HEIGHT: f32 = 600.;
+
+/// Drag payload of the list's top edge.
+struct LogsResize;
+
+impl Render for LogsResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
 /// Capacity of the stream's own queue: it absorbs what arrives between two polls.
 const STREAM_CAPACITY: usize = 20_000;
 
@@ -134,6 +146,8 @@ pub struct LogsPane {
     scroll: UniformListScrollHandle,
     /// The user scrolled since the last render; re-evaluate follow-tail there.
     wheel: bool,
+    /// Height of the line list, dragged from its top edge.
+    height: f32,
     selection: Option<(u64, RangeInclusive<u64>)>,
     notice: Option<SharedString>,
     focus: FocusHandle,
@@ -201,6 +215,7 @@ impl LogsPane {
             dropped: 0,
             scroll: UniformListScrollHandle::new(),
             wheel: false,
+            height: LIST_HEIGHT,
             selection: None,
             notice: None,
             focus: cx.focus_handle(),
@@ -576,6 +591,9 @@ impl LogsPane {
             }),
         )
         .size_full()
+        // As wide as the longest visible line: long lines scroll sideways instead of being cut.
+        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+        .with_width_from_item(self.model.widest_index())
         .track_scroll(&self.scroll);
         let empty = (self.model.len() == 0).then(|| {
             let text = if self.model.total() > 0 {
@@ -592,16 +610,34 @@ impl LogsPane {
                 .text_color(theme.muted_foreground)
                 .child(text)
         });
+        let handle = div()
+            .id("device-logs-resize")
+            .absolute()
+            .top(px(-3.))
+            .left_0()
+            .w_full()
+            .h(px(6.))
+            .cursor_row_resize()
+            .on_drag(LogsResize, |_, _, _, cx| cx.new(|_| LogsResize));
         div()
             .relative()
-            .h(px(LIST_HEIGHT))
+            .h(px(self.height))
             .flex_shrink_0()
             .border_t_1()
             .border_color(theme.border)
             .font_family(theme.mono_font_family.clone())
+            .font_features(crate::ui::mono_features())
             .text_size(px(11.))
             .child(list)
             .children(empty)
+            .child(handle)
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<LogsResize>, _, cx| {
+                    let height = (event.bounds.bottom() - event.event.position.y).as_f32();
+                    this.height = height.clamp(MIN_LIST_HEIGHT, MAX_LIST_HEIGHT);
+                    cx.notify();
+                }),
+            )
             .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
                 this.wheel = true;
                 cx.notify();

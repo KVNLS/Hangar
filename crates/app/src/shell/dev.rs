@@ -25,7 +25,7 @@ impl HangarApp {
             for name in names {
                 let (agent, target) = (dev.agent.clone(), dev.target.clone());
                 let Ok(create) = this.update_in(cx, |this, window, cx| {
-                    this.create_workspace(project.id, name, agent, target, window, cx)
+                    this.create_workspace(project.id, name, agent, target, (None, None), window, cx)
                 }) else {
                     break;
                 };

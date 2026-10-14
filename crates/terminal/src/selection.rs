@@ -20,6 +20,8 @@ pub enum SelectionKind {
     Word,
     /// Whole logical lines, following soft wraps (triple click).
     Line,
+    /// The rectangle between the two corners (Option-drag).
+    Block,
 }
 
 /// Which half of a cell the pointer is over; a selection includes a cell only when it covers
@@ -56,6 +58,7 @@ impl Terminal {
             SelectionKind::Simple => SelectionType::Simple,
             SelectionKind::Word => SelectionType::Semantic,
             SelectionKind::Line => SelectionType::Lines,
+            SelectionKind::Block => SelectionType::Block,
         };
         let point = self.grid_point(point);
         self.term.selection = Some(Selection::new(ty, point, side.into()));
@@ -202,6 +205,15 @@ mod tests {
         select(&mut t, (0, 6), (0, 10));
         assert_eq!(t.selection_text().as_deref(), Some("world"));
         assert!(t.has_selection());
+    }
+
+    #[test]
+    fn block_selection_takes_a_rectangle() {
+        let mut t = term(20, 3);
+        t.advance(b"abcdef\r\nghijkl\r\nmnopqr");
+        t.start_selection(SelectionKind::Block, p(0, 1), Side::Left);
+        t.update_selection(p(2, 3), Side::Right);
+        assert_eq!(t.selection_text().as_deref(), Some("bcd\nhij\nnop"));
     }
 
     #[test]
