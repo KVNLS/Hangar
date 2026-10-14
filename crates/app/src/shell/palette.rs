@@ -1,5 +1,5 @@
-//! Command palette (⌘K): workspaces needing you (all of them while searching), then actions,
-//! device and app commands.
+//! Command palette (⌘K): workspaces needing you (all of them while searching), permission
+//! requests to allow once, then actions, device and app commands.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::IndexPath;
@@ -18,7 +18,8 @@ pub(super) struct Palette {
 
 /// Section indexes of the palette's groups (the workspace group is always first).
 const WORKSPACE_SECTION: usize = 0;
-const DEVICE_SECTION: usize = 2;
+const APPROVE_SECTION: usize = 1;
+const DEVICE_SECTION: usize = 3;
 
 /// The first group: workspaces needing you (approval, input, failed) when the query is empty,
 /// every workspace while searching; "needs you" order, sidebar order within a state.
@@ -78,6 +79,7 @@ impl HangarApp {
                 CommandItem::new()
                     .label(name.clone())
                     .keywords([project.clone(), ws.branch.clone().into()])
+                    .keywords(ws.task.clone())
                     .child(move |_, cx| {
                         let t = cx.tokens();
                         h_flex()
@@ -102,6 +104,15 @@ impl HangarApp {
                     }),
             )
         });
+        let approvals = self.pending_approvals(cx);
+        let approve = CommandGroup::new()
+            .label("Approve")
+            .items(approvals.iter().map(|(_, name, request)| {
+                CommandItem::new()
+                    .label(super::approvals::approve_label(name, request))
+                    .icon(Lucide::Check)
+            }));
+        let approvals: Vec<WorkspaceId> = approvals.into_iter().map(|(id, _, _)| id).collect();
         let command = |label: &'static str, icon: Lucide, action: Box<dyn Action>| {
             CommandItem::new().label(label).icon(icon).action(action)
         };
@@ -181,6 +192,7 @@ impl HangarApp {
             .max_h(px(400.))
             .placeholder("Search workspaces and commands…")
             .group(CommandGroup::new().label(group_label).items(rows))
+            .group(approve)
             .group(actions)
             .group(device)
             .group(app_commands)
@@ -192,6 +204,9 @@ impl HangarApp {
                 let workspace = (ix.section == WORKSPACE_SECTION)
                     .then(|| workspaces.get(ix.row).copied())
                     .flatten();
+                let approve = (ix.section == APPROVE_SECTION)
+                    .then(|| approvals.get(ix.row).copied())
+                    .flatten();
                 let boot = (ix.section == DEVICE_SECTION)
                     .then(|| ix.row.checked_sub(first_boot))
                     .flatten()
@@ -201,6 +216,9 @@ impl HangarApp {
                     this.close_palette(window, cx);
                     if let Some(id) = workspace {
                         this.select_workspace(id, window, cx);
+                    }
+                    if let Some(id) = approve {
+                        this.answer_request(id, true, cx);
                     }
                     if let Some(key) = boot {
                         this.device_panel

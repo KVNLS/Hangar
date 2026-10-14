@@ -274,7 +274,7 @@ impl ChangesPanel {
             .and_then(|i| i.last_subject.as_deref());
         Some((
             source.workspace,
-            review::default_pr_title(subject, &source.target.workspace.name),
+            review::default_pr_title(subject, source.target.workspace.title()),
         ))
     }
 

@@ -5,6 +5,7 @@ pub mod approval;
 mod client;
 pub mod protocol;
 pub mod subagents;
+pub mod usage;
 
 pub use adapter::{AcpAdapter, AcpSession, acp_presets};
 pub use client::{AcpEvent, PermissionRequest, RequestId};

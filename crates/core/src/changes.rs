@@ -160,6 +160,14 @@ impl FileDiff {
     }
 }
 
+/// Size of a workspace's diff: changed files, inserted and deleted lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DiffStat {
+    pub files: u32,
+    pub insertions: u32,
+    pub deletions: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffOptions {
     /// Stop collecting lines past this many per file and set [`FileDiff::truncated`].

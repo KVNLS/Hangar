@@ -59,10 +59,18 @@ impl HangarApp {
             .map(|this| match (self.layout.screen, crumb) {
                 (Screen::Settings, _) => this.child(screen_crumb("Settings", t.tx)),
                 (Screen::Overview, _) => this.child(screen_crumb("Overview", t.tx)),
-                (Screen::Review, Some((project, _))) => this
+                (Screen::Review, Some((project, ws))) => this
                     .child(div().text_color(t.tx2).child(project.name.clone()))
                     .child(div().text_color(t.tx3).child("/"))
-                    .child(screen_crumb("Review", t.tx)),
+                    .child(screen_crumb("Review", t.tx))
+                    .child(div().text_color(t.tx3).child("·"))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_color(t.tx2)
+                            .truncate()
+                            .child(ws.title().to_owned()),
+                    ),
                 (Screen::Review, None) => this.child(screen_crumb("Review", t.tx)),
                 (Screen::Workspace, None) => this.child(div().text_color(t.tx2).child("Hangar")),
                 (Screen::Workspace, Some((project, ws))) => this
@@ -217,6 +225,19 @@ impl HangarApp {
             .values()
             .filter(|l| !l.session.status.is_terminal())
             .count();
+        // Cost of the structured agents still running, as far as they report it.
+        let costs: Vec<_> = self
+            .live
+            .sessions
+            .values()
+            .filter(|l| !l.session.status.is_terminal())
+            .filter_map(|l| match &l.surface {
+                AgentSurface::Chat { view, .. } => view.read(cx).usage().cost(),
+                AgentSurface::Terminal { .. } => None,
+            })
+            .collect();
+        let live_cost =
+            crate::chat_view::costs_label(&hangar_agents::acp::usage::total_costs(&costs));
         let focused = self.layout.panes.slot(self.layout.panes.focused());
         let pool = self.device_pool.read(cx);
         // Every device the pool runs, booted or on its way, not only the focused workspace's.
@@ -333,6 +354,7 @@ impl HangarApp {
                         .child(format!("{} queued", self.queued_count())),
                 )
             })
+            .when_some(live_cost, |this, cost| this.child(format!("{cost} live")))
             // Memory pressure is the only live host figure the pool tracks; RAM totals are a
             // launch-time snapshot and per-agent memory is not measured.
             .when_some(pressure, |this, pressure| {

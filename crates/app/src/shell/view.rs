@@ -195,6 +195,7 @@ impl Render for HangarApp {
             .child(main)
             .child(self.render_status_bar(cx))
             .children(self.render_new_workspace_sheet(cx))
+            .children(self.render_compare(cx))
             .children(self.render_palette(cx))
             .children(self.render_toast(cx))
     }
@@ -290,9 +291,8 @@ impl HangarApp {
                 && queued.is_none()
                 && live.is_none_or(|l| l.session.status.is_terminal());
             let ws_id = ws.id;
-            let resumable = self
-                .resumable_chat(ws_id, &self.agent_setup.agent)
-                .is_some();
+            let agent = self.agent_for(ws_id);
+            let resumable = self.resumable_chat(ws_id, &agent).is_some();
             let label = match (resumable, live.is_some()) {
                 (true, _) => "Resume",
                 (false, true) => "Restart",
@@ -301,7 +301,7 @@ impl HangarApp {
             can_start.then(|| {
                 UiButton::new(("start", pane))
                     .icon(Lucide::Play)
-                    .label(format!("{label} {}", self.agent_display_name()))
+                    .label(format!("{label} {}", agent_display_name(&agent)))
                     .ghost()
                     .small()
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -312,7 +312,7 @@ impl HangarApp {
         let new_conversation = workspace.map(|ws| ws.id).filter(|id| {
             !self.work.busy.contains(id)
                 && live.is_none_or(|l| l.session.status.is_terminal())
-                && self.resumable_chat(*id, &self.agent_setup.agent).is_some()
+                && self.resumable_chat(*id, &self.agent_for(*id)).is_some()
         });
         let status = live
             .filter(|l| l.session.status.is_terminal())
@@ -591,7 +591,7 @@ impl HangarApp {
         )
     }
 
-    /// Starts the selected agent in `ws_id` from the pane header and shows it.
+    /// Starts the workspace's agent (see [`Self::agent_for`]) from the pane header and shows it.
     fn start_agent_in(
         &mut self,
         ws_id: WorkspaceId,
@@ -599,16 +599,17 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let agent = self.agent_setup.agent.to_string();
+        let agent = self.agent_for(ws_id);
         self.layout.panes.show(ws_id);
         self.panes_changed(window, cx);
         self.start_session(ws_id, agent, resume, window, cx)
             .detach();
     }
+}
 
-    pub(super) fn agent_display_name(&self) -> String {
-        agents::preset(&self.agent_setup.agent)
-            .map(|a| a.display_name().to_owned())
-            .unwrap_or_else(|| self.agent_setup.agent.to_string())
-    }
+/// The preset's display name, else its id.
+fn agent_display_name(agent: &str) -> String {
+    agents::preset(agent)
+        .map(|a| a.display_name().to_owned())
+        .unwrap_or_else(|| agent.to_owned())
 }

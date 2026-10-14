@@ -1,6 +1,7 @@
 //! MCP over JSON-RPC 2.0: one incoming message in, at most one response out. Stateless, so any
 //! number of messages may be handled concurrently.
 
+use hangar_core::AgentSignal;
 use serde_json::{Value, json};
 
 use crate::base64;
@@ -23,6 +24,15 @@ const INSTRUCTIONS: &str = "These tools act on the iOS simulator or Android emul
     oriented (the screenshot result states the point size). Use build_and_run after code changes, \
     then screenshot and logs to verify.";
 
+const ORCHESTRATION_INSTRUCTIONS: &str = " The user also lets this agent split work across \
+    parallel Hangar workspaces: workspace_create starts another agent on a self-contained task in \
+    its own worktree, workspaces_list and agent_transcript follow those agents, agent_prompt \
+    sends them a message. They act only on workspaces this agent created.";
+
+/// Shown when an orchestration tool is called while the user has not allowed them.
+const ORCHESTRATION_OFF: &str = "orchestration tools are off: the user can allow them in Hangar \
+    Settings › Permissions › Let agents create and drive workspaces";
+
 /// The app side of the bridge: resolves workspace sessions and runs tools on their devices.
 ///
 /// Called from a background thread per message (never the UI thread); calls may block for as
@@ -31,9 +41,21 @@ pub trait ToolHost: Send + Sync {
     /// Whether `session` belongs to a workspace that is currently open.
     fn knows_session(&self, session: &str) -> bool;
 
-    /// Runs `tool` on the device of the workspace owning `session`.
+    /// Runs `tool` on the device of the workspace owning `session`, or, for an orchestration
+    /// tool, on the workspaces it created.
     fn call(&self, session: &str, tool: Tool) -> Result<ToolOutput, ToolError>;
+
+    /// Whether the agent of `session` may use the orchestration tools (a user setting, off by
+    /// default). They are neither listed nor callable otherwise.
+    fn orchestration_enabled(&self, session: &str) -> bool;
+
+    /// Records what the agent of the workspace owning `session` reports through its hooks
+    /// (`Hangar notify`, see [`crate::hook`]).
+    fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError>;
 }
+
+/// Hangar's own method (not MCP): `{"signal": "working" | "approval" | "input" | "turn_ended"}`.
+pub const AGENT_SIGNAL_METHOD: &str = "hangar/agentSignal";
 
 /// Handles one raw JSON-RPC message (or batch) from the client of workspace `session`.
 /// Returns the serialized response, or `None` for notifications.
@@ -92,10 +114,13 @@ fn handle_single(host: &dyn ToolHost, session: &str, message: &Value) -> Option<
         return Some(unknown_session(id));
     }
     let result = match method {
-        "initialize" => Ok(initialize(params)),
+        "initialize" => Ok(initialize(params, host.orchestration_enabled(session))),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools::definitions() })),
+        "tools/list" => Ok(json!({
+            "tools": tools::definitions(host.orchestration_enabled(session)),
+        })),
         "tools/call" => tools_call(host, session, params),
+        AGENT_SIGNAL_METHOD => agent_signal(host, session, params),
         _ => Err((METHOD_NOT_FOUND, format!("method not found: {method}"))),
     };
     Some(match result {
@@ -104,7 +129,36 @@ fn handle_single(host: &dyn ToolHost, session: &str, message: &Value) -> Option<
     })
 }
 
-fn initialize(params: Option<&Value>) -> Value {
+fn agent_signal(
+    host: &dyn ToolHost,
+    session: &str,
+    params: Option<&Value>,
+) -> Result<Value, (i64, String)> {
+    let signal = params
+        .and_then(|p| p.get("signal"))
+        .and_then(Value::as_str)
+        .and_then(AgentSignal::parse)
+        .ok_or((
+            INVALID_PARAMS,
+            "params.signal must be working, approval, input or turn_ended".to_owned(),
+        ))?;
+    // The hook event and who raised it, for diagnosing states (`Hangar notify` sends them).
+    let field = |name: &str| params.and_then(|p| p.get(name)).and_then(Value::as_str);
+    tracing::debug!(
+        signal = signal.as_str(),
+        event = field("event"),
+        agent = field("agent"),
+        "agent signal from hook"
+    );
+    host.agent_signal(session, signal)
+        .map(|()| json!({}))
+        .map_err(|e| match e {
+            ToolError::UnknownSession => (UNKNOWN_SESSION, "unknown workspace session".to_owned()),
+            other => (UNAVAILABLE, other.to_string()),
+        })
+}
+
+fn initialize(params: Option<&Value>, orchestration: bool) -> Value {
     let requested = params
         .and_then(|p| p.get("protocolVersion"))
         .and_then(Value::as_str);
@@ -115,7 +169,11 @@ fn initialize(params: Option<&Value>) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "hangar", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": INSTRUCTIONS,
+        "instructions": if orchestration {
+            format!("{INSTRUCTIONS}{ORCHESTRATION_INSTRUCTIONS}")
+        } else {
+            INSTRUCTIONS.to_owned()
+        },
     })
 }
 
@@ -130,6 +188,9 @@ fn tools_call(
             "tools/call needs params.name (a string)".into(),
         ));
     };
+    if Tool::is_orchestration_name(name) && !host.orchestration_enabled(session) {
+        return Ok(error_result(&format!("{name}: {ORCHESTRATION_OFF}")));
+    }
     let arguments = params.and_then(|p| p.get("arguments"));
     let tool = match Tool::parse(name, arguments) {
         Ok(tool) => tool,
@@ -190,6 +251,8 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub struct FakeHost {
         pub calls: Mutex<Vec<(String, Tool)>>,
+        pub signals: Mutex<Vec<AgentSignal>>,
+        pub orchestration: std::sync::atomic::AtomicBool,
     }
 
     impl ToolHost for FakeHost {
@@ -221,6 +284,117 @@ pub(crate) mod tests {
                 other => Ok(ToolOutput::text(format!("ok {}", other.name()))),
             }
         }
+
+        fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError> {
+            if session != SESSION {
+                return Err(ToolError::UnknownSession);
+            }
+            self.signals.lock().unwrap().push(signal);
+            Ok(())
+        }
+
+        fn orchestration_enabled(&self, _: &str) -> bool {
+            self.orchestration.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[test]
+    fn orchestration_tools_need_the_setting() {
+        let host = FakeHost::default();
+        let names = |host: &FakeHost| -> Vec<String> {
+            let r = call(host, request(1, "tools/list", json!({}))).unwrap();
+            r["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert!(!names(&host).iter().any(|n| n == "workspace_create"));
+        let init = call(&host, request(2, "initialize", json!({}))).unwrap();
+        assert!(
+            !init["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("workspace_create")
+        );
+        // Off: refused before the arguments are even looked at.
+        let r = call(
+            &host,
+            request(3, "tools/call", json!({ "name": "workspace_create" })),
+        )
+        .unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(
+            r["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Let agents create and drive workspaces"),
+            "{r}"
+        );
+        assert!(host.calls.lock().unwrap().is_empty());
+
+        host.orchestration
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let listed = names(&host);
+        assert_eq!(
+            listed[listed.len() - 4..],
+            [
+                "workspaces_list",
+                "workspace_create",
+                "agent_prompt",
+                "agent_transcript"
+            ]
+        );
+        let init = call(&host, request(4, "initialize", json!({}))).unwrap();
+        assert!(
+            init["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("workspace_create")
+        );
+        let r = call(
+            &host,
+            request(
+                5,
+                "tools/call",
+                json!({ "name": "agent_prompt", "arguments": { "workspace": "Login", "text": "go" } }),
+            ),
+        )
+        .unwrap();
+        assert_eq!(r["result"]["isError"], false);
+        assert_eq!(
+            host.calls.lock().unwrap()[0].1,
+            Tool::AgentPrompt {
+                workspace: "Login".into(),
+                text: "go".into()
+            }
+        );
+    }
+
+    #[test]
+    fn agent_signals_reach_the_host() {
+        let host = FakeHost::default();
+        let ok = call(
+            &host,
+            request(1, AGENT_SIGNAL_METHOD, json!({ "signal": "approval" })),
+        )
+        .unwrap();
+        assert_eq!(ok["result"], json!({}));
+        let bad = call(
+            &host,
+            request(2, AGENT_SIGNAL_METHOD, json!({ "signal": "done" })),
+        )
+        .unwrap();
+        assert_eq!(bad["error"]["code"], INVALID_PARAMS);
+        let stranger = handle(
+            &host,
+            "other",
+            &request(3, AGENT_SIGNAL_METHOD, json!({ "signal": "working" })).to_string(),
+        )
+        .unwrap();
+        assert!(stranger.contains("-32001"), "{stranger}");
+        assert_eq!(*host.signals.lock().unwrap(), [AgentSignal::Approval]);
     }
 
     fn call(host: &FakeHost, msg: Value) -> Option<Value> {

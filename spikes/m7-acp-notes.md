@@ -44,3 +44,21 @@ with npm, run by Hangar from PATH as preset `claude-acp`.
   `autoEdit`, `yolo` (Auto-approves all tools), `plan` when plan mode is enabled.
 - No agent has a mode that approves only reads, so Settings › Permissions "Auto-approve reads" keeps the asking
   mode and Hangar answers `read`/`search` permission requests with allow-once (`acp::approval`).
+
+## Usage and cost (read from the installed adapters' source, 2026-10-08)
+- Schema (`@agentclientprotocol/sdk` `schema/schema.json`, vendored in claude-agent-acp): `usage_update` is
+  `{used, size, cost?: {amount, currency}}`; `used` = tokens in context, `size` = window, `cost` = "cumulative
+  session cost". `session/prompt` may answer `usage` (UNSTABLE: per-turn input/output/cached/thought token
+  counts) — Hangar does not read it.
+- claude-agent-acp 0.85.1 (`dist/acp-agent.js`): `used`+`size` while streaming and after compaction (no
+  `cost`); at each SDK `result` adds `cost: {amount: total_cost_usd, currency: "USD"}` (the SDK's running
+  total). `_meta["_claude/model"]` names the model. Prompt responses carry the turn's `usage`.
+- codex-acp 0.16.0 (native binary, ACP schema crate 0.13.6; `src/thread.rs` on GitHub tag v0.16.0): on each
+  Codex `TokenCount`, `used` (last usage's tokens in context) + `size` (`model_context_window`); never `cost`,
+  no `usage` in prompt responses.
+- OpenCode 1.18.34 (Bun binary, strings): after a turn `used` (input + cache read + cache write of the last
+  assistant message), `size` (the model's context limit), `cost: {amount: sum of all assistant messages'
+  cost, currency: "USD"}`. Prompt responses carry the last message's tokens as `usage`.
+- Gemini CLI 0.62.0 bundles the schema but never sends `usage_update`.
+- Hangar keeps the latest `used`/`size`, keeps the last cost when an update has none, and treats a drop in
+  the cost total as the agent restarting its count (the earlier total is kept and added).

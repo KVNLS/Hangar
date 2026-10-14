@@ -1,5 +1,6 @@
 //! MCP device tools for agents: each Hangar workspace exposes its device (simulator or emulator)
-//! to the agent running in its terminal as an MCP server.
+//! to the agent running in its terminal as an MCP server. When the user allows it, the same
+//! server offers orchestration tools that create and drive child workspaces.
 //!
 //! # Architecture
 //!
@@ -32,21 +33,25 @@
 
 mod base64;
 mod bridge;
+pub mod hook;
+mod orchestration;
 mod protocol;
 mod screenshot;
 mod server;
 mod tools;
 
 pub use bridge::{run_bridge, run_bridge_from_env};
+pub use orchestration::{ChildWorkspace, CreatedWorkspace, StartOutcome, TranscriptEntry};
 pub use protocol::{
-    INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, SUPPORTED_PROTOCOL_VERSIONS,
-    ToolHost, UNAVAILABLE, UNKNOWN_SESSION, handle,
+    AGENT_SIGNAL_METHOD, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
+    SUPPORTED_PROTOCOL_VERSIONS, ToolHost, UNAVAILABLE, UNKNOWN_SESSION, handle,
 };
 pub use screenshot::{MAX_SIDE, Screenshot, ScreenshotError, encode_screenshot};
 pub use server::{bind, handle_envelope, serve, serve_connection};
 pub use tools::{
-    Button, Content, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DeviceStatus, MAX_LOG_LINES,
-    MAX_SWIPE_MS, ParseError, Press, Tool, ToolError, ToolOutput, definitions,
+    Button, Content, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES,
+    DeviceStatus, MAX_LOG_LINES, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES, ParseError, Press, Tool,
+    ToolError, ToolOutput, definitions,
 };
 
 /// Environment variable carrying the workspace's session secret to the bridge.

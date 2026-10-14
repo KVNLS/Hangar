@@ -33,7 +33,7 @@ pub struct PermissionRequest {
     pub options: Vec<PermissionOption>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AcpEvent {
     Update(SessionUpdate),
     /// The agent waits for an answer through [`AcpConnection::answer_permission`].

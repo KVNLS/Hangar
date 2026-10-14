@@ -4,12 +4,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use hangar_core::changes::DiffStat;
 use hangar_core::ports::{
     BranchTip, ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, Store,
     VersionControl,
 };
 use hangar_core::{
-    Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
+    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
+    WorkspaceStatus,
 };
 
 #[derive(Default)]
@@ -106,7 +108,40 @@ impl Store for FakeStore {
             .find(|s| s.id == id)
             .ok_or_else(|| missing("session"))?;
         session.status = status.clone();
+        if status.is_terminal() && session.ended_at.is_none() {
+            session.ended_at = Some(Timestamp::now());
+        }
         Ok(session.clone())
+    }
+    fn finish_session(
+        &self,
+        id: SessionId,
+        status: &SessionStatus,
+        changes: Option<DiffStat>,
+    ) -> PortResult<Session> {
+        let updated = self.update_session_status(id, status)?;
+        if changes.is_none() {
+            return Ok(updated);
+        }
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or_else(|| missing("session"))?;
+        session.changes = changes;
+        Ok(session.clone())
+    }
+    fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>> {
+        let mut ended: Vec<Session> = self
+            .sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.ended_at.is_some_and(|at| at >= since))
+            .cloned()
+            .collect();
+        ended.sort_by_key(|s| std::cmp::Reverse(s.ended_at));
+        Ok(ended)
     }
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
         Ok(self.settings.lock().unwrap().get(key).cloned())

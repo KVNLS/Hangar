@@ -1,7 +1,9 @@
 //! The main window: project sidebar and tiled terminal panes (one by default, split on demand).
 
+mod approvals;
 mod attention;
 mod chrome;
+mod compare;
 mod dev;
 mod device_api;
 mod dialogs;
@@ -10,6 +12,7 @@ mod lifecycle;
 mod mcp;
 mod new_workspace;
 mod ollama;
+mod orchestration;
 mod overview;
 mod palette;
 mod queue;
@@ -156,6 +159,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("escape", CloseScreen, Some("SettingsScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
+        KeyBinding::new("escape", CloseSheet, Some("CompareAttempts")),
     ]);
 }
 
@@ -198,6 +202,8 @@ struct LiveSession {
     agent_name: SharedString,
     surface: AgentSurface,
     activity: status::Activity,
+    /// What a terminal agent last reported through its hooks (Claude Code); `None` without hooks.
+    signal: Option<hangar_core::AgentSignal>,
     _exit: Subscription,
 }
 
@@ -361,6 +367,8 @@ struct AgentSetup {
     /// Agent presets with their install state (all assumed installed until the PATH is known).
     agent_choices: Vec<AgentChoice>,
     ollama: ollama::OllamaState,
+    /// "Let agents create and drive workspaces" (the MCP orchestration tools).
+    orchestration: bool,
 }
 
 /// What runs per workspace: agent sessions, build and dev-server tabs, live diffs.
@@ -368,16 +376,22 @@ struct LiveState {
     sessions: HashMap<WorkspaceId, LiveSession>,
     /// Structured conversations each workspace can resume (saved in settings).
     saved_chats: HashMap<WorkspaceId, ops::SavedChat>,
+    /// The agent each workspace last started; workspaces without one use the picker's.
+    workspace_agents: HashMap<WorkspaceId, String>,
     /// Build and dev-server tabs per workspace (⌘R).
     runs: HashMap<WorkspaceId, run::WorkspaceRun>,
     /// The tab each workspace's pane shows (agent, dev server or build).
     pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
-    /// Live diffs of active workspaces, started when first shown in a pane.
+    /// Live diffs of active workspaces, started when first shown in a pane or compared.
     diffs: HashMap<WorkspaceId, DiffEntry>,
     /// "Max concurrent agents" and the workspaces waiting for a slot.
-    agent_queue: crate::agent_queue::AgentQueue<queue::StartRequest>,
+    agent_queue: hangar_usecases::agents::AgentQueue<queue::StartRequest>,
+    /// The queue as last saved, to write it only when it changed.
+    saved_queue: Vec<(WorkspaceId, queue::StartRequest)>,
     /// Agents spawning off the main thread: they hold a slot before they have a session.
     starting: HashSet<WorkspaceId>,
+    /// Sessions that ended today, for the overview.
+    done_today: overview::DoneToday,
 }
 
 /// Projects and workspaces as loaded, and the operations in flight on them.
@@ -389,6 +403,10 @@ struct WorkState {
     creating: HashSet<ProjectId>,
     /// Workspaces with an archive, restore or delete in flight.
     busy: HashSet<WorkspaceId>,
+    /// "Compare attempts", when open.
+    compare: Option<compare::CompareAttempts>,
+    /// Child workspaces each agent is creating through the orchestration tools.
+    child_creates: HashMap<WorkspaceId, usize>,
 }
 
 pub struct HangarApp {
@@ -592,21 +610,27 @@ impl HangarApp {
                 agent_chosen_by_user: false,
                 agent_choices: initial_choices,
                 ollama,
+                orchestration: false,
             },
             live: LiveState {
                 sessions: HashMap::new(),
                 saved_chats: HashMap::new(),
+                workspace_agents: HashMap::new(),
                 runs: HashMap::new(),
                 pane_tabs: HashMap::new(),
                 diffs: HashMap::new(),
                 agent_queue: Default::default(),
+                saved_queue: Vec::new(),
                 starting: HashSet::new(),
+                done_today: Default::default(),
             },
             work: WorkState {
                 projects: ProjectList::default(),
                 loading: true,
                 load_error: None,
                 new_workspace: None,
+                compare: None,
+                child_creates: HashMap::new(),
                 creating: HashSet::new(),
                 busy: HashSet::new(),
             },
@@ -724,6 +748,14 @@ impl HangarApp {
                     .update(cx, |panel, cx| panel.set_store(store.clone(), cx));
                 self.work.projects = ProjectList::new(loaded.entries);
                 self.live.saved_chats = loaded.chats;
+                self.live.workspace_agents = loaded.workspace_agents;
+                // Workspaces from before this was saved: the agent of their saved conversation.
+                for (id, chat) in &self.live.saved_chats {
+                    self.live
+                        .workspace_agents
+                        .entry(*id)
+                        .or_insert_with(|| chat.agent.clone());
+                }
                 let workspaces: Vec<WorkspaceRef> = self
                     .work
                     .projects
@@ -770,12 +802,16 @@ impl HangarApp {
                 if let Some(on) = loaded.notify_attention {
                     self.attention.enabled = on;
                 }
+                if let Some(on) = loaded.orchestration {
+                    self.apply_orchestration(on);
+                }
                 if let Some(limit) = loaded.max_agents {
                     self.live
                         .agent_queue
-                        .set_limit(crate::agent_queue::clamp_limit(limit));
+                        .set_limit(hangar_usecases::agents::clamp_limit(limit));
                     self.sync_max_agents_input(window, cx);
                 }
+                self.restore_agent_queue(loaded.agent_queue, window, cx);
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
                     self.layout.changes.open = false;
@@ -823,6 +859,10 @@ impl HangarApp {
         // find_program stats files; cheap enough for five presets but keep it off this thread.
         let value = path.value.clone();
         self.agent_setup.path = Some(path);
+        // Starts restored from the last run waited for the PATH their agents are found on.
+        if !self.work.loading {
+            self.drain_agent_queue(window, cx);
+        }
         cx.spawn_in(window, async move |this, cx| {
             let choices = cx
                 .background_executor()

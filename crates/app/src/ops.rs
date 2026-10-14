@@ -12,13 +12,18 @@ use hangar_agents::acp::approval::ApprovalLevel;
 use hangar_agents::acp::protocol::SessionMode;
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext, UpdateHook};
+use hangar_usecases::agents::StartRequest;
 
 use crate::pty::{self, AgentHandle};
+use hangar_core::changes::DiffStat;
 use hangar_core::ports::Store;
-use hangar_core::{Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId};
+use hangar_core::{
+    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
+};
 use hangar_terminal::ExitInfo;
 use hangar_usecases::sessions::Sessions;
 use hangar_usecases::settings::SettingsExt as _;
+pub use hangar_usecases::workspaces::NewWorkspace;
 use hangar_usecases::workspaces::Workspaces;
 pub use hangar_usecases::workspaces::{DeleteOptions, DeleteOutcome, DeleteSummary};
 
@@ -41,6 +46,8 @@ pub struct Loaded {
     pub entries: Vec<ProjectEntry>,
     /// Structured conversations workspaces can resume.
     pub chats: HashMap<WorkspaceId, SavedChat>,
+    /// The agent each workspace last started (see [`setting_keys::workspace_agent`]).
+    pub workspace_agents: HashMap<WorkspaceId, String>,
     pub layout: Option<PaneLayout>,
     pub agent: Option<String>,
     pub changes: Option<ChangesLayout>,
@@ -50,6 +57,10 @@ pub struct Loaded {
     pub notify_attention: Option<bool>,
     /// "Max concurrent agents".
     pub max_agents: Option<u32>,
+    /// Starts that were waiting for a slot when Hangar quit.
+    pub agent_queue: Vec<(WorkspaceId, StartRequest)>,
+    /// "Let agents create and drive workspaces".
+    pub orchestration: Option<bool>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -174,9 +185,17 @@ pub fn remember_agent_config(
 pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
     let mut entries = Vec::new();
     let mut chats = HashMap::new();
+    let mut workspace_agents = HashMap::new();
     for project in store.list_projects()? {
         let workspaces = store.list_workspaces(project.id)?;
         for ws in &workspaces {
+            match store.get_setting(&setting_keys::workspace_agent(ws.id)) {
+                Ok(Some(agent)) => {
+                    workspace_agents.insert(ws.id, agent);
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(workspace = %ws.id, %err, "saved agent unreadable"),
+            }
             match store.get_setting(&setting_keys::chat(ws.id)) {
                 Ok(Some(chat)) => {
                     chats.insert(ws.id, chat);
@@ -190,9 +209,7 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
                 if !session.status.is_terminal() {
                     store.update_session_status(
                         session.id,
-                        &SessionStatus::Failed {
-                            message: "Hangar quit while the session was running".into(),
-                        },
+                        &hangar_usecases::sessions::stopped("Hangar quit while it was running"),
                     )?;
                 }
             }
@@ -264,9 +281,30 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let agent_queue = match store
+        .get_setting(&setting_keys::AGENT_QUEUE)
+        .context("failed to read the queued agent starts")
+    {
+        Ok(queue) => queue.unwrap_or_default(),
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            Vec::new()
+        }
+    };
+    let orchestration = match store
+        .get_setting(&setting_keys::ORCHESTRATION)
+        .context("failed to read the orchestration setting")
+    {
+        Ok(on) => on,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
+    };
     Ok(Loaded {
         entries,
         chats,
+        workspace_agents,
         layout,
         agent,
         changes,
@@ -275,6 +313,8 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
         ollama,
         notify_attention,
         max_agents,
+        agent_queue,
+        orchestration,
         settings_error,
     })
 }
@@ -315,10 +355,36 @@ pub fn save_notify_attention(store: &dyn Store, on: bool) -> anyhow::Result<()> 
         .context("failed to save the notification setting")
 }
 
+pub fn save_orchestration(store: &dyn Store, on: bool) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::ORCHESTRATION, &on)
+        .context("failed to save the orchestration setting")
+}
+
 pub fn save_max_agents(store: &dyn Store, limit: u32) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::MAX_AGENTS, &limit)
         .context("failed to save the max concurrent agents")
+}
+
+pub fn save_agent_queue(
+    store: &dyn Store,
+    queue: &[(WorkspaceId, StartRequest)],
+) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::AGENT_QUEUE, &queue.to_vec())
+        .context("failed to save the queued agent starts")
+}
+
+/// Remembers the agent `workspace` started, so it runs again there.
+pub fn save_workspace_agent(
+    store: &dyn Store,
+    workspace: WorkspaceId,
+    agent: &str,
+) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::workspace_agent(workspace), &agent.to_owned())
+        .context("failed to save the workspace's agent")
 }
 
 pub fn save_agent(store: &dyn Store, agent: &str) -> anyhow::Result<()> {
@@ -340,21 +406,17 @@ pub fn create_workspace(
     name: &str,
     worktrees_root: &Path,
 ) -> anyhow::Result<Workspace> {
-    create_workspace_from(store, project, name, worktrees_root, None, None)
+    create_workspace_from(store, project, worktrees_root, &NewWorkspace::named(name))
 }
 
-/// As [`create_workspace`], starting from `base` (default: the project's default base) on a
-/// branch named `branch` (default: `hangar/<slug>`, suffixed until free). A given branch name is
-/// used as is and must not exist yet.
+/// As [`create_workspace`], with a base, branch name, task or group (see [`NewWorkspace`]).
 pub fn create_workspace_from(
     store: &dyn Store,
     project: &Project,
-    name: &str,
     worktrees_root: &Path,
-    base: Option<&str>,
-    branch: Option<&str>,
+    new: &NewWorkspace,
 ) -> anyhow::Result<Workspace> {
-    Ok(workspaces(store).create(project, name, worktrees_root, base, branch)?)
+    Ok(workspaces(store).create(project, worktrees_root, new)?)
 }
 
 pub struct StartedSession {
@@ -402,6 +464,7 @@ pub fn start_session_with(
 
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
     session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
+    session.prompt = extra.prompt.clone();
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
         .and_then(|()| Ok(adapter.launch(&ctx)?))
         .and_then(|launch| Ok(pty::spawn(launch, on_update)?))
@@ -450,6 +513,7 @@ pub fn start_acp_session(
 
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
     session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
+    session.prompt = extra.prompt.clone();
     let wanted = saved_agent_config(store, &adapter.id);
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
         .and_then(|()| {
@@ -524,26 +588,39 @@ fn write_private_files(worktree: &Path, files: &[(PathBuf, String)]) -> anyhow::
     Ok(())
 }
 
+/// Records how the session ended, with the workspace's diff then when known.
 pub fn finish_session(
     store: &dyn Store,
     id: SessionId,
     status: &SessionStatus,
+    changes: Option<DiffStat>,
 ) -> anyhow::Result<Session> {
-    Ok(Sessions::new(store).finish(id, status)?)
+    Ok(Sessions::new(store).finish(id, status, changes)?)
 }
 
 /// Records that a running session was stopped by Hangar (archive, delete).
-pub fn stop_session(store: &dyn Store, id: SessionId, reason: &str) -> anyhow::Result<()> {
-    Ok(Sessions::new(store).stop(id, reason)?)
+pub fn stop_session(
+    store: &dyn Store,
+    id: SessionId,
+    reason: &str,
+    changes: Option<DiffStat>,
+) -> anyhow::Result<()> {
+    Ok(Sessions::new(store).stop(id, reason, changes)?)
 }
 
-/// Marks the workspace archived, recording `session` (if any) as stopped.
+/// Sessions of every workspace that ended at or after `since`, the latest ended first.
+pub fn sessions_ended_since(store: &dyn Store, since: Timestamp) -> anyhow::Result<Vec<Session>> {
+    Ok(Sessions::new(store).ended_since(since)?)
+}
+
+/// Marks the workspace archived, recording `session` (if any) as stopped with `changes`.
 pub fn archive_workspace(
     store: &dyn Store,
     id: WorkspaceId,
     session: Option<SessionId>,
+    changes: Option<DiffStat>,
 ) -> anyhow::Result<()> {
-    Ok(workspaces(store).archive(id, session)?)
+    Ok(workspaces(store).archive(id, session, changes)?)
 }
 
 pub fn restore_workspace(store: &dyn Store, id: WorkspaceId) -> anyhow::Result<()> {

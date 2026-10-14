@@ -94,7 +94,28 @@ pub(super) struct DiffCounts {
     pub deletions: usize,
 }
 
+impl DiffCounts {
+    /// As recorded with a finished session.
+    pub fn stat(self) -> hangar_core::changes::DiffStat {
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        hangar_core::changes::DiffStat {
+            files: n(self.files),
+            insertions: n(self.insertions),
+            deletions: n(self.deletions),
+        }
+    }
+}
+
 impl HangarApp {
+    /// The workspace's diff as recorded when its session ends; `None` when not computed.
+    pub(super) fn diff_stat(
+        &self,
+        id: WorkspaceId,
+        cx: &App,
+    ) -> Option<hangar_core::changes::DiffStat> {
+        self.diff_counts(id, cx).map(DiffCounts::stat)
+    }
+
     /// Polls terminal output counters and re-renders when a session starts or stops being active.
     pub(super) fn track_activity(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
@@ -170,11 +191,19 @@ impl HangarApp {
                 view.read(cx).turn(),
                 has_changes,
             ),
-            _ => AgentState::from_pty(
-                live.map(|l| &l.session.status),
-                live.is_some_and(|l| l.activity.active),
-                has_changes,
-            ),
+            _ => match live.and_then(|l| l.signal) {
+                Some(signal) => AgentState::from_signal(
+                    live.map(|l| &l.session.status),
+                    signal,
+                    live.is_some_and(|l| l.activity.active),
+                    has_changes,
+                ),
+                None => AgentState::from_pty(
+                    live.map(|l| &l.session.status),
+                    live.is_some_and(|l| l.activity.active),
+                    has_changes,
+                ),
+            },
         }
     }
 

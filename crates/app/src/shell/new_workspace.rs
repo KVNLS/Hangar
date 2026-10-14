@@ -1,12 +1,15 @@
 //! The "New workspace" sheet (⌘N): name, the base branch and the new branch's name, an optional
-//! task typed into the agent once it starts, the agent and the target device. Enter in the name field or ⌘⏎ creates it; Escape or the
-//! scrim cancels.
+//! task typed into the agent once it starts, the agent and the target device. Enter in the name
+//! field or ⌘⏎ creates it; Escape or the scrim cancels. ⌘-clicking agents runs the task with each
+//! (best of N, grouped to compare); "One workspace per line" makes a workspace per task line.
 
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, Textarea, TextareaState};
 use gpui_kit::component::select::Select;
 
 use hangar_core::slugify;
+use hangar_usecases::batch::{self, BatchError, BatchRequest};
 
 use super::*;
 use crate::device_panel::{DeviceKey, Platform};
@@ -40,7 +43,10 @@ pub(super) struct NewWorkspaceSheet {
     /// The new branch's name; empty means `hangar/<slug>`.
     branch: Entity<InputState>,
     task: Entity<TextareaState>,
-    agent: SharedString,
+    /// The agents to run, in the order picked; several run the same task side by side.
+    agents: Vec<SharedString>,
+    /// Each task line becomes its own workspace.
+    per_line: bool,
     platform: Platform,
     base: Option<String>,
     /// Base devices per platform, once listed.
@@ -145,7 +151,8 @@ impl HangarApp {
             base_branch,
             branch,
             task,
-            agent: self.agent_setup.agent.clone(),
+            agents: vec![self.agent_setup.agent.clone()],
+            per_line: false,
             platform: last.as_ref().map_or(Platform::Ios, |k| k.platform),
             base: None,
             bases: None,
@@ -295,40 +302,91 @@ impl HangarApp {
         }
     }
 
+    /// What the sheet asks for, as a batch (one workspace in the common case).
+    fn sheet_request(&self, sheet: &NewWorkspaceSheet, cx: &App) -> BatchRequest {
+        let label = |id: &str| -> String {
+            let name = self
+                .agent_setup
+                .agent_choices
+                .iter()
+                .find(|c| c.id == id)
+                .map_or(id, |c| c.name.as_ref());
+            name.trim_end_matches(" (structured)").to_owned()
+        };
+        BatchRequest {
+            name: sheet.name.read(cx).value().to_string(),
+            task: sheet.task.read(cx).value().to_string(),
+            agents: sheet
+                .agents
+                .iter()
+                .map(|id| (id.to_string(), label(id)))
+                .collect(),
+            per_line: sheet.per_line,
+            base: sheet
+                .base_branch
+                .read(cx)
+                .selected_value()
+                .map(|b| b.to_string()),
+            branch: Some(sheet.branch.read(cx).value().trim().to_owned()).filter(|b| !b.is_empty()),
+        }
+    }
+
     pub(super) fn submit_new_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(sheet) = &self.work.new_workspace else {
             return;
         };
-        let name = sheet.name.read(cx).value().trim().to_owned();
-        if name.is_empty() || self.work.creating.contains(&sheet.project_id) {
+        if self.work.creating.contains(&sheet.project_id) {
             return;
         }
-        let task = sheet.task.read(cx).value().trim().to_owned();
-        let base = sheet
-            .base_branch
-            .read(cx)
-            .selected_value()
-            .map(|b| b.to_string());
-        let branch =
-            Some(sheet.branch.read(cx).value().trim().to_owned()).filter(|b| !b.is_empty());
-        let (project_id, agent) = (sheet.project_id, sheet.agent.to_string());
+        let Ok(planned) = batch::plan(&self.sheet_request(sheet, cx)) else {
+            return;
+        };
+        let project_id = sheet.project_id;
         let target = sheet.base.clone().map(|id| DeviceKey {
             platform: sheet.platform,
             id,
         });
         self.close_new_workspace(window, cx);
-        let input = Some(task).filter(|t| !t.is_empty());
-        self.create_workspace(
-            project_id,
-            name,
-            agent,
-            target,
-            (base, branch),
-            input,
-            window,
-            cx,
-        )
+        if planned.len() > 1 {
+            tracing::info!(count = planned.len(), "creating several workspaces");
+        }
+        // One at a time: creates in one project are serialized (`WorkState::creating`).
+        cx.spawn_in(window, async move |this, cx| {
+            for item in planned {
+                let target = target.clone();
+                let Ok(create) = this.update_in(cx, |this, window, cx| {
+                    this.create_workspace(
+                        project_id,
+                        item.workspace,
+                        item.agent,
+                        target,
+                        window,
+                        cx,
+                    )
+                }) else {
+                    break;
+                };
+                create.await;
+            }
+        })
         .detach();
+    }
+
+    /// A plain click picks one agent; ⌘-click adds or removes one (never the last).
+    fn pick_sheet_agent(&mut self, id: SharedString, toggle: bool, cx: &mut Context<Self>) {
+        let Some(sheet) = &mut self.work.new_workspace else {
+            return;
+        };
+        if !toggle {
+            sheet.agents = vec![id];
+        } else if let Some(i) = sheet.agents.iter().position(|a| *a == id) {
+            if sheet.agents.len() > 1 {
+                sheet.agents.remove(i);
+            }
+        } else {
+            sheet.agents.push(id);
+        }
+        cx.notify();
     }
 
     pub(super) fn render_new_workspace_sheet(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -337,7 +395,31 @@ impl HangarApp {
         let project = self.work.projects.project(sheet.project_id)?;
         let name = sheet.name.read(cx).value().trim().to_owned();
         let slug = slugify(&name);
-        let preview = if slug.is_empty() {
+        let planned = batch::plan(&self.sheet_request(sheet, cx));
+        let count = planned.as_ref().map_or(0, Vec::len);
+        let preview = if let Err(err) = &planned
+            && !matches!(err, BatchError::EmptyName)
+        {
+            format!("{}.", capitalized(&err.to_string()))
+        } else if count > 1 {
+            let base = sheet
+                .base_branch
+                .read(cx)
+                .selected_value()
+                .map_or_else(|| project.default_base.clone(), |b| b.to_string());
+            let groups = planned
+                .iter()
+                .flatten()
+                .filter_map(|p| p.workspace.group)
+                .collect::<HashSet<_>>()
+                .len();
+            let compare = match groups {
+                0 => String::new(),
+                1 => " · one task to compare".to_owned(),
+                n => format!(" · {n} tasks to compare"),
+            };
+            format!("{count} workspaces from {base}, each on its own branch{compare}")
+        } else if slug.is_empty() {
             "Name the workspace to create its branch and worktree.".to_owned()
         } else {
             let path = paths::worktrees_root()
@@ -363,7 +445,7 @@ impl HangarApp {
             format!("{branch} from {base} · {path}")
         };
         let creating = self.work.creating.contains(&sheet.project_id);
-        let can_create = !slug.is_empty() && !creating;
+        let can_create = count > 0 && !creating;
         let label = |text: &'static str| {
             div()
                 .text_size(px(12.))
@@ -372,7 +454,7 @@ impl HangarApp {
                 .child(text)
         };
         let agents = self.agent_setup.agent_choices.iter().map(|choice| {
-            let selected = sheet.agent.as_ref() == choice.id;
+            let selected = sheet.agents.iter().any(|a| a.as_ref() == choice.id);
             let id = SharedString::from(choice.id.clone());
             let installed = choice.installed;
             let structured = matches!(
@@ -398,14 +480,12 @@ impl HangarApp {
                 .border_color(if selected { t.acc } else { t.line2 })
                 .bg(if selected { t.accbg } else { t.app })
                 .when(!installed, |this| this.opacity(0.5))
-                .when(installed && !selected, |this| {
+                .when(installed, |this| {
                     this.cursor_pointer()
-                        .hover(|s| s.border_color(t.tx3))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(sheet) = &mut this.work.new_workspace {
-                                sheet.agent = id.clone();
-                                cx.notify();
-                            }
+                        .when(!selected, |this| this.hover(|s| s.border_color(t.tx3)))
+                        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            let toggle = event.modifiers().platform;
+                            this.pick_sheet_agent(id.clone(), toggle, cx)
                         }))
                 })
                 .child(
@@ -514,17 +594,42 @@ impl HangarApp {
                             .child(label("Task"))
                             .child(Textarea::new(&sheet.task))
                             .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(t.tx3)
-                                    .child("Typed into the agent once it starts."),
+                                h_flex()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(11.))
+                                            .text_color(t.tx3)
+                                            .child("Typed into the agent once it starts."),
+                                    )
+                                    .child(
+                                        Checkbox::new("sheet-per-line")
+                                            .label("One workspace per line")
+                                            .small()
+                                            .checked(sheet.per_line)
+                                            .on_click(cx.listener(
+                                                |this, checked: &bool, _, cx| {
+                                                    if let Some(sheet) =
+                                                        &mut this.work.new_workspace
+                                                    {
+                                                        sheet.per_line = *checked;
+                                                        cx.notify();
+                                                    }
+                                                },
+                                            )),
+                                    ),
                             ),
                     )
                     .child(
                         v_flex()
                             .gap_1p5()
                             .child(label("Agent"))
-                            .child(div().grid().grid_cols(4).gap_1p5().children(agents)),
+                            .child(div().grid().grid_cols(4).gap_1p5().children(agents))
+                            .child(div().text_size(px(11.)).text_color(t.tx3).child(
+                                "⌘-click to run the task with several agents and compare them.",
+                            )),
                     )
                     .child(
                         v_flex()
@@ -597,10 +702,10 @@ impl HangarApp {
                     )
                     .child(
                         UiButton::new("sheet-create")
-                            .label(if creating {
-                                "Creating…"
-                            } else {
-                                "Create workspace"
+                            .label(match (creating, count) {
+                                (true, _) => "Creating…".to_owned(),
+                                (false, 0 | 1) => "Create workspace".to_owned(),
+                                (false, n) => format!("Create {n} workspaces"),
                             })
                             .kbd("⌘⏎")
                             .primary()
@@ -631,4 +736,12 @@ impl HangarApp {
                 .into_any_element(),
         )
     }
+}
+
+/// `text` with its first letter upper-case (error messages are lower-case).
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }

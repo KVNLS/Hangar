@@ -41,6 +41,9 @@ Git access is the `git` CLI with porcelain output, not a library.
 - **M6 Mobile run loop**: build/run per stack, device pool, per-worktree Metro/dev-server ports.
 - **M7 ACP structured agents**: AcpAdapter, tool-call/plan views.
 - **M8 MCP device tools**: screenshot, tap, type, logs so agents verify their own UI work.
+- **M9 Orchestration**: Hangar as the one place to run and supervise every agent: headless agent policies in
+  `usecases`, approvals inbox, workspace tasks and fan-out (batch, best-of-N), agent-to-agent MCP tools, usage
+  and session history.
 
 ## Open questions
 1. Where do worktrees live? Current default `~/Library/Application Support/Hangar/worktrees/<project>/<slug>`
@@ -58,9 +61,13 @@ Git access is the `git` CLI with porcelain output, not a library.
    ship it as view-only?
 9. Login PATH: `$SHELL -l -c` misses PATH set only in `.zshrc` (nvm, etc.); `-i -l` catches it but runs
    interactive startup scripts.
-10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
+10. ~~Agent choice per workspace~~ — resolved (owner, 2026-10-08): each workspace remembers the agent it
+    last started (`workspace_agent:<id>`); the sidebar picker is only the default for new workspaces.
 
 ## Explicitly unimplemented (return `Unsupported`)
+- `mcp` orchestration: `agent_transcript` for terminal agents (use `workspaces_list` for their state and
+  diff); `ask_user`; `notifications/tools/list_changed` when the setting changes (agents see it on their next
+  `tools/list` or in a new session).
 - `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
   Android rotation needs a sensor-following foreground app and upside-down is usually refused (spikes/m4-android-notes.md);
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
@@ -242,7 +249,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Gaps: no images or @-context in the composer, no
   keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
-  stopping a turn is esc or the Stop button; no transcript virtualization (long sessions render every item).
+  stopping a turn is esc or the Stop button. Transcript virtualization: see M9.
 - Live (2026-10-05, scratch repo, spikes/m7-acp-notes.md): streaming, tool cards, three permission prompts
   (Approval in the sidebar, ⏎ approves), `device_info` over the MCP bridge, an edit → Review `+1 −0`, esc
   stops a streaming turn, quitting leaves no agent process. `claude-agent-acp` puts the MCP session secret in
@@ -301,7 +308,7 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Welcome shows agent paths and toolchain locations.
   - Settings show agent paths and versions, a Boot button on base devices, and a keybinding search.
   - New workspace shows each base branch's tip and age (new port method `VersionControl::branch_tips`, kept by the owner).
-  - Settings › Permissions › Max concurrent agents (1–32, default 8): starts beyond it queue as Idle in FIFO order (pane: place, Start now, Cancel; status bar and overview: queued count) and start, with their agent and first task, when an agent ends. Lowering it never stops agents. Queue state is in memory only: a quit forgets it.
+  - Settings › Permissions › Max concurrent agents (1–32, default 8): starts beyond it queue as Idle in FIFO order (pane: place, Start now, Cancel; status bar and overview: queued count) and start, with their agent and first task, when an agent ends. Lowering it never stops agents. The queue is saved (`agents:queue`) and comes back after a relaunch: restored starts run once the login PATH is known (see M9).
   - Settings › Permissions › Default approval mode (see M7: ACP modes; Hangar allows read/search requests once at "Auto-approve reads").
   - Settings › Permissions › Notify when an agent needs me (default on): the Dock badge counts workspaces in Approval/Input/Failed, and the Dock bounces once when one starts waiting while Hangar is in the background. Banner notifications need the .app bundle (unbundled, `UNUserNotificationCenter` throws and `NSUserNotificationCenter` is nil).
 - **Still open** (owner calls or not backed; pane tabs and ⌘R are decided, see owner decisions below):
@@ -314,10 +321,8 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Clone repository.
   - Composer "@" attachments and context.
   - Agent memory and system RAM in the status bar.
-  - "Approve pending request" in the palette.
   - "Sandbox: worktree only": not shown, because agents are not sandboxed.
   - ⌘⏎ is missing from the Settings keybinding table.
-  - The review title stays the workspace name, because workspaces store no task.
 - On-screen pass (2026-10-07, dark + light, `HANGAR_DEV_SHOW` on a scratch repo):
   - Seen: workspace, review, overview, palette, new-workspace sheet, Settings › Agents / Devices / Keybindings, Device tab.
   - Fixed after the pass:
@@ -401,6 +406,92 @@ Git access is the `git` CLI with porcelain output, not a library.
   advertises `clientCapabilities._meta["subagent-transcript"]` for the text that was not streamed.
 - Not done: no per-subagent diff counts or devices on the rows; OpenCode, Codex and Gemini report no
   parent link; a nested subagent shows inside its top-level one, not in a view of its own.
+
+## M9 Orchestration (2026-10-07 – 10-08)
+- Owner decisions: approved a `core::ports::AgentRuntime` port with an agents use case in `usecases`; Store
+  schema changes (`Workspace.task`, persisted queue, session history, parent links); MCP orchestration tools
+  (off by default, an agent acts only on the workspaces it created); Claude Code hooks injected inline for
+  terminal agents (`--settings`, nothing written in the worktree).
+- Done: `hangar_usecases::agents` holds the max-concurrent-agents queue (`AgentQueue`) and the attention policy
+  (`Attention`), moved out of `app` unchanged. The `AgentRuntime` port comes with its first caller (MCP tools).
+- Done: workspaces store their task (`Workspace.task`, schema v3, `ALTER TABLE workspaces ADD COLUMN task`;
+  older rows read `None`). `Workspace::title` (the task's first line, else the name) prefills the commit
+  subject and the PR title, follows "Review ·" in the title bar, and shows under the name on overview cards.
+  Queued starts (`StartRequest`, now in `usecases::agents`) are saved on every change and restored on launch
+  for active workspaces. Checked live (scratch repo, limit 1, two workspaces): task saved and shown on the
+  cards, second start queued and saved; after quit and relaunch it started and the saved queue emptied.
+  Not shown in the sidebar (rows stay one line). A restored start begins without a click: it was asked for
+  before the quit.
+- Done: batch create and best of N. The New workspace sheet takes several agents (⌘-click adds or removes
+  one) and "One workspace per line"; `usecases::batch::plan` turns the request into workspaces (lines ×
+  agents, at most 12, branch name only for a single one, names "<name> · <agent>" or from the line), created
+  one at a time and started through the queue. Several agents on one task share a `WorkspaceGroupId`
+  (`Workspace.group`, schema v4). Overview cards of a group get "Compare N": an overlay with each attempt's
+  state, diff (+/−, files; diffs start for compared workspaces) and last line, with Open, Review and "Keep
+  this one" (confirms, then archives the other attempts; branches and worktrees stay). `HANGAR_DEV_AGENT`
+  takes several comma-separated agents, `HANGAR_DEV_SHOW=compare` opens the overlay. Seen on screen: the
+  overlay with two shell attempts and their diffs. Not seen: the sheet with several agents picked, Keep
+  (unit-tested: `batch::others_to_archive`).
+- Done: each workspace remembers the agent it last started (`workspace_agent:<id>`, saved when an agent
+  launches, dropped with the workspace; older workspaces fall back to their saved conversation's agent).
+  Overview Resume/Retry and the pane's Start/Resume/Restart run it, and resuming checks that agent's saved
+  conversation. Seen: a shell workspace offers "Restart Shell" while the picker is on Claude Code.
+- Done: permission requests answered without opening the pane. `ChatView::pending_request` /
+  `answer_pending` (allow once, else reject once or outright). Overview cards in Approval show
+  "Permission: <title>" with Deny and Allow once; the palette's "Approve" group (after Needs you) lists
+  "Allow <workspace>: <title>" for every structured agent waiting with an allow-once option.
+  `HANGAR_DEV_APPROVE=<s>` allows the first request through the same path. Live (Claude Code structured,
+  scratch repo): `echo done > note.txt` asked, the card showed Deny / Allow once, the hook allowed it, the
+  file was written (diff +1 240 ms later). Not seen on screen: the palette group. Claude Code runs
+  read-only commands such as `date` without asking. Terminal agents have no request to answer here.
+- Done: terminal Claude Code reports its state through hooks. The `claude` preset gets inline
+  `--settings` hooks (UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Notification, Stop)
+  running `Hangar notify <event>`, which maps the event (`hangar_mcp::hook::signal_for_hook`) to an
+  `AgentSignal` and sends `hangar/agentSignal` over the MCP socket with the workspace's session secret; it
+  always exits 0 (2 s timeout) so Claude Code is never held up. `AgentState::from_signal` gives Approval
+  (permission prompt), Input (`elicitation_dialog`, not seen live), Review/Idle after Stop; a `Working` only
+  holds while the terminal draws, because a late hook once landed after Stop. Other terminal agents keep the
+  output-timing guess. `HANGAR_DEV_KEYS` types timed raw keys into the focused agent. Live (terminal Claude
+  Code 2.1.285, scratch repo): prompt → working, permission dialog → Approval in sidebar, tab and status bar
+  ("1 approval"), Enter → working → turn ended, file written. Seen: every new worktree first shows Claude
+  Code's folder trust prompt (not a hook event, so Hangar shows Idle there); the owner's Claude config
+  starts in auto mode, so most commands never ask.
+- Done (2026-10-08, built by four parallel subagents on separate branches, cherry-picked onto
+  `orchestration-core`; the coordinator resolved overlaps and ordered the migrations v5 then v6):
+  - **MCP orchestration tools**, off by default (Settings › Permissions › "Let agents create and drive
+    workspaces", `agents:orchestration`). When on, the hangar MCP server also lists `workspaces_list`,
+    `workspace_create {task, name?, agent?}`, `agent_prompt {workspace, text}`, `agent_transcript {workspace,
+    last? 1–50}`; when off they are not listed and a call gets an error naming the setting. `Workspace.parent`
+    (schema v5, `parent_id`). A child starts from its lead's base branch in the same project, is named from
+    the task's first line, runs the lead's agent unless one is given, and starts through the agent queue
+    (reply: started, queued or failed to start). Guard rails are pure (`usecases::orchestration`; no
+    `AgentRuntime` port was needed): only own active children (by id or name), depth 2, at most 8 active
+    children (in-flight creates count); worktree creation is serialized. Creates and prompts show as a notice
+    in a structured lead's chat or a toast for a terminal lead; children's overview cards show "↳ <lead>".
+    Live (scratch repo, Claude Code structured as lead, Full auto): `workspace_create` made a shell child
+    with `parent_id` set and the child ran its task. Seen on screen: the "Created workspace “…” with Shell"
+    notice and the `workspaces_list` card (task, branch, agent, state, +1/−0, queued) in the lead's chat,
+    "↳ lead" on the child's card, the Settings switch (`HANGAR_DEV_SHOW=settings-permissions` scrolls there).
+  - **Usage and cost**: ACP `usage_update` `{used, size, cost?}` parsed into `SessionUpdate::Usage` and
+    folded into `acp::usage::SessionUsage`; cost is the agent's running session total (a drop is treated as
+    a restart and the earlier total is kept). Overview cards and the composer show "ctx 4% · $0.27", the
+    status bar "$X live" summed over running structured agents. Claude Code and OpenCode report cost, Codex
+    context only, Gemini nothing (shapes in spikes/m7-acp-notes.md). Seen on screen with Claude Code.
+    Not done: per-turn `PromptResponse.usage`, cost across restarts or per day, PTY agents.
+  - **Session history**: sessions record their first prompt and the workspace diff when they end, stop or
+    are archived (schema v6: `sessions.prompt/files/insertions/deletions`; `Store::finish_session`,
+    `Store::list_sessions_since`). `usecases::history` (pure) builds "Done today" from local midnight
+    (offset from `localtime_r`). Overview has a collapsible "Done today" section (both groupings); rows open
+    the workspace, archived ones are listed but not openable. Palette search also matches the task. Seen on
+    screen. Gaps: no diff when the workspace's live diff never ran; no history beyond today; sessions marked
+    stopped at startup count as ended then.
+  - **Transcript virtualization**: the chat renders through GPUI's variable-height `list` (`ListState`,
+    `FollowMode::Tail`); `chat_view::rows` (pure, tested) maps the current view's items (agent or subagent)
+    plus task/result/done/working rows to list rows and turns new and changed items into splice/remeasure
+    operations, so a streaming chunk remeasures one row. Seen on screen with a 40-line reply and a tool call.
+    Known limit: a cross-message selection drops the parts scrolled well off screen (gpui-component sweeps
+    unpainted selection participants).
+- Next: `ask_user`; persisting cost per day; merge `orchestration-core` into main.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a

@@ -33,6 +33,18 @@ fn fake_gpui_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>) {
                         height_pt: 874.0,
                     }));
                 }
+                McpRequest::Children { reply, .. } => {
+                    let _ = reply.send(Ok(vec![hangar_mcp::ChildWorkspace {
+                        id: "child".into(),
+                        name: "Login".into(),
+                        task: Some("Fix login".into()),
+                        branch: "hangar/login".into(),
+                        agent: Some("Codex".into()),
+                        state: "Working".into(),
+                        diff: Some((3, 1)),
+                        queued: false,
+                    }]));
+                }
                 other => drop(other),
             }
         }
@@ -82,6 +94,7 @@ fn bridge_binary_reaches_the_host() {
     let timeouts = Timeouts {
         call: Duration::from_secs(5),
         build_and_run: Duration::from_secs(5),
+        create: Duration::from_secs(5),
     };
     let (handle, rx) = start_with(&socket, timeouts).unwrap();
     fake_gpui_side(rx);
@@ -146,4 +159,53 @@ fn bridge_binary_reaches_the_host() {
             .unwrap()
             .contains("not reachable")
     );
+}
+
+#[test]
+fn orchestration_tools_follow_the_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("hangar.sock");
+    let (handle, rx) = start_with(&socket, Timeouts::default()).unwrap();
+    fake_gpui_side(rx);
+    let secret = handle.register(WorkspaceId::new());
+    let input = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"workspaces_list","arguments":{}}}"#,
+        "",
+    ]
+    .join("\n");
+    let names = |responses: &[Value]| -> Vec<String> {
+        by_id(responses, 1)["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_owned))
+            .collect()
+    };
+
+    let (responses, stderr, ok) = bridge(&socket, &secret, &input);
+    assert!(ok, "bridge failed: {stderr}");
+    assert!(!names(&responses).contains(&"workspaces_list".to_owned()));
+    let refused = &by_id(&responses, 2)["result"];
+    println!("off -> {refused}");
+    assert_eq!(refused["isError"], true);
+
+    handle.set_orchestration(true);
+    let (responses, stderr, ok) = bridge(&socket, &secret, &input);
+    assert!(ok, "bridge failed: {stderr}");
+    let listed = names(&responses);
+    println!("on -> tools/list {listed:?}");
+    for tool in [
+        "workspaces_list",
+        "workspace_create",
+        "agent_prompt",
+        "agent_transcript",
+    ] {
+        assert!(listed.contains(&tool.to_owned()), "{tool}");
+    }
+    let result = &by_id(&responses, 2)["result"];
+    assert_eq!(result["isError"], false, "{result}");
+    let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    println!("on -> workspaces_list {text}");
+    assert_eq!(text["workspaces"][0]["diff"]["added"], 3);
 }

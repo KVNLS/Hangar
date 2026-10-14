@@ -3,11 +3,38 @@
 
 use std::path::{Path, PathBuf};
 
+use hangar_core::changes::DiffStat;
 use hangar_core::ports::{NewWorktree, PortError, Store, VersionControl};
 use hangar_core::{
-    BRANCH_PREFIX, Project, ProjectId, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
-    WorkspaceStatus, branch_name, slugify, unique_slug, worktree_path,
+    BRANCH_PREFIX, Project, ProjectId, SessionId, Timestamp, Workspace, WorkspaceGroupId,
+    WorkspaceId, WorkspaceStatus, branch_name, slugify, unique_slug, worktree_path,
 };
+
+use crate::sessions::stopped;
+
+/// What to create: the name, where its branch starts and how it is named, the task, and the
+/// attempts it belongs to. Blank fields mean the defaults.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewWorkspace {
+    pub name: String,
+    /// Branch to start from (default: the project's default base).
+    pub base: Option<String>,
+    /// The new branch's name (default: `hangar/<slug>`, suffixed until free).
+    pub branch: Option<String>,
+    pub task: Option<String>,
+    pub group: Option<WorkspaceGroupId>,
+    /// The workspace whose agent asked for this one (orchestration tools).
+    pub parent: Option<WorkspaceId>,
+}
+
+impl NewWorkspace {
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -179,19 +206,22 @@ impl<'a> Workspaces<'a> {
         Ok(project)
     }
 
-    /// Creates the branch, the worktree and the workspace row, starting from `base` (default:
-    /// the project's default base) on a branch named `branch` (default: `hangar/<slug>`,
-    /// suffixed until free). The slug gets a numeric suffix when the name, branch or directory
-    /// is already taken; a given branch name is used as is and must not exist yet.
+    /// Creates the branch, the worktree and the workspace row (see [`NewWorkspace`]). The slug
+    /// gets a numeric suffix when the name, branch or directory is already taken; a given branch
+    /// name is used as is and must not exist yet.
     pub fn create(
         &self,
         project: &Project,
-        name: &str,
         worktrees_root: &Path,
-        base: Option<&str>,
-        branch: Option<&str>,
+        spec: &NewWorkspace,
     ) -> Result<Workspace> {
-        let name = name.trim();
+        let (base, branch) = (spec.base.as_deref(), spec.branch.as_deref());
+        let task = spec
+            .task
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        let name = spec.name.trim();
         if name.is_empty() {
             return Err(WorkspaceError::EmptyName);
         }
@@ -264,6 +294,9 @@ impl<'a> Workspaces<'a> {
             worktree_path: created,
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
+            task: task.map(str::to_owned),
+            group: spec.group,
+            parent: spec.parent,
         };
         if let Err(err) = self.store.insert_workspace(&workspace) {
             self.rollback(repo, &path, &workspace.branch);
@@ -281,25 +314,21 @@ impl<'a> Workspaces<'a> {
         }
     }
 
-    fn stop_session(&self, id: SessionId, reason: &str) -> Result<()> {
-        self.store
-            .update_session_status(
-                id,
-                &SessionStatus::Failed {
-                    message: format!("stopped: {reason}"),
-                },
-            )
-            .map_err(WorkspaceError::StopSession)?;
-        Ok(())
-    }
-
-    /// Marks the workspace archived, recording `session` (if any) as stopped.
-    pub fn archive(&self, id: WorkspaceId, session: Option<SessionId>) -> Result<()> {
+    /// Marks the workspace archived, recording `session` (if any) as stopped with the
+    /// workspace's diff at that moment, when known.
+    pub fn archive(
+        &self,
+        id: WorkspaceId,
+        session: Option<SessionId>,
+        changes: Option<DiffStat>,
+    ) -> Result<()> {
         self.store
             .update_workspace_status(id, WorkspaceStatus::Archived)
             .map_err(WorkspaceError::Archive)?;
         if let Some(session) = session {
-            self.stop_session(session, "workspace archived")?;
+            self.store
+                .finish_session(session, &stopped("workspace archived"), changes)
+                .map_err(WorkspaceError::StopSession)?;
         }
         Ok(())
     }
@@ -441,7 +470,7 @@ mod tests {
         );
         let project = project(&store);
         let ws = Workspaces::new(&store, &git)
-            .create(&project, " Fix login ", &root(), None, None)
+            .create(&project, &root(), &NewWorkspace::named(" Fix login "))
             .unwrap();
         assert_eq!(
             (ws.name.as_str(), ws.slug.as_str()),
@@ -454,6 +483,33 @@ mod tests {
     }
 
     #[test]
+    fn archive_stops_the_session_with_the_workspace_diff() {
+        let (store, git) = (FakeStore::default(), FakeGit::default());
+        let project = project(&store);
+        let workspaces = Workspaces::new(&store, &git);
+        let ws = workspaces
+            .create(&project, &root(), &NewWorkspace::named("Docs"))
+            .unwrap();
+        let session = hangar_core::Session::new(ws.id, hangar_core::AgentKind::Claude);
+        store.insert_session(&session).unwrap();
+        let stat = DiffStat {
+            files: 1,
+            insertions: 2,
+            deletions: 3,
+        };
+        workspaces
+            .archive(ws.id, Some(session.id), Some(stat))
+            .unwrap();
+        assert_eq!(
+            store.get_workspace(ws.id).unwrap().status,
+            WorkspaceStatus::Archived
+        );
+        let recorded = store.list_sessions(ws.id).unwrap().remove(0);
+        assert!(crate::sessions::is_stopped(&recorded.status));
+        assert_eq!(recorded.changes, Some(stat));
+    }
+
+    #[test]
     fn create_rolls_back_branch_and_worktree_when_the_row_cannot_be_saved() {
         let store = FakeStore {
             refuse_workspaces: true,
@@ -462,7 +518,14 @@ mod tests {
         let git = FakeGit::default();
         let project = project(&store);
         let err = Workspaces::new(&store, &git)
-            .create(&project, "Fix", &root(), Some("develop"), None)
+            .create(
+                &project,
+                &root(),
+                &NewWorkspace {
+                    base: Some("develop".into()),
+                    ..NewWorkspace::named("Fix")
+                },
+            )
             .unwrap_err();
         assert!(matches!(err, WorkspaceError::SaveWorkspace(_)), "{err}");
         let path = root().join("my-app/fix");
@@ -483,15 +546,29 @@ mod tests {
         let project = project(&store);
         let workspaces = Workspaces::new(&store, &git);
         let err = workspaces
-            .create(&project, "x", &root(), None, Some("bad name"))
+            .create(
+                &project,
+                &root(),
+                &NewWorkspace {
+                    branch: Some("bad name".into()),
+                    ..NewWorkspace::named("x")
+                },
+            )
             .unwrap_err();
         assert_eq!(err.to_string(), "`bad name` is not a valid branch name");
         let err = workspaces
-            .create(&project, "x", &root(), None, Some("taken"))
+            .create(
+                &project,
+                &root(),
+                &NewWorkspace {
+                    branch: Some("taken".into()),
+                    ..NewWorkspace::named("x")
+                },
+            )
             .unwrap_err();
         assert_eq!(err.to_string(), "branch `taken` already exists");
         let err = workspaces
-            .create(&project, "  ", &root(), None, None)
+            .create(&project, &root(), &NewWorkspace::named("  "))
             .unwrap_err();
         assert_eq!(err.to_string(), "workspace name is empty");
         assert!(git.calls().is_empty());
@@ -520,6 +597,9 @@ mod tests {
             worktree_path: main.clone(),
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
+            task: None,
+            group: None,
+            parent: None,
         };
         store.insert_workspace(&ws).unwrap();
         let err = Workspaces::new(&store, &git)
@@ -536,7 +616,7 @@ mod tests {
         let project = project(&store);
         let workspaces = Workspaces::new(&store, &git);
         workspaces
-            .create(&project, "One", &root(), None, None)
+            .create(&project, &root(), &NewWorkspace::named("One"))
             .unwrap();
         let err = workspaces.remove_project(project.id).unwrap_err();
         assert_eq!(

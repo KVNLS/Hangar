@@ -64,10 +64,12 @@ impl HangarApp {
         self.live
             .diffs
             .retain(|id, _| projects.is_active(*id) && !busy.contains(id));
-        for pane in 0..self.layout.panes.count() {
-            let Some(id) = self.layout.panes.slot(pane) else {
-                continue;
-            };
+        let shown: Vec<WorkspaceId> = (0..self.layout.panes.count())
+            .filter_map(|pane| self.layout.panes.slot(pane))
+            .chain(self.compared_workspaces())
+            .chain(self.orchestrated_workspaces())
+            .collect();
+        for id in shown {
             if self.live.diffs.contains_key(&id) || self.work.busy.contains(&id) {
                 continue;
             }
@@ -100,7 +102,7 @@ impl HangarApp {
                 let project = self.work.projects.project(ws.project_id)?;
                 Some(PanelSource {
                     workspace: id,
-                    name: SharedString::from(ws.name.clone()),
+                    name: SharedString::from(ws.title().to_owned()),
                     diff: entry.diff.clone(),
                     target: ReviewTarget {
                         workspace: ws.clone(),
@@ -137,6 +139,9 @@ impl HangarApp {
             let shown = screen == Screen::Workspace;
             self.device_panel
                 .update(cx, |panel, cx| panel.set_visible(shown, window, cx));
+        }
+        if screen == Screen::Overview {
+            self.refresh_done_today(cx);
         }
         match screen {
             Screen::Review => {}

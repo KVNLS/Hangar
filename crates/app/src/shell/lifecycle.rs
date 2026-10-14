@@ -1,26 +1,62 @@
 //! Workspace and session lifecycle: create, start, attach, exit, archive, restore, delete.
 
+use std::sync::{Mutex, PoisonError};
+
 use super::*;
+
+/// Held while a worktree and its workspace row are created.
+static CREATE_LOCK: Mutex<()> = Mutex::new(());
+
+/// A workspace just created, and its agent's start.
+pub(super) struct SpawnedWorkspace {
+    pub workspace: Workspace,
+    /// How many starts wait before its agent's, when it was queued.
+    pub queued: Option<usize>,
+    /// Resolves to whether the agent started now.
+    pub start: Task<bool>,
+}
 
 impl HangarApp {
     /// Creates the worktree and workspace off the main thread, assigns it `target` as its base
     /// device (else the default on first use), shows it in the focused pane and starts
-    /// `agent_id` in it. Resolves once the agent has started, failed or been queued.
-    /// `branches`: the base to start from and the new branch's name, each `None` for the
-    /// default (see [`ops::create_workspace_from`]). `input` is typed into the agent once it
-    /// runs, which may be later if the start is queued.
-    #[allow(clippy::too_many_arguments)]
+    /// `agent_id` in it. Resolves once the agent has started, failed or been queued. The task
+    /// of `new` is typed into the agent once it runs, which may be later if the start is queued.
     pub(super) fn create_workspace(
         &mut self,
         project_id: ProjectId,
-        name: String,
+        new: ops::NewWorkspace,
         agent_id: String,
         target: Option<crate::device_panel::DeviceKey>,
-        branches: (Option<String>, Option<String>),
-        input: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Option<WorkspaceId>> {
+        let created = self.spawn_workspace(project_id, new, agent_id, target, true, window, cx);
+        cx.spawn_in(window, async move |this, cx| match created.await {
+            Ok(spawned) => {
+                spawned.start.await;
+                Some(spawned.workspace.id)
+            }
+            Err(err) => {
+                let _ = this.update_in(cx, |this, window, cx| this.report(&err, window, cx));
+                None
+            }
+        })
+    }
+
+    /// [`Self::create_workspace`] without reporting errors, and showing the new workspace in
+    /// the focused pane only with `show`. Resolves once the workspace exists and its agent was
+    /// asked to start.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn spawn_workspace(
+        &mut self,
+        project_id: ProjectId,
+        new: ops::NewWorkspace,
+        agent_id: String,
+        target: Option<crate::device_panel::DeviceKey>,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<anyhow::Result<SpawnedWorkspace>> {
         let prepared = (|| {
             let store = self
                 .store
@@ -38,69 +74,57 @@ impl HangarApp {
         })();
         let (store, project, root) = match prepared {
             Ok(prepared) => prepared,
-            Err(err) => {
-                self.report(&err, window, cx);
-                return Task::ready(None);
-            }
+            Err(err) => return Task::ready(Err(err)),
         };
         self.work.creating.insert(project_id);
         cx.notify();
 
+        let input = new.task.clone().filter(|t| !t.trim().is_empty());
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let (base, branch) = branches;
-                    ops::create_workspace_from(
-                        &store,
-                        &project,
-                        &name,
-                        &root,
-                        base.as_deref(),
-                        branch.as_deref(),
-                    )
+                    // Agents may create several workspaces at once; git worktree commands on one
+                    // repository must not race.
+                    let _serial = CREATE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+                    ops::create_workspace_from(&store, &project, &root, &new)
                 })
                 .await;
-            let started = this
-                .update_in(cx, |this, window, cx| {
-                    this.work.creating.remove(&project_id);
-                    cx.notify();
-                    match result {
-                        Ok(workspace) => {
-                            tracing::info!(
-                                name = %workspace.name,
-                                branch = %workspace.branch,
-                                path = %workspace.worktree_path.display(),
-                                "workspace created"
-                            );
-                            let id = workspace.id;
-                            this.work.projects.upsert_workspace(workspace);
-                            this.track_workspace(id, cx);
-                            if let Some(target) = target {
-                                this.device_pool.update(cx, |pool, cx| {
-                                    pool.assign(id, target.platform, target.id, cx)
-                                });
-                            }
-                            this.layout.panes.show(id);
-                            this.panes_changed(window, cx);
-                            let request = queue::StartRequest {
-                                agent: agent_id,
-                                resume: false,
-                                input,
-                            };
-                            Some((id, this.request_agent(id, request, window, cx)))
-                        }
-                        Err(err) => {
-                            this.report(&err, window, cx);
-                            None
-                        }
-                    }
+            this.update_in(cx, |this, window, cx| {
+                this.work.creating.remove(&project_id);
+                cx.notify();
+                let workspace = result?;
+                tracing::info!(
+                    name = %workspace.name,
+                    branch = %workspace.branch,
+                    path = %workspace.worktree_path.display(),
+                    "workspace created"
+                );
+                let id = workspace.id;
+                this.work.projects.upsert_workspace(workspace.clone());
+                this.track_workspace(id, cx);
+                if let Some(target) = target {
+                    this.device_pool.update(cx, |pool, cx| {
+                        pool.assign(id, target.platform, target.id, cx)
+                    });
+                }
+                if show {
+                    this.layout.panes.show(id);
+                    this.panes_changed(window, cx);
+                }
+                let request = queue::StartRequest {
+                    agent: agent_id,
+                    resume: false,
+                    input,
+                };
+                let start = this.request_agent(id, request, window, cx);
+                Ok(SpawnedWorkspace {
+                    queued: this.queued_ahead(id),
+                    workspace,
+                    start,
                 })
-                .ok()
-                .flatten();
-            let (id, start) = started?;
-            start.await;
-            Some(id)
+            })
+            .map_err(|_| anyhow!("the window closed"))?
         })
     }
 
@@ -159,17 +183,19 @@ impl HangarApp {
                 return Task::ready(false);
             }
         };
+        self.remember_workspace_agent(workspace_id, &agent_id, window, cx);
         let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
         if let Some(message) = self.ollama_unavailable(&agent_id) {
             window.push_notification(Notification::warning(message), cx);
         }
         // Without the device tools the agent still runs: say why, don't block it.
-        let extras = self
+        let mut extras = self
             .agent_extras(adapter.id(), &workspace, cx)
             .unwrap_or_else(|err| {
                 tracing::warn!("agent starts without device tools: {err:#}");
                 Default::default()
             });
+        extras.prompt = input.clone();
         let waker = TerminalWaker::new();
         let hook = waker.hook();
         let agent_name: SharedString = adapter.display_name().to_owned().into();
@@ -248,8 +274,8 @@ impl HangarApp {
             return true;
         }
         let id = session.id;
-        self.persist(window, cx, move |store| {
-            ops::stop_session(store, id, "workspace closed while starting")
+        self.record_session_end(window, cx, move |store| {
+            ops::stop_session(store, id, "workspace closed while starting", None)
         });
         false
     }
@@ -264,8 +290,9 @@ impl HangarApp {
         if let Some(previous) = self.live.sessions.insert(workspace_id, live)
             && let Some(id) = previous.stop()
         {
-            self.persist(window, cx, move |store| {
-                ops::stop_session(store, id, "replaced by a new session")
+            let changes = self.diff_stat(workspace_id, cx);
+            self.record_session_end(window, cx, move |store| {
+                ops::stop_session(store, id, "replaced by a new session", changes)
             });
         }
         if self.layout.panes.slot(self.layout.panes.focused()) == Some(workspace_id) {
@@ -372,6 +399,7 @@ impl HangarApp {
             agent_name,
             surface: AgentSurface::Chat { acp, view },
             activity: Default::default(),
+            signal: None,
             _exit: exit,
         };
         self.insert_live_session(workspace_id, live, window, cx);
@@ -392,11 +420,50 @@ impl HangarApp {
 
     fn forget_chat(&mut self, workspace_id: WorkspaceId) {
         self.live.saved_chats.remove(&workspace_id);
-        if let Some(store) = &self.store
-            && let Err(err) = store.delete_setting(&setting_keys::chat(workspace_id))
-        {
-            tracing::warn!(%err, "failed to forget the saved conversation");
+        self.live.workspace_agents.remove(&workspace_id);
+        if let Some(store) = &self.store {
+            if let Err(err) = store.delete_setting(&setting_keys::chat(workspace_id)) {
+                tracing::warn!(%err, "failed to forget the saved conversation");
+            }
+            if let Err(err) = store.delete_setting(&setting_keys::workspace_agent(workspace_id)) {
+                tracing::warn!(%err, "failed to forget the workspace's agent");
+            }
         }
+    }
+
+    /// The agent to start in `workspace_id`: the one it last ran, else the picker's.
+    pub(super) fn agent_for(&self, workspace_id: WorkspaceId) -> String {
+        self.live
+            .workspace_agents
+            .get(&workspace_id)
+            .filter(|id| agents::preset(id).is_some())
+            .cloned()
+            .unwrap_or_else(|| self.agent_setup.agent.to_string())
+    }
+
+    fn remember_workspace_agent(
+        &mut self,
+        workspace_id: WorkspaceId,
+        agent_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .live
+            .workspace_agents
+            .get(&workspace_id)
+            .map(String::as_str)
+            == Some(agent_id)
+        {
+            return;
+        }
+        self.live
+            .workspace_agents
+            .insert(workspace_id, agent_id.to_owned());
+        let agent = agent_id.to_owned();
+        self.persist(window, cx, move |store| {
+            ops::save_workspace_agent(store, workspace_id, &agent)
+        });
     }
 
     /// Shows `path` (absolute, inside the workspace's worktree) in the Files tab.
@@ -470,6 +537,7 @@ impl HangarApp {
             agent_name,
             surface: AgentSurface::Terminal { handle, view },
             activity: Default::default(),
+            signal: None,
             _exit: exit,
         };
         self.insert_live_session(workspace_id, live, window, cx);
@@ -489,8 +557,9 @@ impl HangarApp {
         live.session.status = status.clone();
         let session_id = live.session.id;
         cx.notify();
-        self.persist(window, cx, move |store| {
-            ops::finish_session(store, session_id, &status).map(drop)
+        let changes = self.diff_stat(workspace_id, cx);
+        self.record_session_end(window, cx, move |store| {
+            ops::finish_session(store, session_id, &status, changes).map(drop)
         });
         self.drain_agent_queue(window, cx);
     }
@@ -521,6 +590,7 @@ impl HangarApp {
         let Some(store) = self.store.clone() else {
             return Task::ready(());
         };
+        let changes = self.diff_stat(workspace_id, cx);
         let (session, _) = self.close_session(workspace_id);
         self.close_run(workspace_id);
         self.close_mcp(workspace_id);
@@ -541,7 +611,9 @@ impl HangarApp {
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { ops::archive_workspace(&store, workspace_id, session) })
+                .spawn(async move {
+                    ops::archive_workspace(&store, workspace_id, session, changes)
+                })
                 .await;
             match device.await {
                 Ok(()) => tracing::info!(workspace = %workspace_id, "workspace device shut down"),
@@ -552,7 +624,10 @@ impl HangarApp {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.work.busy.remove(&workspace_id);
                 match result {
-                    Ok(()) => tracing::info!(workspace = %workspace_id, "workspace archived"),
+                    Ok(()) => {
+                        tracing::info!(workspace = %workspace_id, "workspace archived");
+                        this.refresh_done_today(cx);
+                    }
                     Err(err) => {
                         // The agent is already stopped; show the row where the store still has it.
                         this.work.projects
@@ -695,7 +770,7 @@ impl HangarApp {
                         tracing::warn!("agent still running after kill; removing worktree anyway");
                     }
                     if let Some(session) = session {
-                        ops::stop_session(&store, session, "workspace deleted")?;
+                        ops::stop_session(&store, session, "workspace deleted", None)?;
                     }
                     ops::delete_workspace(&store, workspace_id, options)
                 })

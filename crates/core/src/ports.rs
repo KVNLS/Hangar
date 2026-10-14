@@ -4,13 +4,14 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::changes::{DiffOptions, FileDiff, GitDirs, Status};
+use crate::changes::{DiffOptions, DiffStat, FileDiff, GitDirs, Status};
 use crate::review::{
     CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
     Upstream,
 };
 use crate::{
-    Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
+    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
+    WorkspaceStatus,
 };
 
 /// An adapter's failure, opaque so adapter types (rusqlite, git output) stay out of the domain.
@@ -45,6 +46,16 @@ pub trait Store: Send + Sync {
     fn insert_session(&self, session: &Session) -> PortResult<()>;
     fn list_sessions(&self, workspace: WorkspaceId) -> PortResult<Vec<Session>>;
     fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session>;
+    /// Records how a session ended: its status (a terminal one stamps `ended_at` once) and, when
+    /// known, the workspace's diff at that moment. Returns the updated session.
+    fn finish_session(
+        &self,
+        id: SessionId,
+        status: &SessionStatus,
+        changes: Option<DiffStat>,
+    ) -> PortResult<Session>;
+    /// Sessions of every workspace that ended at or after `since`, the latest ended first.
+    fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>>;
 
     /// The JSON stored under `key`; `None` when it was never set.
     fn read_setting(&self, key: &str) -> PortResult<Option<String>>;
@@ -91,6 +102,17 @@ impl<S: Store + ?Sized> Store for std::sync::Arc<S> {
     }
     fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session> {
         (**self).update_session_status(id, status)
+    }
+    fn finish_session(
+        &self,
+        id: SessionId,
+        status: &SessionStatus,
+        changes: Option<DiffStat>,
+    ) -> PortResult<Session> {
+        (**self).finish_session(id, status, changes)
+    }
+    fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>> {
+        (**self).list_sessions_since(since)
     }
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
         (**self).read_setting(key)

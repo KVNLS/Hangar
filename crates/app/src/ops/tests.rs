@@ -82,12 +82,17 @@ fn create_workspace_from_a_base_on_a_chosen_branch() {
     let ws = create_workspace_from(
         &store,
         &project,
-        "Hotfix",
         root.path(),
-        Some("release"),
-        Some("fix/crash"),
+        &NewWorkspace {
+            base: Some("release".into()),
+            branch: Some("fix/crash".into()),
+            task: Some("  Fix the crash  ".into()),
+            ..NewWorkspace::named("Hotfix")
+        },
     )
     .unwrap();
+    assert_eq!(ws.task.as_deref(), Some("Fix the crash"));
+    assert_eq!(store.get_workspace(ws.id).unwrap().task, ws.task);
     assert_eq!(
         (ws.slug.as_str(), ws.branch.as_str()),
         ("hotfix", "fix/crash")
@@ -98,22 +103,42 @@ fn create_workspace_from_a_base_on_a_chosen_branch() {
     let taken = create_workspace_from(
         &store,
         &project,
-        "again",
         root.path(),
-        None,
-        Some("fix/crash"),
+        &NewWorkspace {
+            branch: Some("fix/crash".into()),
+            ..NewWorkspace::named("again")
+        },
     );
     assert!(taken.unwrap_err().to_string().contains("already exists"));
-    let bad = create_workspace_from(&store, &project, "x", root.path(), None, Some("a..b"));
+    let bad = create_workspace_from(
+        &store,
+        &project,
+        root.path(),
+        &NewWorkspace {
+            branch: Some("a..b".into()),
+            ..NewWorkspace::named("x")
+        },
+    );
     assert!(
         bad.unwrap_err()
             .to_string()
             .contains("not a valid branch name")
     );
     // Blank fields fall back to the defaults.
-    let ws =
-        create_workspace_from(&store, &project, "plain", root.path(), Some(" "), Some("")).unwrap();
+    let ws = create_workspace_from(
+        &store,
+        &project,
+        root.path(),
+        &NewWorkspace {
+            base: Some(" ".into()),
+            branch: Some(String::new()),
+            task: Some(" ".into()),
+            ..NewWorkspace::named("plain")
+        },
+    )
+    .unwrap();
     assert_eq!(ws.branch, "hangar/plain");
+    assert_eq!(ws.task, None);
     assert_eq!(ws.base, project.default_base);
 }
 
@@ -186,6 +211,13 @@ fn saved_conversations_load_per_workspace() {
         .unwrap();
     let loaded = load(&store).unwrap();
     assert_eq!(loaded.chats.get(&ws.id), Some(&chat));
+    assert!(loaded.workspace_agents.is_empty());
+    save_workspace_agent(&store, ws.id, "codex-acp").unwrap();
+    let loaded = load(&store).unwrap();
+    assert_eq!(
+        loaded.workspace_agents.get(&ws.id).map(String::as_str),
+        Some("codex-acp")
+    );
 }
 
 #[test]
@@ -262,6 +294,7 @@ fn session_extras_write_files_and_reach_the_agent() {
             ("OUT".into(), out.display().to_string()),
         ],
         files: vec![(config.clone(), "{}".into())],
+        prompt: Some("Fix the build".into()),
     };
     let started = start_session_with(&store, &adapter, &ws, None, Arc::new(|| {}), &extra).unwrap();
     let exit = started
@@ -277,6 +310,10 @@ fn session_extras_write_files_and_reach_the_agent() {
     assert_eq!(
         started.session.args.last().map(String::as_str),
         Some("--flag")
+    );
+    assert_eq!(
+        store.list_sessions(ws.id).unwrap()[0].prompt.as_deref(),
+        Some("Fix the build")
     );
 
     let inside = AgentExtras {
@@ -492,6 +529,9 @@ fn delete_refuses_paths_that_are_not_linked_worktrees() {
             worktree_path: path.clone(),
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
+            task: None,
+            group: None,
+            parent: None,
         };
         f.store.insert_workspace(&ws).unwrap();
         let force = DeleteOptions {
@@ -511,13 +551,21 @@ fn archive_restore_and_load_keep_archived_workspaces() {
     let f = fixture();
     let ws = f.workspace("later");
     let session = f.store.list_sessions(ws.id).unwrap()[0].id;
-    archive_workspace(&f.store, ws.id, Some(session)).unwrap();
+    let stat = hangar_core::changes::DiffStat {
+        files: 1,
+        insertions: 5,
+        deletions: 2,
+    };
+    archive_workspace(&f.store, ws.id, Some(session), Some(stat)).unwrap();
     assert_eq!(
         f.store.get_workspace(ws.id).unwrap().status,
         WorkspaceStatus::Archived
     );
     let row = f.store.get_session(session).unwrap();
     assert!(matches!(row.status, SessionStatus::Failed { .. }));
+    assert_eq!(row.changes, Some(stat));
+    let ended = sessions_ended_since(&f.store, hangar_core::Timestamp(0)).unwrap();
+    assert_eq!(ended.iter().map(|s| s.id).collect::<Vec<_>>(), [session]);
     assert!(ws.worktree_path.is_dir());
 
     let loaded = load(&f.store).unwrap();
@@ -536,7 +584,7 @@ fn remove_project_requires_no_active_workspaces() {
     let err = remove_project(&f.store, f.project.id).unwrap_err();
     assert!(err.to_string().contains("busy"), "{err}");
 
-    archive_workspace(&f.store, ws.id, None).unwrap();
+    archive_workspace(&f.store, ws.id, None, None).unwrap();
     remove_project(&f.store, f.project.id).unwrap();
     assert!(f.store.list_projects().unwrap().is_empty());
     // The repository and the archived worktree stay on disk.
@@ -577,6 +625,16 @@ fn settings_are_loaded_and_bad_ones_reported() {
     assert!(loaded.layout.is_none());
     assert!(loaded.settings_error.is_some());
     assert_eq!(loaded.entries.len(), 1);
+}
+
+#[test]
+fn orchestration_round_trips() {
+    let f = fixture();
+    assert_eq!(load(&f.store).unwrap().orchestration, None);
+    save_orchestration(&f.store, true).unwrap();
+    assert_eq!(load(&f.store).unwrap().orchestration, Some(true));
+    save_orchestration(&f.store, false).unwrap();
+    assert_eq!(load(&f.store).unwrap().orchestration, Some(false));
 }
 
 #[test]
@@ -783,4 +841,30 @@ fn workspace_mode_wins_for_its_agent_only() {
             mode: "plan".into()
         })
     );
+}
+
+#[test]
+fn queued_starts_are_saved_and_loaded_in_order() {
+    let store = Store::open_in_memory().unwrap();
+    assert!(load(&store).unwrap().agent_queue.is_empty());
+    let queue = vec![
+        (
+            WorkspaceId::new(),
+            StartRequest {
+                agent: "claude-acp".into(),
+                resume: false,
+                input: Some("Fix the login".into()),
+            },
+        ),
+        (
+            WorkspaceId::new(),
+            StartRequest {
+                agent: "codex".into(),
+                resume: true,
+                input: None,
+            },
+        ),
+    ];
+    save_agent_queue(&store, &queue).unwrap();
+    assert_eq!(load(&store).unwrap().agent_queue, queue);
 }

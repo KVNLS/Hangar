@@ -2,9 +2,12 @@
 //! transcript, and a composer.
 
 mod render;
+mod rows;
 mod subagent;
+mod usage;
 
 pub use subagent::subagent_state;
+pub use usage::{costs_label, usage_label};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,17 +23,30 @@ use hangar_agents::acp::protocol::{
     AvailableCommand, ConfigOption, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
 };
 use hangar_agents::acp::subagents::{PendingPermission, Subagent, owner, subagents};
+use hangar_agents::acp::usage::SessionUsage;
 use hangar_agents::acp::{AcpEvent, AcpSession, PermissionRequest};
 use hangar_core::AcpTurn;
 
 use crate::changes::WorkspaceDiff;
 use crate::terminal_view::TerminalWaker;
+use rows::{Rows, touch};
 
 const CONTEXT: &str = "ChatView";
 /// Events arriving within one frame are applied together.
 const REDRAW_INTERVAL: Duration = Duration::from_millis(8);
+/// Transcript rows measured beyond the viewport, so scrolling does not pop items in.
+const OVERDRAW: Pixels = px(800.);
 
 actions!(chat_view, [ChatEscape]);
+
+/// A permission request a structured agent waits on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingRequest {
+    /// What the agent wants to do (the tool call's title).
+    pub title: SharedString,
+    /// The agent offers "allow once" (some only offer always / reject).
+    pub can_allow: bool,
+}
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("escape", ChatEscape, Some(CONTEXT))]);
@@ -72,7 +88,8 @@ struct Outcome {
 /// Emitted by [`ChatView`].
 #[derive(Clone, Debug)]
 pub enum ChatEvent {
-    /// The turn started or ended, or a permission request arrived or was answered.
+    /// The turn started or ended, a permission request arrived or was answered, or the usage
+    /// changed.
     StateChanged,
     /// The agent process ended. Always the last event.
     Exited {
@@ -110,15 +127,25 @@ pub struct ChatView {
     config: Vec<ConfigOption>,
     /// Slash commands the agent offers (`/name` at the start of a prompt).
     commands: Vec<AvailableCommand>,
+    usage: SessionUsage,
     composer: Entity<TextareaState>,
     /// The last turn ended normally: a "Ready for review" card follows it while the workspace
     /// has changes.
     turn_done: bool,
     /// The workspace's live diff, for the review card (set by the shell).
     diff: Option<(Entity<WorkspaceDiff>, Subscription)>,
-    scroll: ScrollHandle,
-    /// Keep the newest item in view; turned off when the user scrolls up.
-    follow: bool,
+    /// The virtualized transcript. It follows the tail until the user scrolls up, and again
+    /// once they scroll back to the bottom.
+    list: ListState,
+    /// What `list` holds, kept in step by `sync_rows` on each render.
+    rows: Rows,
+    /// Items changed in place since the last sync.
+    dirty: Vec<usize>,
+    /// A tool call arrived or learned its parent: in a subagent's view, which items show may
+    /// have changed beyond the dirty ones.
+    relink: bool,
+    /// The view `rows` was built for (`focus` at the time); `None` before the first render.
+    rows_view: Option<Option<String>>,
     /// The first item of the current (or last) prompt turn.
     turn_start: usize,
     /// The subagent shown instead of the agent's own transcript (its launch call id).
@@ -183,17 +210,22 @@ impl ChatView {
             mode_id: None,
             config: Vec::new(),
             commands: Vec::new(),
+            usage: SessionUsage::default(),
             composer,
             turn_done: false,
             diff: None,
-            scroll: ScrollHandle::new(),
-            follow: true,
+            list: ListState::new(0, ListAlignment::Top, OVERDRAW),
+            rows: Rows::default(),
+            dirty: Vec::new(),
+            relink: false,
+            rows_view: None,
             turn_start: 0,
             focus: None,
             approval: ApprovalLevel::default(),
             _tasks: vec![pump],
             _subscriptions: subscriptions,
         };
+        view.list.set_follow_mode(FollowMode::Tail);
         let mode = view.session.initial_mode().map(str::to_owned);
         view.set_mode(mode);
         view.config = view.session.config_options().to_vec();
@@ -210,6 +242,11 @@ impl ChatView {
 
     pub fn set_approval(&mut self, level: ApprovalLevel) {
         self.approval = level;
+    }
+
+    /// Context use and cost as the agent last reported them.
+    pub fn usage(&self) -> &SessionUsage {
+        &self.usage
     }
 
     /// The latest thing worth showing in a one-line summary (overview cards).
@@ -233,6 +270,42 @@ impl ChatView {
         })
     }
 
+    /// The agent's own last `last` messages, oldest first, for another agent to read
+    /// (`agent_transcript`). Thoughts, plans and subagent items are left out.
+    pub fn transcript(&self, last: usize) -> Vec<hangar_mcp::TranscriptEntry> {
+        use hangar_agents::acp::protocol::ToolStatus;
+        use hangar_mcp::TranscriptEntry;
+        let mut entries: Vec<TranscriptEntry> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.owner(*i).is_none())
+            .filter_map(|(_, item)| match item {
+                Item::User(text) => Some(TranscriptEntry::User(text.to_string())),
+                Item::Agent { text, .. } => Some(TranscriptEntry::Agent(text.clone())),
+                Item::Tool(call) => Some(TranscriptEntry::Tool {
+                    title: call.title.clone(),
+                    status: match call.status {
+                        ToolStatus::Pending => "pending",
+                        ToolStatus::InProgress => "in_progress",
+                        ToolStatus::Completed => "completed",
+                        ToolStatus::Failed => "failed",
+                    }
+                    .to_owned(),
+                }),
+                Item::Permission { title, outcome, .. } => Some(TranscriptEntry::Permission {
+                    title: title.to_string(),
+                    answer: outcome.as_ref().map(|o| o.label.to_string()),
+                }),
+                Item::Notice { text, .. } => Some(TranscriptEntry::Notice(text.to_string())),
+                Item::Thought { .. } | Item::Plan(_) => None,
+            })
+            .collect();
+        let skip = entries.len().saturating_sub(last);
+        entries.drain(..skip);
+        entries
+    }
+
     /// The subagents launched in the current (or last) turn.
     pub fn subagents(&self) -> Vec<Subagent> {
         let pending = self.pending();
@@ -249,8 +322,42 @@ impl ChatView {
     pub fn focus_subagent(&mut self, id: Option<&str>, cx: &mut Context<Self>) {
         let id = id.filter(|id| self.launch(id).is_some_and(ToolCall::is_subagent));
         self.focus = id.map(str::to_owned);
-        self.follow = true;
+        self.follow_tail();
         cx.notify();
+    }
+
+    /// Scrolls to the newest item and keeps it in view until the user scrolls up.
+    fn follow_tail(&self) {
+        self.list.set_follow_mode(FollowMode::Tail);
+    }
+
+    /// Brings the list up to date with the items and the rows around them; only changed and new
+    /// items are looked at, unless the view changed.
+    fn sync_rows(&mut self, lead: Vec<rows::Row>, trail: Vec<rows::Row>) {
+        let dirty = std::mem::take(&mut self.dirty);
+        let relink = std::mem::take(&mut self.relink) && self.focus.is_some();
+        let mut rows = std::mem::take(&mut self.rows);
+        if self.rows_view.as_ref() != Some(&self.focus) {
+            let count = rows.rebuild(lead, self.items.len(), |i| self.visible(i), trail);
+            self.list.reset(count);
+            self.rows_view = Some(self.focus.clone());
+        } else {
+            let ops = rows.update(
+                lead,
+                self.items.len(),
+                &dirty,
+                relink,
+                |i| self.visible(i),
+                trail,
+            );
+            for op in ops {
+                match op {
+                    rows::ListOp::Splice(range, count) => self.list.splice(range, count),
+                    rows::ListOp::Remeasure(range) => self.list.remeasure_items(range),
+                }
+            }
+        }
+        self.rows = rows;
     }
 
     /// The tool call `id`, if reported.
@@ -346,7 +453,7 @@ impl ChatView {
         self.turn_done = false;
         self.failed = false;
         self.plan = None;
-        self.follow = true;
+        self.follow_tail();
         cx.emit(ChatEvent::StateChanged);
         cx.notify();
         Ok(())
@@ -393,7 +500,7 @@ impl ChatView {
         if let Err(err) = self.session.cancel() {
             self.notice(true, format!("Could not stop the agent: {err}"));
         }
-        for item in &mut self.items {
+        for (i, item) in self.items.iter_mut().enumerate() {
             if let Item::Permission {
                 outcome: outcome @ None,
                 ..
@@ -403,6 +510,7 @@ impl ChatView {
                     allowed: false,
                     label: "Cancelled".into(),
                 });
+                touch(&mut self.dirty, i);
             }
         }
         cx.emit(ChatEvent::StateChanged);
@@ -489,11 +597,44 @@ impl ChatView {
                 label: "Denied".into(),
             },
         });
+        touch(&mut self.dirty, index);
         if let Err(err) = result {
             self.notice(true, format!("Could not answer the agent: {err}"));
         }
         cx.emit(ChatEvent::StateChanged);
         cx.notify();
+    }
+
+    /// The request the agent waits on, for answering it outside the pane (overview, palette).
+    pub fn pending_request(&self) -> Option<PendingRequest> {
+        let index = self.pending_permission()?;
+        let Some(Item::Permission { title, .. }) = self.items.get(index) else {
+            return None;
+        };
+        Some(PendingRequest {
+            title: title.clone(),
+            can_allow: self
+                .first_option(index, |k| k == PermissionKind::AllowOnce)
+                .is_some(),
+        })
+    }
+
+    /// Answers the pending request: allow once, or reject (once when offered, else outright).
+    /// Returns whether a request was answered.
+    pub fn answer_pending(&mut self, allow: bool, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.pending_permission() else {
+            return false;
+        };
+        let option = if allow {
+            match self.first_option(index, |k| k == PermissionKind::AllowOnce) {
+                Some(option) => Some(option),
+                None => return false,
+            }
+        } else {
+            self.first_option(index, |k| k == PermissionKind::RejectOnce)
+        };
+        self.answer(index, option, cx);
+        true
     }
 
     /// Adds a one-line note to the transcript (resumed, could not resume, …).
@@ -509,14 +650,14 @@ impl ChatView {
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
-        let before = self.turn();
+        let before = (self.turn(), self.usage.clone());
         let mut changed = false;
         while let Ok(event) = self.events.try_recv() {
             changed = true;
             self.apply(event, cx);
         }
         if changed {
-            if self.turn() != before {
+            if before.0 != self.turn() || before.1 != self.usage {
                 cx.emit(ChatEvent::StateChanged);
             }
             cx.notify();
@@ -530,7 +671,10 @@ impl ChatView {
                 let (title, kind) = match self.tools.get(&request.tool_call.id) {
                     Some(&i) => {
                         if let Some(Item::Tool(call)) = self.items.get_mut(i) {
+                            let link = linkage(call);
                             call.apply(&request.tool_call);
+                            self.relink |= linkage(call) != link;
+                            touch(&mut self.dirty, i);
                             (Some(call.title.clone()), Some(call.kind.clone()))
                         } else {
                             (None, None)
@@ -549,7 +693,7 @@ impl ChatView {
                     title: title.into(),
                     outcome: None,
                 });
-                self.follow = true;
+                self.follow_tail();
                 if let Some(option) = auto {
                     let index = self.items.len() - 1;
                     self.answer(index, Some(option), cx);
@@ -559,6 +703,7 @@ impl ChatView {
                     }) = self.items.get_mut(index)
                     {
                         outcome.label = "Allowed automatically (reads)".into();
+                        touch(&mut self.dirty, index);
                     }
                 }
             }
@@ -588,7 +733,7 @@ impl ChatView {
             AcpEvent::Exited { code, stderr_tail } => {
                 self.running = false;
                 self.exited = true;
-                for item in &mut self.items {
+                for (i, item) in self.items.iter_mut().enumerate() {
                     if let Item::Permission {
                         outcome: outcome @ None,
                         ..
@@ -598,6 +743,7 @@ impl ChatView {
                             allowed: false,
                             label: "Agent exited".into(),
                         });
+                        touch(&mut self.dirty, i);
                     }
                 }
                 let text = match code {
@@ -622,6 +768,7 @@ impl ChatView {
                     if let Some(Item::Agent { text, view, .. }) = self.items.get_mut(i) {
                         text.push_str(&chunk);
                         view.update(cx, |state, cx| state.push_str(&chunk, cx));
+                        touch(&mut self.dirty, i);
                     }
                 }
                 None => {
@@ -640,6 +787,7 @@ impl ChatView {
                 Some(i) => {
                     if let Some(Item::Thought { text, .. }) = self.items.get_mut(i) {
                         text.push_str(&chunk);
+                        touch(&mut self.dirty, i);
                     }
                 }
                 None => self.items.push(Item::Thought {
@@ -651,30 +799,45 @@ impl ChatView {
             SessionUpdate::UserMessage(chunk) => {
                 if let Some(Item::User(text)) = self.items.last_mut() {
                     *text = format!("{text}{chunk}").into();
+                    touch(&mut self.dirty, self.items.len() - 1);
                 } else {
                     self.items.push(Item::User(chunk.into()));
                 }
             }
             SessionUpdate::ToolCall(call) => match self.tools.get(&call.id) {
-                Some(&i) => self.items[i] = Item::Tool(call),
+                Some(&i) => {
+                    if let Some(Item::Tool(old)) = self.items.get(i) {
+                        self.relink |= linkage(old) != linkage(&call);
+                    }
+                    self.items[i] = Item::Tool(call);
+                    touch(&mut self.dirty, i);
+                }
                 None => {
                     self.tools.insert(call.id.clone(), self.items.len());
                     self.items.push(Item::Tool(call));
+                    self.relink = true;
                 }
             },
             SessionUpdate::ToolCallUpdate(update) => match self.tools.get(&update.id) {
                 Some(&i) => {
                     if let Some(Item::Tool(call)) = self.items.get_mut(i) {
+                        let link = linkage(call);
                         call.apply(&update);
+                        self.relink |= linkage(call) != link;
+                        touch(&mut self.dirty, i);
                     }
                 }
                 None => {
                     self.tools.insert(update.id.clone(), self.items.len());
                     self.items.push(Item::Tool(ToolCall::from_update(&update)));
+                    self.relink = true;
                 }
             },
             SessionUpdate::Plan(entries) => match self.plan {
-                Some(i) => self.items[i] = Item::Plan(entries),
+                Some(i) => {
+                    self.items[i] = Item::Plan(entries);
+                    touch(&mut self.dirty, i);
+                }
                 None => {
                     self.plan = Some(self.items.len());
                     self.items.push(Item::Plan(entries));
@@ -683,6 +846,7 @@ impl ChatView {
             SessionUpdate::CurrentMode(mode) => self.set_mode(Some(mode)),
             SessionUpdate::ConfigOptions(list) => self.set_config(list),
             SessionUpdate::AvailableCommands(commands) => self.commands = commands,
+            SessionUpdate::Usage(usage) => self.usage.apply(&usage),
             SessionUpdate::Other { .. } => {}
         }
     }
@@ -814,6 +978,11 @@ impl ChatView {
             .and_then(Path::to_str)
             .unwrap_or(path)
     }
+}
+
+/// What decides which view a tool call's items show in.
+fn linkage(call: &ToolCall) -> (Option<String>, bool) {
+    (call.parent.clone(), call.is_subagent())
 }
 
 impl Focusable for ChatView {

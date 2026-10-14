@@ -95,6 +95,7 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Back to workspace", "escape", "Settings"),
     ("Create workspace", "cmd-enter", "New workspace sheet"),
     ("Cancel", "escape", "New workspace sheet"),
+    ("Close", "escape", "Compare attempts"),
 ];
 
 /// How long `<agent> --version` may take before it is given up on.
@@ -112,6 +113,8 @@ pub(super) struct SettingsUi {
     /// "Max concurrent agents" (see `queue.rs`).
     pub(super) max_agents: Entity<InputState>,
     _max_agents_sub: Subscription,
+    /// The settings page's scroll position.
+    pub(super) scroll: ScrollHandle,
 }
 
 impl SettingsUi {
@@ -129,6 +132,7 @@ impl SettingsUi {
                 approval_started: Cell::new(false),
                 max_agents,
                 _max_agents_sub: max_agents_sub,
+                scroll: ScrollHandle::new(),
             },
             sub,
         )
@@ -432,6 +436,21 @@ impl HangarApp {
                         .checked(self.attention.enabled)
                         .on_click(cx.listener(|this, on: &bool, window, cx| {
                             this.set_notify_attention(*on, window, cx)
+                        })),
+                ),
+            )
+            .child(
+                row(
+                    "Let agents create and drive workspaces",
+                    "Agents get tools to start child workspaces, prompt them and read them.",
+                )
+                .child(
+                    Switch::new("orchestration")
+                        .small()
+                        .color(t.acc)
+                        .checked(self.agent_setup.orchestration)
+                        .on_click(cx.listener(|this, on: &bool, window, cx| {
+                            this.set_orchestration(*on, window, cx)
                         })),
                 ),
             )
@@ -1139,6 +1158,7 @@ impl HangarApp {
                     .min_w_0()
                     .h_full()
                     .overflow_y_scroll()
+                    .track_scroll(&self.settings_ui.scroll)
                     .bg(t.app)
                     .child(div().max_w(px(820.)).px_10().py_7().child(page)),
             )

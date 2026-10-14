@@ -1,6 +1,7 @@
-//! MCP device tools for agents: the app end of `Hangar mcp-bridge`. Each request from the host
-//! (`crate::mcp_host`) is routed to the device API of its workspace; device I/O stays off the UI
-//! thread and every reply goes back through its oneshot.
+//! MCP tools for agents: the app end of `Hangar mcp-bridge`. Each request from the host
+//! (`crate::mcp_host`) is routed to the device API of its workspace, or to the orchestration
+//! tools (`orchestration.rs`); device I/O stays off the UI thread and every reply goes back
+//! through its oneshot.
 
 use anyhow::Context as _;
 
@@ -67,6 +68,16 @@ fn answer<T: 'static, U: Send + 'static>(
 impl HangarApp {
     fn dispatch_mcp(&mut self, request: McpRequest, window: &mut Window, cx: &mut Context<Self>) {
         match request {
+            McpRequest::Signal { ws, signal } => {
+                if let Some(live) = self.live.sessions.get_mut(&ws)
+                    && matches!(live.surface, AgentSurface::Terminal { .. })
+                {
+                    tracing::debug!(workspace = %ws, signal = signal.as_str(), "agent signal");
+                    live.signal = Some(signal);
+                    self.sync_attention(cx);
+                    cx.notify();
+                }
+            }
             McpRequest::Status { ws, reply } => {
                 let task = self.device_status(ws, cx);
                 answer(task, reply, status, cx);
@@ -109,6 +120,32 @@ impl HangarApp {
             McpRequest::BuildAndRun { ws, reply } => {
                 let task = self.run_workspace(ws, window, cx);
                 answer(task, reply, |summary| summary, cx);
+            }
+            McpRequest::Children { ws, reply } => {
+                let _ = reply.send(self.child_workspaces(ws, cx));
+            }
+            McpRequest::CreateChild {
+                ws,
+                task,
+                name,
+                agent,
+                reply,
+            } => self.create_child(ws, task, name, agent, reply, window, cx),
+            McpRequest::PromptChild {
+                ws,
+                child,
+                text,
+                reply,
+            } => {
+                let _ = reply.send(self.prompt_child(ws, &child, &text, window, cx));
+            }
+            McpRequest::Transcript {
+                ws,
+                child,
+                last,
+                reply,
+            } => {
+                let _ = reply.send(self.child_transcript(ws, &child, last, cx));
             }
         }
     }
