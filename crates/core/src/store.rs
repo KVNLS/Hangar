@@ -1,4 +1,4 @@
-//! SQLite persistence for projects, workspaces and sessions.
+//! SQLite persistence for projects, workspaces, sessions and app settings.
 //!
 //! [`Store`] is synchronous: every call takes a lock and does disk I/O. Never call it from the UI thread;
 //! use `tokio::task::spawn_blocking` (or a dedicated thread) and share it via `Arc<Store>`.
@@ -18,7 +18,8 @@ use crate::model::{
 mod tests;
 
 /// Ordered schema migrations; entry `i` upgrades `user_version` from `i` to `i + 1`. Append only.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE projects (
     id           TEXT PRIMARY KEY NOT NULL,
     name         TEXT NOT NULL,
@@ -52,7 +53,14 @@ CREATE TABLE sessions (
 );
 
 CREATE INDEX sessions_workspace_id ON sessions(workspace_id);
-"#];
+"#,
+    r#"
+CREATE TABLE settings (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+"#,
+];
 
 /// Latest schema version this build understands.
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -312,6 +320,31 @@ impl Store {
         )?;
         ensure_changed(changed, "session", id)?;
         self.get_session(id)
+    }
+
+    /// Reads a JSON-encoded setting; `None` when the key was never set.
+    pub fn get_setting<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        let value: Option<String> = self
+            .conn()
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        value
+            .map(|v| serde_json::from_str(&v))
+            .transpose()
+            .map_err(StoreError::from)
+    }
+
+    /// Stores `value` as JSON under `key`, replacing any previous value.
+    pub fn set_setting<T: serde::Serialize + ?Sized>(&self, key: &str, value: &T) -> Result<()> {
+        let encoded = serde_json::to_string(value)?;
+        self.conn().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, encoded],
+        )?;
+        Ok(())
     }
 }
 

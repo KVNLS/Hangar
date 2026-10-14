@@ -8,6 +8,16 @@
 //!   workspace (`HANGAR_DEV_WORKSPACE`, default `dev`) running `HANGAR_DEV_AGENT` (default
 //!   `shell`), then type `HANGAR_DEV_INPUT` followed by Enter into it. Exercises the full
 //!   add-project → worktree → store → agent flow without clicking.
+//!
+//! After `HANGAR_DEV_OPEN` (if set), these run in order against workspaces found by slug,
+//! bypassing the confirmation dialogs:
+//! - `HANGAR_DEV_ARCHIVE=<slug>` — archive the workspace (stops its agent).
+//! - `HANGAR_DEV_RESTORE=<slug>` — restore an archived workspace (does not start an agent).
+//! - `HANGAR_DEV_DELETE=<slug>` — delete the workspace's worktree and rows.
+//!   `HANGAR_DEV_DELETE_BRANCH=1` also deletes its branch (never forced);
+//!   `HANGAR_DEV_DELETE_FORCE=1` discards uncommitted/untracked files.
+//! - `HANGAR_DEV_REMOVE_PROJECT=<repo>` — forget the project (refused while it has active
+//!   workspaces). Never touches the repository.
 
 use gpui_kit::*;
 use hangar_app::shell::{DevOptions, HangarApp};

@@ -318,3 +318,70 @@ fn db_path_resolution() {
     assert_eq!(db_path_for(true, None, None), None);
     assert!(default_db_path().is_some_and(|p| p.ends_with("hangar.db")));
 }
+
+#[test]
+fn v1_database_file_is_migrated_to_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hangar.db");
+    let p = project("/repos/v1");
+    {
+        // A database as written by a v1 build: first migration only.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, repo_path, default_base, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                p.id.0.to_string(),
+                p.name,
+                "/repos/v1",
+                p.default_base,
+                p.created_at.0
+            ],
+        )
+        .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(SCHEMA_VERSION, 2);
+    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.list_projects().unwrap(), vec![p]);
+    assert_eq!(store.get_setting::<String>("agent").unwrap(), None);
+    store.set_setting("agent", "codex").unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.get_setting::<String>("agent").unwrap().as_deref(),
+        Some("codex")
+    );
+}
+
+#[test]
+fn settings_round_trip_and_overwrite() {
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Layout {
+        panes: Vec<Option<WorkspaceId>>,
+        split: Option<f32>,
+    }
+    let store = store();
+    let layout = Layout {
+        panes: vec![Some(WorkspaceId::new()), None],
+        split: Some(0.4),
+    };
+    store.set_setting("layout", &layout).unwrap();
+    assert_eq!(store.get_setting::<Layout>("layout").unwrap(), Some(layout));
+
+    let empty = Layout {
+        panes: vec![],
+        split: None,
+    };
+    store.set_setting("layout", &empty).unwrap();
+    assert_eq!(store.get_setting::<Layout>("layout").unwrap(), Some(empty));
+
+    // A value of the wrong shape is an error, not a silent default.
+    store.set_setting("layout", "not a layout").unwrap();
+    assert!(matches!(
+        store.get_setting::<Layout>("layout"),
+        Err(StoreError::Serde(_))
+    ));
+}

@@ -1,15 +1,18 @@
 //! The main window: project sidebar and two tiled terminal panes.
 
+mod dialogs;
 mod sidebar;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::resizable::{ResizablePanelEvent, ResizableState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible};
 use gpui_kit::component::{
@@ -19,36 +22,57 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_agents::AgentHandle;
-use hangar_core::{Project, ProjectId, Session, SessionStatus, Store, WorkspaceId};
+use hangar_core::{
+    Project, ProjectId, Session, SessionStatus, Store, Workspace, WorkspaceId, WorkspaceStatus,
+};
 use hangar_terminal::ExitInfo;
 
 use crate::agents::{self, AgentChoice};
 use crate::login_env::{self, PathSource, ResolvedPath};
-use crate::ops::{self, StartedSession};
+use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
-use crate::state::{PANE_COUNT, Panes, ProjectEntry, ProjectList, status_label};
+use crate::state::{
+    PANE_COUNT, PaneLayout, Panes, ProjectList, sanitize_split, split_ratio, status_label,
+};
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
+use dialogs::DeleteWorkspaceDialog;
 use sidebar::{ProjectSection, WorkspaceRow};
 
-/// Debug/automation hooks, read once at startup. `HANGAR_DEV_OPEN=<repo>` adds the project and
-/// creates one workspace running `HANGAR_DEV_AGENT` (default `shell`), then types
-/// `HANGAR_DEV_INPUT` (followed by Enter) into it.
+/// Width of the sidebar; the panes share the rest.
+const SIDEBAR_WIDTH: f32 = 260.;
+/// How long a killed agent gets to exit before its worktree is removed.
+const KILL_GRACE: Duration = Duration::from_secs(3);
+
+/// Debug/automation hooks, read once at startup (documented in `main.rs`).
 #[derive(Clone, Debug, Default)]
 pub struct DevOptions {
     pub open: Option<PathBuf>,
     pub workspace: String,
     pub agent: String,
     pub input: Option<String>,
+    pub archive: Option<String>,
+    pub restore: Option<String>,
+    pub delete: Option<String>,
+    pub delete_branch: bool,
+    pub delete_force: bool,
+    pub remove_project: Option<PathBuf>,
 }
 
 impl DevOptions {
     pub fn from_env() -> Self {
         let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+        let flag = |key: &str| var(key).is_some_and(|v| v == "1");
         Self {
             open: var("HANGAR_DEV_OPEN").map(PathBuf::from),
             workspace: var("HANGAR_DEV_WORKSPACE").unwrap_or_else(|| "dev".to_owned()),
             agent: var("HANGAR_DEV_AGENT").unwrap_or_else(|| agents::FALLBACK_AGENT.to_owned()),
             input: var("HANGAR_DEV_INPUT"),
+            archive: var("HANGAR_DEV_ARCHIVE"),
+            restore: var("HANGAR_DEV_RESTORE"),
+            delete: var("HANGAR_DEV_DELETE"),
+            delete_branch: flag("HANGAR_DEV_DELETE_BRANCH"),
+            delete_force: flag("HANGAR_DEV_DELETE_FORCE"),
+            remove_project: var("HANGAR_DEV_REMOVE_PROJECT").map(PathBuf::from),
         }
     }
 }
@@ -82,6 +106,19 @@ struct LiveSession {
     _exit: Subscription,
 }
 
+impl LiveSession {
+    /// Kills the program if it still runs. Returns the session to record as stopped, if any.
+    fn stop(&self) -> Option<hangar_core::SessionId> {
+        if self.session.status.is_terminal() {
+            return None;
+        }
+        if let Err(err) = self.handle.session().kill() {
+            tracing::warn!(%err, session = %self.session.id, "failed to kill agent");
+        }
+        Some(self.session.id)
+    }
+}
+
 struct NewWorkspaceInput {
     project_id: ProjectId,
     input: Entity<InputState>,
@@ -99,8 +136,13 @@ pub struct HangarApp {
     agent_chosen_by_user: bool,
     sessions: HashMap<WorkspaceId, LiveSession>,
     panes: Panes,
+    pane_sizes: Entity<ResizableState>,
+    /// First pane's share of the width, once the user has resized (or it was restored).
+    split: Option<f32>,
     new_workspace: Option<NewWorkspaceInput>,
     creating: HashSet<ProjectId>,
+    /// Workspaces with an archive, restore or delete in flight.
+    busy: HashSet<WorkspaceId>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -130,13 +172,28 @@ impl HangarApp {
         let select_sub = cx.subscribe_in(
             &agent_select,
             window,
-            |this, _, event: &SelectEvent<Vec<AgentOption>>, _, cx| {
+            |this, _, event: &SelectEvent<Vec<AgentOption>>, window, cx| {
                 let SelectEvent::Confirm(Some(id)) = event else {
                     return;
                 };
                 this.agent = id.clone();
                 this.agent_chosen_by_user = true;
+                this.save_agent(window, cx);
                 cx.notify();
+            },
+        );
+        let pane_sizes = cx.new(|_| ResizableState::default());
+        let resize_sub = cx.subscribe_in(
+            &pane_sizes,
+            window,
+            |this, sizes, _: &ResizablePanelEvent, window, cx| {
+                let sizes = sizes.read(cx);
+                let first = sizes.sizes().first().map(|s| s.as_f32());
+                let total = sizes.container_size().as_f32();
+                if let Some(split) = first.and_then(|first| split_ratio(first, total)) {
+                    this.split = Some(split);
+                    this.save_layout(window, cx);
+                }
             },
         );
 
@@ -150,17 +207,21 @@ impl HangarApp {
                         anyhow!("cannot locate the database: HOME is not set (set HANGAR_DB)")
                     })?;
                     let store = ops::open_store(&db)?;
-                    let entries = ops::load(&store)?;
-                    tracing::info!(db = %db.display(), projects = entries.len(), "loaded store");
-                    anyhow::Ok((store, entries))
+                    let loaded = ops::load(&store)?;
+                    tracing::info!(
+                        db = %db.display(),
+                        projects = loaded.entries.len(),
+                        layout = ?loaded.layout,
+                        agent = ?loaded.agent,
+                        "loaded store"
+                    );
+                    anyhow::Ok((store, loaded))
                 })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| this.on_loaded(loaded, window, cx));
             let path = path_task.await;
             let _ = this.update_in(cx, |this, window, cx| this.on_path(path, window, cx));
-            if let Some(repo) = dev.open.clone() {
-                let _ = this.update_in(cx, |this, window, cx| this.dev_open(repo, dev, window, cx));
-            }
+            run_dev_hooks(this, dev, cx).await;
         })
         .detach();
 
@@ -175,9 +236,12 @@ impl HangarApp {
             agent_chosen_by_user: false,
             sessions: HashMap::new(),
             panes: Panes::default(),
+            pane_sizes,
+            split: None,
             new_workspace: None,
             creating: HashSet::new(),
-            _subscriptions: vec![select_sub],
+            busy: HashSet::new(),
+            _subscriptions: vec![select_sub, resize_sub],
         }
     }
 
@@ -186,17 +250,63 @@ impl HangarApp {
         window.push_notification(Notification::error(format!("{err:#}")), cx);
     }
 
+    /// Runs `job` with the store on the background executor and reports its error, if any.
+    fn persist(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        job: impl FnOnce(&Store) -> anyhow::Result<()> + Send + 'static,
+    ) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { job(&store) })
+                .await;
+            if let Err(err) = result {
+                let _ = this.update_in(cx, |this, window, cx| this.report(&err, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn save_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let layout = self.panes.layout(self.split);
+        self.persist(window, cx, move |store| ops::save_layout(store, &layout));
+    }
+
+    fn save_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let agent = self.agent.to_string();
+        self.persist(window, cx, move |store| ops::save_agent(store, &agent));
+    }
+
     fn on_loaded(
         &mut self,
-        loaded: anyhow::Result<(Arc<Store>, Vec<ProjectEntry>)>,
+        loaded: anyhow::Result<(Arc<Store>, Loaded)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.loading = false;
         match loaded {
-            Ok((store, entries)) => {
+            Ok((store, loaded)) => {
                 self.store = Some(store);
-                self.projects = ProjectList::new(entries);
+                self.projects = ProjectList::new(loaded.entries);
+                if let Some(layout) = loaded.layout {
+                    self.restore_layout(&layout, window, cx);
+                }
+                if let Some(agent) = loaded.agent.filter(|a| agents::preset(a).is_some()) {
+                    self.agent = agent.into();
+                    self.agent_chosen_by_user = true;
+                    let agent = self.agent.clone();
+                    self.agent_select.update(cx, |select, cx| {
+                        select.set_selected_value(&agent, window, cx);
+                    });
+                }
+                if let Some(err) = loaded.settings_error {
+                    self.report(&err, window, cx);
+                }
             }
             Err(err) => {
                 self.load_error = Some(format!("{err:#}").into());
@@ -204,6 +314,42 @@ impl HangarApp {
             }
         }
         cx.notify();
+    }
+
+    /// Shows the saved workspaces (without starting agents) and re-applies the split once the
+    /// pane group has been laid out.
+    fn restore_layout(&mut self, layout: &PaneLayout, window: &mut Window, cx: &mut Context<Self>) {
+        let projects = &self.projects;
+        self.panes = Panes::from_layout(layout, |id| projects.is_active(id));
+        self.split = sanitize_split(layout.split);
+        let Some(split) = self.split else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            for _ in 0..40 {
+                let applied = this
+                    .update_in(cx, |this, window, cx| {
+                        this.pane_sizes.update(cx, |sizes, cx| {
+                            let total = sizes.container_size();
+                            if sizes.sizes().len() < PANE_COUNT || total.as_f32() <= 0. {
+                                return false;
+                            }
+                            sizes.resize_panel(0, total * split, window, cx);
+                            tracing::debug!(split, sizes = ?sizes.sizes(), "pane split restored");
+                            true
+                        })
+                    })
+                    .unwrap_or(true);
+                if applied {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+            }
+            tracing::warn!("pane split not restored: panes were never laid out");
+        })
+        .detach();
     }
 
     fn on_path(&mut self, path: ResolvedPath, window: &mut Window, cx: &mut Context<Self>) {
@@ -403,6 +549,7 @@ impl HangarApp {
                             let id = workspace.id;
                             this.projects.upsert_workspace(workspace);
                             this.panes.show(id);
+                            this.save_layout(window, cx);
                             Some((id, this.start_session(id, agent_id, window, cx)))
                         }
                         Err(err) => {
@@ -483,7 +630,11 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let StartedSession { session, handle } = started;
+        let StartedSession {
+            session,
+            handle,
+            record_error,
+        } = started;
         let workspace_id = session.workspace_id;
         tracing::info!(
             workspace = %workspace_id,
@@ -492,6 +643,20 @@ impl HangarApp {
             pid = ?handle.session().pid(),
             "session started"
         );
+        if let Some(err) = record_error {
+            self.report(&err, window, cx);
+        }
+        // The workspace may have been archived or deleted while the agent was starting.
+        if !self.projects.is_active(workspace_id) || self.busy.contains(&workspace_id) {
+            if let Err(err) = handle.session().kill() {
+                tracing::warn!(%err, "failed to kill agent of a removed workspace");
+            }
+            let id = session.id;
+            self.persist(window, cx, move |store| {
+                ops::stop_session(store, id, "workspace closed while starting")
+            });
+            return;
+        }
         let terminal = Arc::clone(handle.session());
         let view =
             cx.new(|cx| TerminalView::attach(terminal, waker, TerminalViewOptions::default(), cx));
@@ -502,7 +667,7 @@ impl HangarApp {
                 TerminalEvent::Exited(exit) => this.on_session_exit(workspace_id, exit, window, cx),
             },
         );
-        self.sessions.insert(
+        if let Some(previous) = self.sessions.insert(
             workspace_id,
             LiveSession {
                 session,
@@ -511,7 +676,12 @@ impl HangarApp {
                 view,
                 _exit: exit,
             },
-        );
+        ) && let Some(id) = previous.stop()
+        {
+            self.persist(window, cx, move |store| {
+                ops::stop_session(store, id, "replaced by a new session")
+            });
+        }
         if self.panes.slot(self.panes.focused()) == Some(workspace_id) {
             self.focus_terminal(window, cx);
         }
@@ -533,19 +703,323 @@ impl HangarApp {
         live.session.status = status.clone();
         let session_id = live.session.id;
         cx.notify();
+        self.persist(window, cx, move |store| {
+            ops::finish_session(store, session_id, &status).map(drop)
+        });
+    }
+
+    /// Kills the workspace's agent, if any, and forgets its terminal. Returns the session to
+    /// record as stopped and the terminal to wait on.
+    fn close_session(
+        &mut self,
+        workspace_id: WorkspaceId,
+    ) -> (
+        Option<hangar_core::SessionId>,
+        Option<Arc<hangar_terminal::TerminalSession>>,
+    ) {
+        match self.sessions.remove(&workspace_id) {
+            Some(live) => {
+                let stopped = live.stop();
+                (stopped, Some(Arc::clone(live.handle.session())))
+            }
+            None => (None, None),
+        }
+    }
+
+    fn archive_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        if self.busy.contains(&workspace_id) || !self.projects.is_active(workspace_id) {
+            return Task::ready(());
+        }
         let Some(store) = self.store.clone() else {
+            return Task::ready(());
+        };
+        let (session, _) = self.close_session(workspace_id);
+        self.projects
+            .set_status(workspace_id, WorkspaceStatus::Archived);
+        if self.panes.clear(workspace_id) {
+            self.save_layout(window, cx);
+        }
+        self.busy.insert(workspace_id);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { ops::archive_workspace(&store, workspace_id, session) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.busy.remove(&workspace_id);
+                match result {
+                    Ok(()) => tracing::info!(workspace = %workspace_id, "workspace archived"),
+                    Err(err) => {
+                        // The agent is already stopped; show the row where the store still has it.
+                        this.projects
+                            .set_status(workspace_id, WorkspaceStatus::Active);
+                        this.report(&err, window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+    }
+
+    fn restore_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        let Some(store) = self.store.clone() else {
+            return Task::ready(());
+        };
+        if !self.busy.insert(workspace_id) {
+            return Task::ready(());
+        }
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { ops::restore_workspace(&store, workspace_id) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.busy.remove(&workspace_id);
+                match result {
+                    Ok(()) => {
+                        tracing::info!(workspace = %workspace_id, "workspace restored");
+                        this.projects
+                            .set_status(workspace_id, WorkspaceStatus::Active);
+                        this.panes.show(workspace_id);
+                        this.save_layout(window, cx);
+                    }
+                    Err(err) => this.report(&err, window, cx),
+                }
+                cx.notify();
+            });
+        })
+    }
+
+    fn confirm_delete_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy.contains(&workspace_id) {
             return;
+        }
+        let Some(workspace) = self.projects.workspace(workspace_id).cloned() else {
+            return;
+        };
+        let title: SharedString = format!("Delete workspace “{}”?", workspace.name).into();
+        let body = cx.new(|_| DeleteWorkspaceDialog::new(workspace.clone()));
+        self.load_delete_summary(workspace, body.clone(), window, cx);
+
+        let app = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let body_for_ok = body.clone();
+            let app = app.clone();
+            alert
+                .confirm()
+                .title(title.clone())
+                .child(body.clone())
+                .ok_text("Delete")
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text("Cancel")
+                .on_ok(move |_, window, cx| {
+                    let Some(options) = body_for_ok.read(cx).options() else {
+                        // Still reading the status: the user has not seen what would be lost.
+                        return false;
+                    };
+                    let _ = app.update(cx, |this, cx| {
+                        this.delete_workspace(workspace_id, options, window, cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    fn load_delete_summary(
+        &mut self,
+        workspace: Workspace,
+        body: Entity<DeleteWorkspaceDialog>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |_, cx| {
+            let summary = cx
+                .background_executor()
+                .spawn(async move { ops::delete_summary(&workspace) })
+                .await
+                .map_err(|err| SharedString::from(format!("{err:#}")));
+            body.update(cx, |body, cx| {
+                body.set_summary(summary);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Stops the agent, then removes the worktree, optional branch and rows in the background.
+    fn delete_workspace(
+        &mut self,
+        workspace_id: WorkspaceId,
+        options: DeleteOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        let Some(store) = self.store.clone() else {
+            self.report(&anyhow!("the database is not open"), window, cx);
+            return Task::ready(false);
+        };
+        if !self.busy.insert(workspace_id) {
+            return Task::ready(false);
+        }
+        let (session, terminal) = self.close_session(workspace_id);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    if let Some(terminal) = terminal
+                        && terminal.wait_for_exit(KILL_GRACE).is_none()
+                    {
+                        tracing::warn!("agent still running after kill; removing worktree anyway");
+                    }
+                    if let Some(session) = session {
+                        ops::stop_session(&store, session, "workspace deleted")?;
+                    }
+                    ops::delete_workspace(&store, workspace_id, options)
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.busy.remove(&workspace_id);
+                cx.notify();
+                match result {
+                    Ok(outcome) => {
+                        tracing::info!(
+                            workspace = %workspace_id,
+                            ?options,
+                            branch_error = ?outcome.branch_error,
+                            "workspace deleted"
+                        );
+                        this.projects.remove_workspace(workspace_id);
+                        if this.panes.clear(workspace_id) {
+                            this.save_layout(window, cx);
+                        }
+                        if let Some(message) = outcome.branch_error {
+                            window.push_notification(Notification::warning(message), cx);
+                        }
+                        true
+                    }
+                    Err(err) => {
+                        this.report(&err, window, cx);
+                        false
+                    }
+                }
+            })
+            .unwrap_or(false)
+        })
+    }
+
+    fn confirm_remove_project(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.projects.entry(project_id) else {
+            return;
+        };
+        let name = entry.project.name.clone();
+        let active: Vec<String> = entry.active().map(|w| w.name.clone()).collect();
+        if !active.is_empty() {
+            let message: SharedString = format!(
+                "Archive or delete its workspaces first: {}.",
+                active.join(", ")
+            )
+            .into();
+            let title: SharedString = format!("“{name}” still has workspaces").into();
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                alert.title(title.clone()).description(message.clone())
+            });
+            return;
+        }
+        let archived = entry.archived().count();
+        let mut message = format!(
+            "{} stays untouched on disk.",
+            entry.project.repo_path.display()
+        );
+        if archived > 0 {
+            message.push_str(&format!(
+                " {archived} archived workspace(s) will be forgotten; their worktrees and \
+                 branches are left on disk."
+            ));
+        }
+        let message: SharedString = message.into();
+        let title: SharedString = format!("Remove “{name}” from Hangar?").into();
+        let app = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let app = app.clone();
+            alert
+                .confirm()
+                .title(title.clone())
+                .description(message.clone())
+                .ok_text("Remove")
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text("Cancel")
+                .on_ok(move |_, window, cx| {
+                    let _ = app.update(cx, |this, cx| {
+                        this.remove_project(project_id, window, cx).detach();
+                    });
+                    true
+                })
+        });
+    }
+
+    fn remove_project(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        let Some(store) = self.store.clone() else {
+            return Task::ready(());
         };
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { ops::finish_session(&store, session_id, &status) })
+                .spawn(async move { ops::remove_project(&store, project_id) })
                 .await;
-            if let Err(err) = result {
-                let _ = this.update_in(cx, |this, window, cx| this.report(&err, window, cx));
-            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(()) => {
+                        tracing::info!(project = %project_id, "project removed");
+                        let removed = this.projects.remove_project(project_id);
+                        let mut cleared = false;
+                        for ws in removed.iter().flat_map(|e| &e.workspaces) {
+                            this.close_session(ws.id);
+                            cleared |= this.panes.clear(ws.id);
+                        }
+                        if cleared {
+                            this.save_layout(window, cx);
+                        }
+                        if this
+                            .new_workspace
+                            .as_ref()
+                            .is_some_and(|n| n.project_id == project_id)
+                        {
+                            this.new_workspace = None;
+                        }
+                    }
+                    Err(err) => this.report(&err, window, cx),
+                }
+                cx.notify();
+            });
         })
-        .detach();
     }
 
     fn select_workspace(
@@ -556,6 +1030,7 @@ impl HangarApp {
     ) {
         self.panes.show(workspace_id);
         self.focus_terminal(window, cx);
+        self.save_layout(window, cx);
         cx.notify();
     }
 
@@ -563,6 +1038,7 @@ impl HangarApp {
         if self.panes.focused() != pane {
             self.panes.focus(pane);
             self.focus_terminal(window, cx);
+            self.save_layout(window, cx);
             cx.notify();
         }
     }
@@ -578,61 +1054,40 @@ impl HangarApp {
         }
     }
 
-    fn dev_open(
-        &mut self,
-        repo: PathBuf,
-        dev: DevOptions,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        tracing::info!(repo = %repo.display(), "HANGAR_DEV_OPEN");
-        let add = self.add_project(ops::canonical(&repo), window, cx);
-        cx.spawn_in(window, async move |this, cx| {
-            let project = add.await?;
-            let create = this
-                .update_in(cx, |this, window, cx| {
-                    this.create_workspace(project.id, dev.workspace, dev.agent, window, cx)
-                })
-                .ok()?;
-            let workspace_id = create.await?;
-            if let Some(input) = dev.input {
-                this.update(cx, |this, _| {
-                    let Some(live) = this.sessions.get(&workspace_id) else {
-                        return;
-                    };
-                    if let Err(err) = live.handle.session().write(format!("{input}\r")) {
-                        tracing::error!(%err, "HANGAR_DEV_INPUT: write failed");
-                    }
-                })
-                .ok()?;
-            }
-            Some(())
-        })
-        .detach();
+    /// The first active workspace with this slug, for dev hooks.
+    fn workspace_by_slug(&self, slug: &str) -> Option<WorkspaceId> {
+        self.projects
+            .entries()
+            .iter()
+            .flat_map(|e| &e.workspaces)
+            .find(|w| w.slug == slug)
+            .map(|w| w.id)
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let app = cx.entity().downgrade();
         let focused_workspace = self.panes.slot(self.panes.focused());
+        let row = |ws: &Workspace| WorkspaceRow {
+            id: ws.id,
+            name: ws.name.clone().into(),
+            status: if self.busy.contains(&ws.id) {
+                Some("…".into())
+            } else {
+                self.sessions
+                    .get(&ws.id)
+                    .map(|live| short_status(&live.session.status).into())
+            },
+            active: focused_workspace == Some(ws.id),
+            busy: self.busy.contains(&ws.id),
+        };
         let sections = self.projects.entries().iter().map(|entry| {
             let project_id = entry.project.id;
             ProjectSection {
                 app: app.clone(),
                 project_id,
                 name: entry.project.name.clone().into(),
-                workspaces: entry
-                    .workspaces
-                    .iter()
-                    .map(|ws| WorkspaceRow {
-                        id: ws.id,
-                        name: ws.name.clone().into(),
-                        status: self
-                            .sessions
-                            .get(&ws.id)
-                            .map(|live| short_status(&live.session.status).into()),
-                        active: focused_workspace == Some(ws.id),
-                    })
-                    .collect(),
+                workspaces: entry.active().map(row).collect(),
+                archived: entry.archived().map(row).collect(),
                 input: self
                     .new_workspace
                     .as_ref()
@@ -688,7 +1143,7 @@ impl HangarApp {
 
         Sidebar::new("projects")
             .collapsible(SidebarCollapsible::None)
-            .w(px(260.))
+            .w(px(SIDEBAR_WIDTH))
             .header(header)
             .children(sections)
             .footer(footer)
@@ -731,7 +1186,8 @@ impl HangarApp {
                         theme.muted_foreground,
                     ),
                 };
-                let can_start = live.is_none_or(|l| l.session.status.is_terminal());
+                let can_start = !self.busy.contains(&ws.id)
+                    && live.is_none_or(|l| l.session.status.is_terminal());
                 let ws_id = ws.id;
                 let label = if live.is_some() { "Restart" } else { "Start" };
                 header
@@ -755,6 +1211,7 @@ impl HangarApp {
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     let agent = this.agent.to_string();
                                     this.panes.show(ws_id);
+                                    this.save_layout(window, cx);
                                     this.start_session(ws_id, agent, window, cx).detach();
                                 })),
                         )
@@ -798,11 +1255,116 @@ impl HangarApp {
             .map(|a| a.display_name)
             .unwrap_or_else(|| self.agent.to_string())
     }
+
+    fn dev_open(
+        &mut self,
+        repo: PathBuf,
+        dev: DevOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<Option<()>> {
+        tracing::info!(repo = %repo.display(), "HANGAR_DEV_OPEN");
+        let add = self.add_project(ops::canonical(&repo), window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let project = add.await?;
+            let create = this
+                .update_in(cx, |this, window, cx| {
+                    this.create_workspace(project.id, dev.workspace, dev.agent, window, cx)
+                })
+                .ok()?;
+            let workspace_id = create.await?;
+            if let Some(input) = dev.input {
+                this.update(cx, |this, _| {
+                    let Some(live) = this.sessions.get(&workspace_id) else {
+                        return;
+                    };
+                    if let Err(err) = live.handle.session().write(format!("{input}\r")) {
+                        tracing::error!(%err, "HANGAR_DEV_INPUT: write failed");
+                    }
+                })
+                .ok()?;
+            }
+            Some(())
+        })
+    }
+}
+
+/// Runs the `HANGAR_DEV_*` hooks in order: open, archive, restore, delete, remove project.
+async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut AsyncWindowContext) {
+    if let Some(repo) = dev.open.clone() {
+        let open = dev.clone();
+        if let Ok(task) =
+            this.update_in(cx, |this, window, cx| this.dev_open(repo, open, window, cx))
+        {
+            task.await;
+        }
+    }
+    let find = |this: &mut HangarApp, hook: &str, slug: &str| {
+        let found = this.workspace_by_slug(slug);
+        if found.is_none() {
+            tracing::error!(%slug, "{hook}: no such workspace");
+        }
+        found
+    };
+    if let Some(slug) = dev.archive.clone() {
+        tracing::info!(%slug, "HANGAR_DEV_ARCHIVE");
+        let task = this.update_in(cx, |this, window, cx| {
+            find(this, "HANGAR_DEV_ARCHIVE", &slug).map(|id| this.archive_workspace(id, window, cx))
+        });
+        if let Ok(Some(task)) = task {
+            task.await;
+        }
+    }
+    if let Some(slug) = dev.restore.clone() {
+        tracing::info!(%slug, "HANGAR_DEV_RESTORE");
+        let task = this.update_in(cx, |this, window, cx| {
+            find(this, "HANGAR_DEV_RESTORE", &slug).map(|id| this.restore_workspace(id, window, cx))
+        });
+        if let Ok(Some(task)) = task {
+            task.await;
+        }
+    }
+    if let Some(slug) = dev.delete.clone() {
+        let options = DeleteOptions {
+            force: dev.delete_force,
+            delete_branch: dev.delete_branch,
+        };
+        tracing::info!(%slug, ?options, "HANGAR_DEV_DELETE");
+        let task = this.update_in(cx, |this, window, cx| {
+            find(this, "HANGAR_DEV_DELETE", &slug)
+                .map(|id| this.delete_workspace(id, options, window, cx))
+        });
+        if let Ok(Some(task)) = task {
+            task.await;
+        }
+    }
+    if let Some(repo) = dev.remove_project.clone() {
+        tracing::info!(repo = %repo.display(), "HANGAR_DEV_REMOVE_PROJECT");
+        let repo = ops::canonical(&repo);
+        let task = this.update_in(cx, |this, window, cx| {
+            let id = this
+                .projects
+                .entries()
+                .iter()
+                .find(|e| ops::canonical(&e.project.repo_path) == repo)
+                .map(|e| e.project.id);
+            match id {
+                Some(id) => Some(this.remove_project(id, window, cx)),
+                None => {
+                    tracing::error!(repo = %repo.display(), "HANGAR_DEV_REMOVE_PROJECT: no such project");
+                    None
+                }
+            }
+        });
+        if let Ok(Some(task)) = task {
+            task.await;
+        }
+    }
 }
 
 impl Render for HangarApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut panes = h_resizable("panes");
+        let mut panes = h_resizable("panes").with_state(&self.pane_sizes);
         for pane in 0..PANE_COUNT {
             panes = panes.child(resizable_panel().child(self.render_pane(pane, cx)));
         }
