@@ -32,7 +32,14 @@ pub use platform::{
     open_with_fallback,
 };
 
+/// Key context of the panel: its bindings apply while focus is inside it.
+pub const KEY_CONTEXT: &str = "DevicePanel";
+
+actions!(device_panel, [Screenshot]);
+
 pub enum DevicePanelEvent {
+    /// Screenshot of the workspace's device, for its agent.
+    Screenshot(WorkspaceId),
     /// The user picked another device (save it).
     Selected(Option<DeviceKey>),
     /// The stats overlay was toggled (save it).
@@ -869,6 +876,18 @@ impl DevicePanel {
         true
     }
 
+    /// A workspace device is on screen: its screenshot can go to the workspace's agent.
+    fn can_screenshot(&self) -> bool {
+        self.workspace.is_some() && self.attached.is_some()
+    }
+
+    /// Asks the shell to save a screenshot of the workspace's device for its agent.
+    pub fn screenshot(&mut self, cx: &mut Context<Self>) {
+        if let Some(ws) = self.workspace.filter(|_| self.can_screenshot()) {
+            cx.emit(DevicePanelEvent::Screenshot(ws));
+        }
+    }
+
     /// The error of the last input, if it failed.
     pub fn input_error(&self) -> Option<SharedString> {
         self.input_status
@@ -950,6 +969,14 @@ impl DevicePanel {
                     )),
             )
             .children(state)
+            .child(
+                UiButton::new("device-screenshot")
+                    .icon(Lucide::Camera)
+                    .ghost()
+                    .disabled(!self.can_screenshot())
+                    .tooltip("Screenshot ⌘S")
+                    .on_click(cx.listener(|this, _, _, cx| this.screenshot(cx))),
+            )
             .child(
                 UiButton::new("device-stats")
                     .icon(Lucide::Activity)
@@ -1427,6 +1454,8 @@ impl Render for DevicePanel {
                     .child("Waiting for the device: another workspace is using it.")
             });
         v_flex()
+            .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(|this, _: &Screenshot, _, cx| this.screenshot(cx)))
             .size_full()
             .bg(t.app)
             .child(header)

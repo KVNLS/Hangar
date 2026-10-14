@@ -71,6 +71,7 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Toggle changes panel", "cmd-shift-d", "Workspace"),
     ("Toggle device panel", "cmd-shift-p", "Workspace"),
     ("Device stats overlay", "cmd-alt-shift-p", "Device"),
+    ("Screenshot to the agent", "cmd-s", "Device panel"),
     ("Back to workspace", "escape", "Review"),
     ("Create workspace", "cmd-enter", "New workspace sheet"),
     ("Cancel", "escape", "New workspace sheet"),

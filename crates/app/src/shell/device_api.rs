@@ -301,6 +301,114 @@ impl HangarApp {
     }
 }
 
+impl HangarApp {
+    /// Saves a screenshot of the workspace's device (the MCP `screenshot` tool's frame and PNG
+    /// encoding) and hands its path to the workspace's agent.
+    pub(super) fn screenshot_to_agent(
+        &mut self,
+        ws: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let frame = self.latest_frame(ws, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let saved = match frame.await {
+                Ok(screen) => {
+                    cx.background_executor()
+                        .spawn(async move { save_screenshot(ws, &screen.frame) })
+                        .await
+                }
+                Err(err) => Err(err),
+            };
+            let _ = this.update_in(cx, |this, window, cx| match saved {
+                Ok(path) => this.attach_screenshot(ws, &path, window, cx),
+                Err(err) => {
+                    tracing::warn!(workspace = %ws, "screenshot failed: {err:#}");
+                    window.push_notification(
+                        Notification::error(format!("Screenshot failed: {err:#}")),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Types "Screenshot: <path>" into a terminal agent's input without sending it. A chat
+    /// composer has no insert API, so there (and without an agent) the path goes to the
+    /// clipboard instead.
+    fn attach_screenshot(
+        &mut self,
+        ws: WorkspaceId,
+        path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let reference = format!("Screenshot: {} ", path.display());
+        tracing::info!(workspace = %ws, path = %path.display(), "device screenshot saved");
+        let live = self
+            .live
+            .sessions
+            .get(&ws)
+            .filter(|l| !l.session.status.is_terminal());
+        let typed = match live.map(|l| &l.surface) {
+            Some(AgentSurface::Terminal { handle, .. }) => {
+                let session = handle.session();
+                let bracketed = session.terminal().modes().bracketed_paste;
+                match session.write(hangar_terminal::encode_paste(&reference, bracketed)) {
+                    Ok(()) => true,
+                    Err(err) => {
+                        tracing::warn!(workspace = %ws, %err, "screenshot path not typed");
+                        false
+                    }
+                }
+            }
+            _ => false,
+        };
+        if typed {
+            window.push_notification(
+                Notification::success("Screenshot attached to agent context"),
+                cx,
+            );
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(reference.trim_end().to_owned()));
+        let message = match live.map(|l| &l.surface) {
+            Some(AgentSurface::Chat { .. }) => {
+                "Screenshot saved; its path is on the clipboard: paste it into the chat (⌘V)."
+                    .to_owned()
+            }
+            _ => format!(
+                "Screenshot saved to {}; the path is on the clipboard (no agent is running here).",
+                path.display()
+            ),
+        };
+        window.push_notification(Notification::info(message), cx);
+    }
+}
+
+/// Screenshots live outside the worktree (nothing there is git-ignored for Hangar): under the
+/// OS temp dir, one folder per workspace.
+fn screenshot_dir(ws: WorkspaceId) -> PathBuf {
+    std::env::temp_dir()
+        .join("Hangar")
+        .join("screenshots")
+        .join(ws.to_string())
+}
+
+/// Encodes `frame` as the `screenshot` tool does and writes it to a new file. Blocking.
+fn save_screenshot(ws: WorkspaceId, frame: &Frame) -> anyhow::Result<PathBuf> {
+    let shot = hangar_mcp::encode_screenshot(frame, hangar_mcp::MAX_SIDE)?;
+    let dir = screenshot_dir(ws);
+    std::fs::create_dir_all(&dir)?;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let path = dir.join(format!("screenshot-{millis}.png"));
+    std::fs::write(&path, &shot.png)?;
+    Ok(path)
+}
+
 /// `12:00:01.123 E MyApp: message`.
 fn format_log(e: &LogEntry) -> String {
     let tag = if e.process.is_empty() || e.process == e.tag {
@@ -320,8 +428,27 @@ fn format_log(e: &LogEntry) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_log;
-    use hangar_devices::{LogEntry, LogLevel};
+    use super::{format_log, save_screenshot};
+    use hangar_devices::{Frame, LogEntry, LogLevel};
+
+    #[test]
+    fn screenshots_are_saved_as_png_per_workspace() {
+        let ws = hangar_core::WorkspaceId::new();
+        let frame = Frame {
+            width: 4,
+            height: 2,
+            stride: 16,
+            bgra: vec![200u8; 32].into(),
+            captured_at: std::time::Instant::now(),
+            seq: 1,
+        };
+        let path = save_screenshot(ws, &frame).unwrap();
+        assert!(path.starts_with(std::env::temp_dir().join("Hangar")));
+        assert!(path.to_string_lossy().contains(&ws.to_string()));
+        let png = std::fs::read(&path).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn log_lines_show_level_tag_and_process() {
