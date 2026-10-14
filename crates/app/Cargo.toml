@@ -18,6 +18,8 @@ hangar-agents.workspace = true
 hangar-terminal.workspace = true
 hangar-files.workspace = true
 hangar-devices.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true
