@@ -8,6 +8,20 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+image.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+objc2.workspace = true
+objc2-foundation.workspace = true
+objc2-io-surface.workspace = true
+objc2-core-graphics.workspace = true
+objc2-core-foundation.workspace = true
+block2.workspace = true
 
 [lints]
 workspace = true

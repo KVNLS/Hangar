@@ -12,6 +12,7 @@ gpui-kit.workspace = true
 hangar-app.workspace = true
 hangar-terminal.workspace = true
 hangar-devices.workspace = true
+image.workspace = true
 
 [[example]]
 name = "spike_terminal"
