@@ -346,6 +346,13 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// Removes the setting under `key`; removing a missing key is not an error.
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        Ok(())
+    }
 }
 
 /// Default database location: `~/Library/Application Support/Hangar/hangar.db` on macOS,

@@ -233,19 +233,19 @@ impl HangarApp {
                     )
                     .child(div().flex_1())
                     .child(
-                        UiButton::new("overview-next")
-                            .label("Next needing you")
-                            .kbd("⌘J")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.focus_next_needing_you(window, cx)
-                            })),
-                    )
-                    .child(
                         Segmented::new("overview-group", ["By status", "By project"])
                             .selected(usize::from(self.overview_by_project))
                             .on_select(cx.listener(|this, i: &usize, _, cx| {
                                 this.overview_by_project = *i == 1;
                                 cx.notify();
+                            })),
+                    )
+                    .child(
+                        UiButton::new("overview-next")
+                            .label("Next needing you")
+                            .kbd("⌘J")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.focus_next_needing_you(window, cx)
                             })),
                     ),
             )

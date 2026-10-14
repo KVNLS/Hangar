@@ -2992,6 +2992,7 @@ dependencies = [
  "hangar-core",
  "hangar-devices",
  "hangar-files",
+ "hangar-runner",
  "hangar-terminal",
  "hangar-worktree",
  "image",
@@ -3080,6 +3081,9 @@ name = "hangar-runner"
 version = "0.1.0"
 dependencies = [
  "hangar-devices",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 

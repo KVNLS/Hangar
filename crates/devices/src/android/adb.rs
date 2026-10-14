@@ -101,6 +101,17 @@ pub fn escape_input_text(text: &str) -> String {
     out
 }
 
+fn reverse_args(serial: &str, port: u16) -> Vec<String> {
+    let spec = format!("tcp:{port}");
+    vec![
+        "-s".into(),
+        serial.into(),
+        "reverse".into(),
+        spec.clone(),
+        spec,
+    ]
+}
+
 #[derive(Debug, Clone)]
 pub struct Adb {
     pub path: PathBuf,
@@ -136,6 +147,14 @@ impl Adb {
     pub fn shell(&self, serial: &str, cmd: &str) -> Result<String> {
         let out = self.run(&["-s", serial, "shell", cmd])?;
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// `adb reverse tcp:<port> tcp:<port>`: the guest's localhost:<port> reaches the host's (dev
+    /// servers such as Metro).
+    pub fn reverse(&self, serial: &str, port: u16) -> Result<()> {
+        let args = reverse_args(serial, port);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.run(&args).map(|_| ())
     }
 
     /// `adb -s <serial> exec-out <cmd>`: raw stdout bytes (no tty, no CRLF mangling).
@@ -268,6 +287,14 @@ pub fn parse_display_rotation(text: &str) -> Option<Orientation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reverse_maps_the_same_port() {
+        assert_eq!(
+            reverse_args("emulator-5554", 8100),
+            ["-s", "emulator-5554", "reverse", "tcp:8100", "tcp:8100"]
+        );
+    }
 
     #[test]
     fn parses_display_rotation() {

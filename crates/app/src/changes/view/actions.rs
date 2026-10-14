@@ -2,12 +2,9 @@
 //! merge. Git and gh run on the background executor; one operation per workspace at a time.
 
 use anyhow::anyhow;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{IconName, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
 use hangar_worktree::{ChangedPath, Gh, MergeOutcome, MergeStrategy, PushOutcome};
@@ -16,6 +13,8 @@ use super::{ChangesPanel, CommitBox};
 use crate::changes::dialogs::{MergeDialog, PrDialog};
 use crate::changes::model::short_sha;
 use crate::changes::review::{self, PrRequest, ReviewTarget};
+use crate::ui::components::UiButton;
+use crate::ui::{ActiveTokens as _, FONT_MONO};
 
 /// The operation running in a workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -391,60 +390,56 @@ impl ChangesPanel {
         let message = input.read(cx).value().to_string();
         let commit_blocker = review::commit_blocker(&message, self.staged);
         let can_stage_all = self.stage.values().any(|c| c.unstaged || !c.staged);
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let t = cx.tokens();
 
         let detached = status.branch.is_none();
         let nothing_to_push = review::own_upstream(&status).is_some() && status.ahead == 0;
-        let push = Button::new("review-push")
-            .small()
-            .ghost()
+        let no_remote = info.as_ref().is_some_and(|i| !i.remote);
+        let push = UiButton::new("review-push")
             .label(review::push_label(&status))
-            .tooltip(review::push_tooltip(&status))
-            .loading(busy == Some(Busy::Pushing))
-            .disabled(busy.is_some() || detached || nothing_to_push)
+            .tooltip(if no_remote {
+                review::NO_REMOTE.to_owned()
+            } else {
+                review::push_tooltip(&status)
+            })
+            .disabled(busy.is_some() || detached || nothing_to_push || no_remote)
             .on_click(cx.listener(|this, _, window, cx| this.push_clicked(window, cx)));
 
         let gh_blocker = info.as_ref().and_then(|i| review::gh_blocker(&i.gh));
-        let pr: AnyElement = match info.as_ref().and_then(|i| i.pr.clone()) {
+        let pr_blocker = if no_remote {
+            Some(review::NO_REMOTE.to_owned())
+        } else {
+            gh_blocker.clone()
+        };
+        let pr = match info.as_ref().and_then(|i| i.pr.clone()) {
             Some(pr) => {
                 let url = pr.url.clone();
-                Button::new("review-pr-link")
-                    .small()
-                    .ghost()
+                UiButton::new("review-pr-link")
                     .icon(IconName::ExternalLink)
                     .label(review::pr_label(&pr))
                     .tooltip(format!("{} — open in browser", pr.title))
                     .on_click(move |_, _, cx| cx.open_url(&url))
-                    .into_any_element()
             }
-            None => Button::new("review-pr")
-                .small()
-                .ghost()
-                .icon(IconName::Github)
+            None => UiButton::new("review-pr")
+                .primary()
+                .icon(gpui_kit::assets::IconName::GitPullRequest)
                 .label("Create PR")
                 .tooltip(
-                    gh_blocker
+                    pr_blocker
                         .clone()
                         .unwrap_or_else(|| format!("Open a pull request into {base}")),
                 )
-                .loading(busy == Some(Busy::CreatingPr) || info.is_none())
-                .disabled(busy.is_some() || info.is_none() || gh_blocker.is_some() || detached)
-                .on_click(cx.listener(|this, _, window, cx| this.open_pr_dialog(window, cx)))
-                .into_any_element(),
+                .disabled(busy.is_some() || info.is_none() || pr_blocker.is_some() || detached)
+                .on_click(cx.listener(|this, _, window, cx| this.open_pr_dialog(window, cx))),
         };
-        let merge = Button::new("review-merge")
-            .small()
-            .ghost()
+        let merge = UiButton::new("review-merge")
             .label(format!("Merge into {base}"))
             .tooltip("Merge this branch where the base branch is checked out")
-            .loading(busy == Some(Busy::Merging))
             .disabled(busy.is_some() || detached)
             .on_click(cx.listener(|this, _, window, cx| this.open_merge_dialog(window, cx)));
 
         let notes: Vec<SharedString> = [
             busy.map(|b| b.label().to_owned()),
-            gh_blocker,
             info.as_ref()
                 .and_then(|i| i.pr_error.clone())
                 .map(|e| format!("Could not look up the pull request: {e}")),
@@ -454,74 +449,58 @@ impl ChangesPanel {
         .map(SharedString::from)
         .collect();
 
-        let toolbar = h_flex()
-            .px_2()
-            .gap_1()
-            .flex_wrap()
+        let commit_row = h_flex()
+            .gap(px(6.))
             .items_center()
-            .child(push)
-            .child(pr)
-            .child(merge);
-
-        let commit = h_flex()
-            .px_2()
-            .gap_2()
-            .items_start()
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Textarea::new(&input).small()),
+                UiButton::new("review-commit")
+                    .icon(IconName::Check)
+                    .label("Commit")
+                    .tooltip(commit_blocker.unwrap_or("Commit the staged files"))
+                    .disabled(busy.is_some() || commit_blocker.is_some())
+                    .on_click(cx.listener(|this, _, window, cx| this.commit_clicked(window, cx))),
             )
             .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("review-commit")
-                            .small()
-                            .primary()
-                            .icon(IconName::Check)
-                            .label("Commit")
-                            .tooltip(commit_blocker.unwrap_or("Commit the staged files"))
-                            .loading(busy == Some(Busy::Committing))
-                            .disabled(busy.is_some() || commit_blocker.is_some())
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.commit_clicked(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("review-stage-all")
-                            .small()
-                            .ghost()
-                            .label("Stage all")
-                            .tooltip("Stage every change, untracked files included")
-                            .disabled(busy.is_some() || !can_stage_all)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.stage_all_clicked(window, cx)
-                            })),
+                UiButton::new("review-stage-all")
+                    .ghost()
+                    .label("Stage all")
+                    .tooltip("Stage every change, untracked files included")
+                    .disabled(busy.is_some() || !can_stage_all)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.stage_all_clicked(window, cx)),
                     ),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .font_family(FONT_MONO)
+                    .text_size(px(11.))
+                    .text_color(t.tx3)
+                    .child(format!("{} staged", self.staged)),
             );
+        // Wraps in the 280 px column of the review screen.
+        let share_row = h_flex()
+            .flex_wrap()
+            .gap(px(6.))
+            .items_center()
+            .child(push)
+            .child(merge)
+            .child(div().flex_1())
+            .child(pr);
 
         v_flex()
             .flex_shrink_0()
-            .pb_2()
-            .gap_1()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(toolbar)
+            .px(px(12.))
+            .py(px(10.))
+            .gap(px(8.))
             .children(
                 notes
                     .into_iter()
-                    .map(|note| div().px_2().text_xs().text_color(muted).child(note)),
+                    .map(|note| div().text_size(px(11.)).text_color(t.tx3).child(note)),
             )
-            .child(
-                div()
-                    .px_2()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("{} staged", self.staged)),
-            )
-            .child(commit)
+            .child(Textarea::new(&input).small())
+            .child(commit_row)
+            .child(share_row)
             .into_any_element()
     }
 }

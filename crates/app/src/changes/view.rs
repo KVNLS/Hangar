@@ -903,7 +903,6 @@ impl Render for ChangesPanel {
                 v_flex()
                     .flex_1()
                     .min_h_0()
-                    .children(review)
                     .when(empty, |this| {
                         this.child(
                             div()
@@ -917,6 +916,9 @@ impl Render for ChangesPanel {
                         this.child(self.render_file_list(cx))
                     })
                     .child(self.render_diff(cx))
+                    .children(
+                        review.map(|r| div().border_t_1().border_color(cx.tokens().line).child(r)),
+                    )
                     .into_any_element()
             }
         };

@@ -5,7 +5,7 @@ use gpui_kit::component::TitleBar;
 
 use super::*;
 use crate::ui::components::{Chip, StateGlyph, UiButton};
-use crate::ui::{ActiveTokens as _, FONT_MONO, STATUS_BAR_HEIGHT, TITLEBAR_HEIGHT};
+use crate::ui::{ActiveTokens as _, FONT_MONO, RADIUS_CONTROL, STATUS_BAR_HEIGHT, TITLEBAR_HEIGHT};
 
 /// Title bar options matching the 38 px custom title bar (traffic lights vertically centered).
 pub fn titlebar_options() -> TitlebarOptions {
@@ -89,58 +89,100 @@ impl HangarApp {
                     )
                     .child(crumbs)
                     .child(
-                        UiButton::new("overview-toggle")
-                            .icon(Lucide::LayoutGrid)
-                            .label("Overview")
-                            .kbd("⌘⇧O")
-                            .ghost()
-                            .selected(self.screen == Screen::Overview)
+                        h_flex()
+                            .id("palette-search")
+                            .flex_none()
+                            .w(px(300.))
+                            .h(px(26.))
+                            .px(px(8.))
+                            .gap(px(8.))
+                            .items_center()
+                            .rounded(RADIUS_CONTROL)
+                            .border_1()
+                            .border_color(t.line)
+                            .bg(t.app)
+                            .text_size(px(12.))
+                            .text_color(t.tx3)
+                            .cursor_pointer()
+                            .hover(|this| this.border_color(t.line2))
+                            .child(gpui_kit::component::Icon::new(Lucide::Search).size(px(12.)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .truncate()
+                                    .child("Search workspaces and commands"),
+                            )
+                            .child(
+                                div()
+                                    .font_family(FONT_MONO)
+                                    .text_size(px(10.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("⌘K"),
+                            )
                             .on_click(
-                                cx.listener(|this, _, window, cx| this.toggle_overview(window, cx)),
+                                cx.listener(|this, _, window, cx| this.open_palette(window, cx)),
                             ),
                     )
                     .child(
-                        UiButton::new("device-toggle")
-                            .icon(Lucide::Smartphone)
-                            .ghost()
-                            .selected(device_open)
-                            .tooltip(if device_open {
-                                "Hide device ⌘⇧P"
-                            } else {
-                                "Show device ⌘⇧P"
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.set_device_open(!device_open, window, cx)
-                            })),
-                    )
-                    .child(
-                        UiButton::new("settings-toggle")
-                            .icon(Lucide::Settings)
-                            .ghost()
-                            .selected(self.screen == Screen::Settings)
-                            .tooltip("Settings ⌘,")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let screen = if this.screen == Screen::Settings {
-                                    Screen::Workspace
-                                } else {
-                                    Screen::Settings
-                                };
-                                this.set_screen(screen, window, cx)
-                            })),
-                    )
-                    .child(
-                        UiButton::new("new-workspace")
-                            .icon(Lucide::Plus)
-                            .label("New workspace")
-                            .primary()
-                            .disabled(new_target.is_none())
-                            .tooltip("New workspace ⌘N")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Some(project) = new_target {
-                                    this.sidebar_open = true;
-                                    this.open_new_workspace(project, window, cx);
-                                }
-                            })),
+                        h_flex()
+                            .flex_1()
+                            .justify_end()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                UiButton::new("overview-toggle")
+                                    .icon(Lucide::LayoutGrid)
+                                    .label("Overview")
+                                    .kbd("⌘⇧O")
+                                    .ghost()
+                                    .selected(self.screen == Screen::Overview)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_overview(window, cx)
+                                    })),
+                            )
+                            .child(
+                                UiButton::new("new-workspace")
+                                    .icon(Lucide::Plus)
+                                    .label("New workspace")
+                                    .primary()
+                                    .disabled(new_target.is_none())
+                                    .tooltip("New workspace ⌘N")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        if let Some(project) = new_target {
+                                            this.sidebar_open = true;
+                                            this.open_new_workspace(project, window, cx);
+                                        }
+                                    })),
+                            )
+                            .child(
+                                UiButton::new("device-toggle")
+                                    .icon(Lucide::Smartphone)
+                                    .ghost()
+                                    .selected(device_open)
+                                    .tooltip(if device_open {
+                                        "Hide device ⌘⇧P"
+                                    } else {
+                                        "Show device ⌘⇧P"
+                                    })
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.set_device_open(!device_open, window, cx)
+                                    })),
+                            )
+                            .child(
+                                UiButton::new("settings-toggle")
+                                    .icon(Lucide::Settings)
+                                    .ghost()
+                                    .selected(self.screen == Screen::Settings)
+                                    .tooltip("Settings ⌘,")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let screen = if this.screen == Screen::Settings {
+                                            Screen::Workspace
+                                        } else {
+                                            Screen::Settings
+                                        };
+                                        this.set_screen(screen, window, cx)
+                                    })),
+                            ),
                     ),
             )
     }
@@ -161,6 +203,11 @@ impl HangarApp {
             .picker()
             .selected_entry()
             .map(|entry| format!("{} · {}", entry.info.name, entry.info.state.to_lowercase()));
+        let run = self
+            .panes
+            .slot(self.panes.focused())
+            .and_then(|id| self.runs.get(&id))
+            .map(|run| run.summary());
         h_flex()
             .flex_none()
             .h(STATUS_BAR_HEIGHT)
@@ -193,6 +240,21 @@ impl HangarApp {
                         .items_center()
                         .child(gpui_kit::component::Icon::new(Lucide::Smartphone).size(px(11.)))
                         .child(device),
+                )
+            })
+            .when_some(run, |this, (text, state)| {
+                let color = match state {
+                    AgentState::Failed => t.red,
+                    AgentState::Working => t.acc,
+                    _ => t.tx2,
+                };
+                this.child(div().w(px(1.)).h(px(12.)).bg(t.line2)).child(
+                    h_flex()
+                        .gap(px(5.))
+                        .items_center()
+                        .text_color(color)
+                        .child(gpui_kit::component::Icon::new(Lucide::Hammer).size(px(11.)))
+                        .child(text),
                 )
             })
             .child(div().flex_1())

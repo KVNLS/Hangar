@@ -31,6 +31,13 @@
 //! `HANGAR_DEV_REVIEW=1` opens the full-width review screen once files are listed (after the
 //! review hooks below), logs its row counts, renders the inline mode, then goes back.
 //!
+//! `HANGAR_DEV_SHOW=<screen>` runs last and leaves the window on `workspace`, `review` (split),
+//! `review-inline`, `overview`, `settings-{agents,devices,appearance,keybindings}`, `palette` or
+//! `sheet` (New workspace), for screenshots.
+//!
+//! `HANGAR_DEV_RUN=1` waits for the device panel to show a device (see `HANGAR_DEV_DEVICE`), then
+//! builds and runs the dev workspace on it (⌘R) and logs each step.
+//!
 //! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run; a
 //! worktree-relative path instead of `1` also selects that file once it shows up.
 //!

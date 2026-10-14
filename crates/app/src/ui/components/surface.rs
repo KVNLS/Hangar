@@ -65,7 +65,9 @@ impl RenderOnce for EmptyState {
             .flex_col()
             .items_center()
             .gap(px(14.))
-            .w(px(300.))
+            .w_full()
+            .max_w(px(300.))
+            .px_4()
             .text_center()
             .child(
                 div()

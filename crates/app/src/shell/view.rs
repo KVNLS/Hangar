@@ -2,6 +2,7 @@
 
 use gpui_kit::assets::IconName as Lucide;
 
+use super::run::PaneTab;
 use super::*;
 use crate::ui::components::{CountBadge, EmptyState, StateGlyph, TabStyle, UiButton, UiTab};
 use crate::ui::{ActiveTokens as _, FONT_MONO, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT};
@@ -65,6 +66,11 @@ impl Render for HangarApp {
             }))
             .on_action(
                 cx.listener(|this, _: &AddProject, window, cx| this.pick_project(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Run, window, cx| this.run_focused(window, cx)))
+            .on_action(cx.listener(|this, _: &StopRun, _, cx| this.stop_run(cx)))
+            .on_action(
+                cx.listener(|this, _: &RestartServer, window, cx| this.restart_server(window, cx)),
             )
             .on_action(cx.listener(|this, _: &ShowDeviceTab, window, cx| {
                 this.set_device_open(true, window, cx)
@@ -161,6 +167,7 @@ impl HangarApp {
         let live = workspace_id.and_then(|id| self.sessions.get(&id));
         let changes_open = self.changes.open && focused;
 
+        let shown = workspace_id.map(|id| self.pane_tab(id)).unwrap_or_default();
         let tab = match workspace {
             None => UiTab::new(("pane-tab", pane), TabStyle::Pane, "Empty pane")
                 .icon(Lucide::Terminal)
@@ -170,11 +177,60 @@ impl HangarApp {
                     Some(l) => format!("{} · {}", l.agent_name, ws.name),
                     None => ws.name.clone(),
                 };
+                let ws_id = ws.id;
                 UiTab::new(("pane-tab", pane), TabStyle::Pane, label)
                     .leading(StateGlyph::new(self.agent_state(ws.id, cx)))
-                    .active(focused)
+                    .active(focused && shown == PaneTab::Agent)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.show_pane_tab(ws_id, PaneTab::Agent, window, cx)
+                    }))
             }
         };
+        let run = workspace_id.and_then(|id| self.runs.get(&id));
+        let run_tabs: Vec<UiTab> = run
+            .into_iter()
+            .flat_map(|run| {
+                [(PaneTab::Server, &run.server), (PaneTab::Build, &run.build)]
+                    .into_iter()
+                    .filter_map(|(kind, tab)| Some((kind, tab.as_ref()?)))
+            })
+            .filter_map(|(kind, tab)| {
+                let ws_id = workspace_id?;
+                let id = match kind {
+                    PaneTab::Server => "server",
+                    _ => "build",
+                };
+                Some(
+                    UiTab::new((id, pane), TabStyle::Pane, tab.title.clone())
+                        .leading(StateGlyph::new(tab.state()))
+                        .active(focused && shown == kind)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.show_pane_tab(ws_id, kind, window, cx)
+                        })),
+                )
+            })
+            .collect();
+        let has_device = self.device_panel.read(cx).view().is_some();
+        let run_button = workspace.map(|ws| {
+            let ws_id = ws.id;
+            UiButton::new(("run", pane))
+                .icon(Lucide::Hammer)
+                .label("Run")
+                .kbd("⌘R")
+                .ghost()
+                .small()
+                .disabled(!has_device || self.busy.contains(&ws_id))
+                .tooltip(if has_device {
+                    "Build and run on the open device"
+                } else {
+                    "Open a device in the Device tab (⌘1) to run on it"
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.panes.show(ws_id);
+                    this.panes_changed(window, cx);
+                    this.run_focused(window, cx);
+                }))
+        });
         let start = workspace.and_then(|ws| {
             let can_start =
                 !self.busy.contains(&ws.id) && live.is_none_or(|l| l.session.status.is_terminal());
@@ -205,6 +261,7 @@ impl HangarApp {
             .border_b_1()
             .border_color(t.line)
             .child(tab)
+            .children(run_tabs)
             .child(div().flex_1())
             .when_some(status, |this, status| {
                 this.child(
@@ -217,6 +274,7 @@ impl HangarApp {
                 )
             })
             .children(start)
+            .children(run_button)
             .child(
                 div().px_1p5().child(
                     UiButton::new(("changes-toggle", pane))
@@ -236,9 +294,11 @@ impl HangarApp {
             );
 
         let body = div().flex_1().min_h_0().w_full();
-        let body = match live {
-            Some(live) => body.child(live.view.clone()),
-            None => body
+        let run_view = workspace_id.and_then(|id| self.run_view(id, shown));
+        let body = match (run_view, live) {
+            (Some(view), _) => body.child(view),
+            (None, Some(live)) => body.child(live.view.clone()),
+            (None, None) => body
                 .flex()
                 .items_center()
                 .justify_center()

@@ -8,6 +8,7 @@ mod lifecycle;
 mod new_workspace;
 mod overview;
 mod palette;
+mod run;
 mod settings;
 mod sidebar;
 mod status;
@@ -85,7 +86,10 @@ actions!(
         ToggleTheme,
         ToggleOverview,
         OpenSettings,
-        NextNeedingYou
+        NextNeedingYou,
+        Run,
+        StopRun,
+        RestartServer
     ]
 );
 
@@ -106,6 +110,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-2", ShowChangesTab, None),
         KeyBinding::new("cmd-3", ShowFilesTab, None),
         KeyBinding::new("cmd-shift-r", OpenReview, None),
+        KeyBinding::new("cmd-r", Run, None),
+        KeyBinding::new("cmd-.", StopRun, None),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
@@ -201,6 +207,10 @@ pub struct HangarApp {
     agent: SharedString,
     agent_chosen_by_user: bool,
     sessions: HashMap<WorkspaceId, LiveSession>,
+    /// Build and dev-server tabs per workspace (⌘R).
+    runs: HashMap<WorkspaceId, run::WorkspaceRun>,
+    /// The tab each workspace's pane shows (agent, dev server or build).
+    pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
     panes: Panes,
     pane_sizes: Entity<ResizableState>,
     /// First pane's share of the width, once the user has resized (or it was restored).
@@ -366,6 +376,8 @@ impl HangarApp {
             agent,
             agent_chosen_by_user: false,
             sessions: HashMap::new(),
+            runs: HashMap::new(),
+            pane_tabs: HashMap::new(),
             panes: Panes::default(),
             pane_sizes,
             split: None,
