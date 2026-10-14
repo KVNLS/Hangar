@@ -85,11 +85,15 @@ Git access is the `git` CLI with porcelain output, not a library.
   gpui-component tree-sitter features), sidebar change badges, panel state persisted; LiveDiff started lazily,
   stopped on archive/delete. Verified end to end: edit → panel update 214 ms.
 
+- M3 review actions: stage/commit (hooks respected), push (never forced; workspace branches created with
+  `--no-track` so push never lands on base), PR via `gh` (status, create, link), merge into base (NoFf/Squash)
+  only in a clean checkout of base, pre-checked with `git merge-tree`.
+
 ## Remaining gaps
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
+- Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
 
 ## Next
-- M3 review actions: commit, push/PR (via `gh` if installed), merge back into base.
 - Then M4 Android device panel.
