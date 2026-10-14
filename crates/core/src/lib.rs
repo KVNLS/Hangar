@@ -8,6 +8,7 @@ mod model;
 pub mod ports;
 pub mod review;
 mod setting;
+pub mod setup;
 mod slug;
 
 pub use agent_state::{AcpTurn, AgentSignal, AgentState};
