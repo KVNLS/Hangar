@@ -87,8 +87,11 @@ pub struct DevOptions {
     pub appearance: Option<String>,
     /// Screen to leave the window on once every other hook has run (for screenshots).
     pub show: Option<String>,
-    /// Build and run the dev workspace once the device panel has a device open.
-    pub run: bool,
+    /// Build and run on their devices: `1` = the workspaces `HANGAR_DEV_OPEN` created (else the
+    /// focused one), or comma-separated slugs.
+    pub run: Option<String>,
+    /// Slug of a workspace to show in the focused pane after the runs.
+    pub select: Option<String>,
     pub merge: Option<MergeStrategy>,
     /// Device id (simulator UDID) to open in the device panel.
     pub device: Option<String>,
@@ -220,7 +223,8 @@ impl DevOptions {
             files: var("HANGAR_DEV_FILES"),
             appearance: var("HANGAR_DEV_APPEARANCE"),
             show: var("HANGAR_DEV_SHOW"),
-            run: flag("HANGAR_DEV_RUN"),
+            run: var("HANGAR_DEV_RUN"),
+            select: var("HANGAR_DEV_SELECT"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
                 "squash" => Some(MergeStrategy::Squash),
@@ -311,11 +315,36 @@ pub(super) async fn run_dev_hooks(
             created = task.await;
         }
     }
-    if dev.run {
-        dev_run(&this, &created, cx).await;
+    if let Some(run) = dev.run.as_deref() {
+        let mut targets = created.clone();
+        if run != "1" {
+            targets = this
+                .update(cx, |this, _| {
+                    run.split(',')
+                        .filter_map(|slug| {
+                            let found = this.workspace_by_slug(slug.trim());
+                            if found.is_none() {
+                                tracing::error!(%slug, "HANGAR_DEV_RUN: no such workspace");
+                            }
+                            found
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+        dev_run(&this, &targets, cx).await;
     }
     if let Some(dir) = dev.pool_frames.clone() {
         dev_pool_frames(&this, &created, &dir, cx).await;
+    }
+    if let Some(slug) = dev.select.clone() {
+        let _ = this.update_in(cx, |this, window, cx| match this.workspace_by_slug(&slug) {
+            Some(id) => {
+                tracing::info!(%slug, "HANGAR_DEV_SELECT");
+                this.select_workspace(id, window, cx);
+            }
+            None => tracing::error!(%slug, "HANGAR_DEV_SELECT: no such workspace"),
+        });
     }
     run_review_hooks(&this, &dev, cx).await;
     if dev.review {

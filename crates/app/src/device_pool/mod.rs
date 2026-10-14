@@ -798,7 +798,18 @@ impl DevicePool {
                 Err(OpenError::Refused(why)) => why,
             };
             drop(lease);
-            let fallback = this.update(cx, |pool, _| pool.borrowable(a.platform, &key))?;
+            let fallback = this.update(cx, |pool, cx| {
+                let other = pool.borrowable(a.platform, &key)?;
+                let name = pool.devices.get(&other).map(|d| d.name.clone());
+                cx.emit(PoolEvent::Notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "{refused}. Waiting for {} instead, which another workspace also uses.",
+                        name.unwrap_or_else(|| "a running device".into())
+                    ),
+                ));
+                Some(other)
+            })?;
             let Some(other) = fallback else {
                 return Err(anyhow!(
                     "{refused}. No other {} device is running to share.",
@@ -821,14 +832,22 @@ impl DevicePool {
     }
 
     /// A running device of `platform` other than `key`, the one with the shortest queue.
+    /// Open ones first, then ones opening or left running (which need no boot).
     fn borrowable(&self, platform: Platform, key: &PoolKey) -> Option<PoolKey> {
         self.devices
             .iter()
-            .filter(|(k, d)| {
-                *k != key && d.platform == platform && matches!(d.state, State::Open { .. })
+            .filter(|(k, d)| *k != key && d.platform == platform)
+            .filter_map(|(k, d)| {
+                let rank = match d.state {
+                    State::Open { .. } => 0,
+                    State::Opening { .. } => 1,
+                    State::Closed if d.running => 2,
+                    _ => return None,
+                };
+                Some(((rank, d.leases.waiting_len()), k))
             })
-            .min_by_key(|(_, d)| d.leases.waiting_len())
-            .map(|(k, _)| k.clone())
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, k)| k.clone())
     }
 
     async fn lease(
@@ -1021,7 +1040,15 @@ impl DevicePool {
                     .map_err(gone)?;
                 let host = cx
                     .background_executor()
-                    .spawn(async { HostResources::detect() })
+                    .spawn(async {
+                        // `HANGAR_PRESSURE` (tests) applies to the guard too.
+                        HostResources::detect().map(|mut host| {
+                            if let Ok(p) = capacity::pressure_with_override() {
+                                host.pressure = p;
+                            }
+                            host
+                        })
+                    })
                     .await;
                 let guard = match &host {
                     Ok(host) => policy::guard(Some(host), &cost),
@@ -1040,8 +1067,8 @@ impl DevicePool {
                     })
                     .map_err(gone)?;
                     return Err(OpenError::Refused(format!(
-                        "Not booting another {} device: {refusal} ({numbers}). Close a device \
-                         or an app, or lower Devices at once in Settings",
+                        "Not booting another {} device: {refusal} ({numbers}; Devices at once \
+                         is in Settings › Devices)",
                         platform.label()
                     )));
                 }
