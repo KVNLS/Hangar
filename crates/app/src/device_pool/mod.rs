@@ -1658,6 +1658,27 @@ impl DevicePool {
         }
     }
 
+    /// Another workspace holding the lease on `ws`'s device (a run or tool call): its id and
+    /// name.
+    pub fn held_by_other(&self, ws: WorkspaceId) -> Option<(WorkspaceId, &str)> {
+        let holder = *self.devices.get(&self.key_for(ws)?)?.leases.holder()?;
+        (holder != ws).then(|| {
+            let name = self
+                .workspaces
+                .get(&holder)
+                .map_or("another workspace", |w| w.name.as_str());
+            (holder, name)
+        })
+    }
+
+    /// Whether the lease on the base device `key` is held by a workspace other than `ws`.
+    pub fn base_held_by_other(&self, key: &DeviceKey, ws: WorkspaceId) -> bool {
+        self.devices
+            .get(&PoolKey::Base(key.clone()))
+            .and_then(|d| d.leases.holder())
+            .is_some_and(|holder| *holder != ws)
+    }
+
     /// The open device of the workspace, if any (no boot).
     pub fn session(&self, ws: WorkspaceId) -> Option<&DeviceSession> {
         match &self.devices.get(&self.key_for(ws)?)?.state {

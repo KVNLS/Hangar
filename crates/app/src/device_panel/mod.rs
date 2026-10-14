@@ -24,7 +24,7 @@ use logs::{LogsEvent, LogsPane};
 use crate::device_pool::{DevicePool, DeviceStatus};
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent, InputResult};
 use crate::ui::components::{EmptyState, UiButton};
-use crate::ui::{ActiveTokens as _, TypeScale as _};
+use crate::ui::{ActiveTokens as _, Tokens, TypeScale as _};
 pub use logs::LogsSettings;
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
 pub use platform::{
@@ -122,6 +122,60 @@ impl Booting {
 struct InputStatus {
     text: SharedString,
     error: bool,
+}
+
+/// The shown device's state as the header labels it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeviceState {
+    Booting,
+    /// Booted; the panel is connecting to it.
+    Opening,
+    Running,
+    ShuttingDown,
+    Off,
+    /// The boot or open failed.
+    Failed,
+    /// Another workspace holds the device's lease.
+    InUse,
+}
+
+impl DeviceState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Booting => "Booting",
+            Self::Opening => "Opening",
+            Self::Running => "Running",
+            Self::ShuttingDown => "Shutting down",
+            Self::Off => "Shut down",
+            Self::Failed => "Failed",
+            Self::InUse => "In use",
+        }
+    }
+
+    fn color(self, t: &Tokens) -> Hsla {
+        match self {
+            Self::Booting | Self::Opening => t.amb,
+            Self::Running => t.grn,
+            Self::ShuttingDown | Self::Off => t.tx3,
+            Self::Failed => t.red,
+            Self::InUse => t.vio,
+        }
+    }
+
+    /// A workspace device as the pool reports it; `held` when another workspace holds it.
+    fn of_workspace(status: &DeviceStatus<'_>, held: bool) -> Option<Self> {
+        Some(match status {
+            DeviceStatus::Unknown => return None,
+            DeviceStatus::Opening { .. } | DeviceStatus::Open { .. } if held => Self::InUse,
+            DeviceStatus::Closed {
+                error, conflict, ..
+            } if error.is_some() || conflict.is_some() => Self::Failed,
+            DeviceStatus::Closed { .. } => Self::Off,
+            DeviceStatus::Opening { .. } => Self::Booting,
+            DeviceStatus::Open { .. } => Self::Running,
+            DeviceStatus::ShuttingDown { .. } => Self::ShuttingDown,
+        })
+    }
 }
 
 pub struct DevicePanel {
@@ -805,9 +859,58 @@ impl DevicePanel {
             .map(|s| s.text.clone())
     }
 
-    /// 40px toolbar: device select, stats overlay toggle, refresh.
+    /// The shown device's state for the header, when there is one to tell.
+    fn device_state(&self, cx: &App) -> Option<DeviceState> {
+        if let Some(ws) = self.workspace {
+            let pool = self.pool.read(cx);
+            let held = pool.held_by_other(ws).is_some();
+            return DeviceState::of_workspace(&pool.status(ws), held);
+        }
+        let entry = self.picker.selected_entry();
+        let key = entry.map(|e| &e.key);
+        if self.booting.as_ref().is_some_and(|b| Some(&b.key) == key) {
+            return Some(DeviceState::Booting);
+        }
+        match &self.connection {
+            Connection::Open { .. } if self.shutting_down => Some(DeviceState::ShuttingDown),
+            Connection::Open { .. } => Some(DeviceState::Running),
+            Connection::Opening { .. } => Some(DeviceState::Opening),
+            Connection::Failed { .. } => Some(DeviceState::Failed),
+            Connection::None => {
+                let entry = entry?;
+                Some(
+                    if self
+                        .boot_error
+                        .as_ref()
+                        .is_some_and(|(k, _)| *k == entry.key)
+                    {
+                        DeviceState::Failed
+                    } else if entry.ready {
+                        DeviceState::Running
+                    } else {
+                        DeviceState::Off
+                    },
+                )
+            }
+        }
+    }
+
+    /// 40px toolbar: device select and its state, stats overlay toggle, refresh.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = cx.tokens();
+        let state = self.device_state(cx).map(|state| {
+            let color = state.color(t);
+            h_flex()
+                .flex_shrink_0()
+                .gap(px(5.))
+                .items_center()
+                .font_mono()
+                .text_size(px(11.))
+                .text_color(color)
+                .whitespace_nowrap()
+                .child(div().size(px(6.)).rounded_full().bg(color))
+                .child(state.label())
+        });
         h_flex()
             .h(px(40.))
             .px_2()
@@ -828,6 +931,7 @@ impl DevicePanel {
                         },
                     )),
             )
+            .children(state)
             .child(
                 UiButton::new("device-stats")
                     .icon(Lucide::Activity)
@@ -1357,5 +1461,44 @@ fn input_status(result: &InputResult) -> InputStatus {
             text: format!("{what} failed: {err}").into(),
             error: true,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceState, DeviceStatus};
+
+    #[test]
+    fn workspace_device_states() {
+        let state = |status: DeviceStatus<'_>, held| DeviceState::of_workspace(&status, held);
+        let closed = |error, conflict| DeviceStatus::Closed {
+            name: "iPhone",
+            error,
+            conflict,
+        };
+        assert_eq!(state(DeviceStatus::Unknown, false), None);
+        assert_eq!(state(closed(None, None), false), Some(DeviceState::Off));
+        assert_eq!(
+            state(closed(Some("boot failed"), None), false),
+            Some(DeviceState::Failed)
+        );
+        assert_eq!(
+            state(closed(None, Some("emulator-5554")), false),
+            Some(DeviceState::Failed)
+        );
+        let opening = || DeviceStatus::Opening {
+            name: "iPhone",
+            status: "booting… 3 s".into(),
+        };
+        assert_eq!(state(opening(), false), Some(DeviceState::Booting));
+        assert_eq!(state(opening(), true), Some(DeviceState::InUse));
+        // A device that is off is off, whoever holds its lease.
+        assert_eq!(state(closed(None, None), true), Some(DeviceState::Off));
+        assert_eq!(
+            state(DeviceStatus::ShuttingDown { name: "iPhone" }, false),
+            Some(DeviceState::ShuttingDown)
+        );
+        assert_eq!(DeviceState::InUse.label(), "In use");
+        assert_eq!(DeviceState::Off.label(), "Shut down");
     }
 }
