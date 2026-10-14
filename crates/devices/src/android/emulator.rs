@@ -154,6 +154,9 @@ pub struct BootOptions {
     /// Save a quick-boot snapshot on graceful shutdown (default off: `-no-snapshot-save`, so shutdown
     /// is fast and the AVD state Android Studio relies on is not overwritten).
     pub save_snapshot: bool,
+    /// `-read-only`: nothing is written back to the AVD, so several instances of one AVD can run
+    /// side by side (the emulator requires every instance of that AVD to be read-only).
+    pub read_only: bool,
     /// Fixed gRPC port; by default the first free port from 8554 upwards.
     pub grpc_port: Option<u16>,
     /// Until `sys.boot_completed=1`.
@@ -169,6 +172,7 @@ impl Default for BootOptions {
             window: WindowMode::NoWindowHostGpu,
             cold_boot: false,
             save_snapshot: false,
+            read_only: false,
             grpc_port: None,
             timeout: Duration::from_secs(240),
             log_file: None,
@@ -218,8 +222,69 @@ pub fn boot_args(avd_id: &str, grpc_port: u16, opts: &BootOptions) -> Vec<String
     if !opts.save_snapshot {
         args.push("-no-snapshot-save".into());
     }
+    if opts.read_only {
+        args.push("-read-only".into());
+    }
     args.extend(opts.extra_args.iter().cloned());
     args
+}
+
+/// gRPC ports picked by boots in this process whose emulator may not have bound them yet.
+static RESERVED_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+
+struct PortReservation(u16);
+
+impl PortReservation {
+    fn take(taken: &[u16], fixed: Option<u16>) -> Result<Self> {
+        let mut reserved = RESERVED_PORTS
+            .lock()
+            .map_err(|_| Error::Command("gRPC port lock poisoned".into()))?;
+        let port = match fixed {
+            Some(p) => p,
+            None => {
+                let all: Vec<u16> = taken.iter().chain(reserved.iter()).copied().collect();
+                free_grpc_port(&all)?
+            }
+        };
+        reserved.push(port);
+        Ok(Self(port))
+    }
+}
+
+impl Drop for PortReservation {
+    fn drop(&mut self) {
+        if let Ok(mut reserved) = RESERVED_PORTS.lock() {
+            reserved.retain(|p| *p != self.0);
+        }
+    }
+}
+
+/// A running instance that prevents booting `avd_id`: any instance unless `read_only`, else one
+/// started without `-read-only`.
+pub fn conflicting_instance<'a>(
+    running: &'a [Discovery],
+    avd_id: &str,
+    read_only: bool,
+) -> Option<&'a Discovery> {
+    running
+        .iter()
+        .find(|d| d.avd_id == avd_id && !(read_only && d.read_only))
+}
+
+/// The discovery entry of the emulator a boot spawned: the launched process itself, else a
+/// process that was not running before the launch, of `avd_id`, on the gRPC port it was given.
+pub fn pick_started<'a>(
+    found: &'a [Discovery],
+    before: &[u32],
+    avd_id: &str,
+    grpc_port: u16,
+    launched_pid: u32,
+) -> Option<&'a Discovery> {
+    found.iter().find(|d| d.pid == launched_pid).or_else(|| {
+        found.iter().find(|d| {
+            !before.contains(&d.pid) && d.avd_id == avd_id && d.grpc_port == Some(grpc_port)
+        })
+    })
 }
 
 fn free_grpc_port(taken: &[u16]) -> Result<u16> {
@@ -230,6 +295,8 @@ fn free_grpc_port(taken: &[u16]) -> Result<u16> {
 
 /// Launches `avd_id` detached from our process group and waits until Android has booted,
 /// calling `progress` at each [`BootStage`]. Blocking: call it from a background thread.
+/// With [`BootOptions::read_only`] it starts another instance next to read-only ones already
+/// running and returns the instance it started.
 pub fn boot(
     sdk: &AndroidSdk,
     avd_id: &str,
@@ -237,21 +304,29 @@ pub fn boot(
     progress: &dyn Fn(BootStage),
 ) -> Result<RunningEmulator> {
     let running = discovery::scan();
-    if let Some(d) = running.iter().find(|d| d.avd_id == avd_id) {
-        return Err(Error::Command(format!(
-            "{avd_id} is already running as {}",
-            d.serial()
-        )));
+    if let Some(d) = conflicting_instance(&running, avd_id, opts.read_only) {
+        return Err(Error::Command(if opts.read_only {
+            format!(
+                "{avd_id} is running as {} without -read-only; several instances of one AVD \
+                 need every instance read-only",
+                d.serial()
+            )
+        } else {
+            format!("{avd_id} is already running as {}", d.serial())
+        }));
     }
+    let before: Vec<u32> = running.iter().map(|d| d.pid).collect();
     let taken: Vec<u16> = running.iter().filter_map(|d| d.grpc_port).collect();
-    let port = match opts.grpc_port {
-        Some(p) => p,
-        None => free_grpc_port(&taken)?,
-    };
-    let log_path = opts
-        .log_file
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("hangar-emulator-{avd_id}.log")));
+    let reservation = PortReservation::take(&taken, opts.grpc_port)?;
+    let port = reservation.0;
+    let log_path = opts.log_file.clone().unwrap_or_else(|| {
+        let name = if opts.read_only {
+            format!("hangar-emulator-{avd_id}-{port}.log")
+        } else {
+            format!("hangar-emulator-{avd_id}.log")
+        };
+        std::env::temp_dir().join(name)
+    });
     let log = std::fs::File::create(&log_path)?;
     let mut cmd = Command::new(&sdk.emulator);
     cmd.args(boot_args(avd_id, port, opts))
@@ -268,6 +343,7 @@ pub fn boot(
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::Command(format!("{}: {e}", sdk.emulator.display())))?;
+    let launched_pid = child.id();
     tracing::info!(avd_id, port, log = %log_path.display(), "emulator launched");
     progress(BootStage::Launching);
 
@@ -278,11 +354,9 @@ pub fn boot(
     };
     let deadline = started + opts.timeout;
     let found = loop {
-        if let Some(d) = discovery::scan()
-            .into_iter()
-            .find(|d| d.grpc_port == Some(port) && d.avd_id == avd_id)
-        {
-            break d;
+        let scanned = discovery::scan();
+        if let Some(d) = pick_started(&scanned, &before, avd_id, port, launched_pid) {
+            break d.clone();
         }
         if let Ok(Some(status)) = child.try_wait()
             && !status.success()
@@ -301,6 +375,7 @@ pub fn boot(
         }
         std::thread::sleep(Duration::from_millis(200));
     };
+    drop(reservation);
     // Reap the launcher whenever it exits so it never lingers as a zombie.
     let _ = std::thread::Builder::new()
         .name("emulator-reaper".into())
@@ -402,6 +477,75 @@ mod tests {
         assert!(a.contains(&"-no-window".to_owned()));
         assert!(a.contains(&"-no-snapshot-load".to_owned()));
         assert!(!a.contains(&"-no-snapshot-save".to_owned()));
+    }
+
+    #[test]
+    fn read_only_flag() {
+        let opts = BootOptions {
+            read_only: true,
+            ..BootOptions::default()
+        };
+        assert!(boot_args("X", 8554, &opts).contains(&"-read-only".to_owned()));
+        assert!(!boot_args("X", 8554, &BootOptions::default()).contains(&"-read-only".to_owned()));
+    }
+
+    fn running(pid: u32, avd: &str, port: u16, read_only: bool) -> Discovery {
+        Discovery {
+            pid,
+            avd_id: avd.into(),
+            avd_name: avd.into(),
+            avd_dir: None,
+            console_port: 5554,
+            adb_port: None,
+            grpc_port: Some(port),
+            grpc_token: None,
+            emulator_version: None,
+            read_only,
+            file: PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn several_instances_need_read_only_everywhere() {
+        let ro = [running(1, "P", 8554, true)];
+        assert!(conflicting_instance(&ro, "P", true).is_none());
+        assert!(conflicting_instance(&ro, "P", false).is_some());
+        assert!(conflicting_instance(&ro, "Q", false).is_none());
+        let rw = [running(1, "P", 8554, false)];
+        assert!(conflicting_instance(&rw, "P", true).is_some());
+    }
+
+    #[test]
+    fn picks_the_instance_this_boot_started() {
+        let found = [
+            running(10, "P", 8555, true),
+            running(20, "P", 8556, true),
+            running(30, "P", 8555, true),
+        ];
+        // Same AVD and port as an older instance: only a new pid counts.
+        let picked = pick_started(&found, &[10], "P", 8555, 999).map(|d| d.pid);
+        assert_eq!(picked, Some(30));
+        assert_eq!(
+            pick_started(&found, &[10, 30], "P", 8555, 999).map(|d| d.pid),
+            None
+        );
+        assert_eq!(
+            pick_started(&found, &[10, 20, 30], "P", 8556, 20).map(|d| d.pid),
+            Some(20)
+        );
+        assert_eq!(pick_started(&found, &[], "Q", 8555, 999), None);
+    }
+
+    #[test]
+    fn reserved_ports_are_not_handed_out_twice() -> Result<()> {
+        let a = PortReservation::take(&[], None)?;
+        let b = PortReservation::take(&[], None)?;
+        assert_ne!(a.0, b.0);
+        let port = a.0;
+        drop(a);
+        assert!(RESERVED_PORTS.lock().is_ok_and(|r| !r.contains(&port)));
+        drop(b);
+        Ok(())
     }
 
     #[test]

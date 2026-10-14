@@ -74,6 +74,47 @@ pub fn runtime_name(identifier: &str) -> String {
     }
 }
 
+/// What `simctl create` needs to make another simulator like an existing one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimSpec {
+    /// `com.apple.CoreSimulator.SimDeviceType.iPhone-17`.
+    pub device_type: String,
+    /// `com.apple.CoreSimulator.SimRuntime.iOS-27-0`.
+    pub runtime: String,
+}
+
+/// Device type and runtime identifiers of `udid` in `xcrun simctl list devices -j`.
+pub fn parse_spec(json: &str, udid: &str) -> Result<SimSpec> {
+    let list: DeviceList = serde_json::from_str(json).map_err(|e| Error::Parse(e.to_string()))?;
+    for (runtime, devices) in list.devices {
+        if let Some(d) = devices.into_iter().find(|d| d.udid == udid) {
+            let device_type = d
+                .device_type_identifier
+                .ok_or_else(|| Error::Parse(format!("{udid}: no deviceTypeIdentifier")))?;
+            return Ok(SimSpec {
+                device_type,
+                runtime,
+            });
+        }
+    }
+    Err(Error::NotFound(udid.to_owned()))
+}
+
+/// `simctl create` prints the new device's UDID on its own line.
+pub fn parse_create_udid(stdout: &str) -> Result<String> {
+    let line = stdout.trim();
+    let is_udid = line.len() == 36
+        && line.chars().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        });
+    if is_udid {
+        Ok(line.to_owned())
+    } else {
+        Err(Error::Parse(format!("simctl create output: {line:?}")))
+    }
+}
+
 #[derive(Deserialize)]
 struct DeviceTypes {
     devicetypes: Vec<DeviceType>,
@@ -203,6 +244,26 @@ const BOOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 #[cfg(target_os = "macos")]
 pub fn boot(udid: &str) -> Result<()> {
     run_timeout("xcrun", &["simctl", "bootstatus", udid, "-b"], BOOT_TIMEOUT)
+}
+
+/// `simctl create`: a new simulator named `name`; returns its UDID.
+#[cfg(target_os = "macos")]
+pub fn create(name: &str, device_type: &str, runtime: &str) -> Result<String> {
+    let out = run("xcrun", &["simctl", "create", name, device_type, runtime])?;
+    parse_create_udid(&String::from_utf8_lossy(&out))
+}
+
+/// `simctl delete`: removes the simulator and its data (it must not be booted).
+#[cfg(target_os = "macos")]
+pub fn delete(udid: &str) -> Result<()> {
+    run("xcrun", &["simctl", "delete", udid]).map(|_| ())
+}
+
+/// Device type and runtime of an existing simulator, to create more like it.
+#[cfg(target_os = "macos")]
+pub fn spec(udid: &str) -> Result<SimSpec> {
+    let json = run("xcrun", &["simctl", "list", "devices", "-j"])?;
+    parse_spec(&String::from_utf8_lossy(&json), udid)
 }
 
 /// Shuts the simulator down; already-shutdown devices are not an error.
@@ -337,6 +398,39 @@ mod tests {
         assert_eq!(all[1].runtime, "iOS 27.0");
         assert!(all[1].device_type.is_none());
         assert!(matches!(parse_all("{"), Err(Error::Parse(_))));
+    }
+
+    #[test]
+    fn spec_of_a_device() {
+        let spec = parse_spec(BOOTED, "96D76D05-5A8F-483B-815A-DBBF1C32E4DB").unwrap();
+        assert_eq!(
+            spec,
+            SimSpec {
+                device_type: "com.apple.CoreSimulator.SimDeviceType.iPhone-17".into(),
+                runtime: "com.apple.CoreSimulator.SimRuntime.iOS-27-0".into(),
+            }
+        );
+        assert!(matches!(
+            parse_spec(BOOTED, "209369F7-09AB-40DD-BF6F-94AF43FFAEF9"),
+            Err(Error::Parse(_))
+        ));
+        assert!(matches!(
+            parse_spec(BOOTED, "missing"),
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn create_udid() {
+        assert_eq!(
+            parse_create_udid("6F1B4E27-3C0A-4F55-9D2E-0A1B2C3D4E5F\n").unwrap(),
+            "6F1B4E27-3C0A-4F55-9D2E-0A1B2C3D4E5F"
+        );
+        assert!(matches!(
+            parse_create_udid("Invalid device type: x\n"),
+            Err(Error::Parse(_))
+        ));
+        assert!(parse_create_udid("").is_err());
     }
 
     #[test]
