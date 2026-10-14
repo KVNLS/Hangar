@@ -194,6 +194,8 @@ pub struct AgentExtras {
     pub files: Vec<(PathBuf, String)>,
     /// Given to an ACP agent's `session/new`.
     pub mcp_servers: Vec<McpServer>,
+    /// The first input the agent is given (the workspace task), recorded with the session.
+    pub prompt: Option<String>,
 }
 
 /// How an agent reaches the app's MCP server through `Hangar mcp-bridge`.

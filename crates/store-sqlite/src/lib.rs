@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, ffi, params};
 use uuid::Uuid;
 
+use hangar_core::changes::DiffStat;
 use hangar_core::ports::{PortError, PortResult};
 use hangar_core::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Setting, Timestamp,
@@ -66,6 +67,13 @@ ALTER TABLE workspaces ADD COLUMN task TEXT;
 "#,
     r#"
 ALTER TABLE workspaces ADD COLUMN group_id TEXT;
+"#,
+    // v6: session history (the first prompt and the workspace diff when the session ended).
+    r#"
+ALTER TABLE sessions ADD COLUMN prompt TEXT;
+ALTER TABLE sessions ADD COLUMN files INTEGER;
+ALTER TABLE sessions ADD COLUMN insertions INTEGER;
+ALTER TABLE sessions ADD COLUMN deletions INTEGER;
 "#,
 ];
 
@@ -276,8 +284,9 @@ impl Store {
         self.conn()
             .execute(
                 "INSERT INTO sessions
-                 (id, workspace_id, agent, command, args, status, created_at, ended_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (id, workspace_id, agent, command, args, status, created_at, ended_at, prompt,
+                  files, insertions, deletions)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     session.id.0.to_string(),
                     session.workspace_id.0.to_string(),
@@ -287,6 +296,10 @@ impl Store {
                     status,
                     session.created_at.0,
                     session.ended_at.map(|t| t.0),
+                    session.prompt,
+                    session.changes.map(|c| c.files),
+                    session.changes.map(|c| c.insertions),
+                    session.changes.map(|c| c.deletions),
                 ],
             )
             .map_err(|e| {
@@ -301,19 +314,29 @@ impl Store {
 
     pub fn list_sessions(&self, workspace_id: WorkspaceId) -> Result<Vec<Session>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, agent, command, args, status, created_at, ended_at
-             FROM sessions WHERE workspace_id = ?1 ORDER BY created_at, rowid",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE workspace_id = ?1
+             ORDER BY created_at, rowid"
+        ))?;
         let rows = stmt.query_map([workspace_id.0.to_string()], session_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Sessions of every workspace that ended at or after `since`, the latest ended first.
+    pub fn list_sessions_since(&self, since: Timestamp) -> Result<Vec<Session>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE ended_at >= ?1
+             ORDER BY ended_at DESC, rowid DESC"
+        ))?;
+        let rows = stmt.query_map([since.0], session_from_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn get_session(&self, id: SessionId) -> Result<Session> {
         self.conn()
             .query_row(
-                "SELECT id, workspace_id, agent, command, args, status, created_at, ended_at
-                 FROM sessions WHERE id = ?1",
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE id = ?1"),
                 [id.0.to_string()],
                 session_from_row,
             )
@@ -324,11 +347,32 @@ impl Store {
     /// Updates the status; a terminal status (`Exited`/`Failed`) also stamps `ended_at` once.
     /// Returns the updated session.
     pub fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> Result<Session> {
+        self.finish_session(id, status, None)
+    }
+
+    /// [`Store::update_session_status`] that also records the workspace's diff when it is known;
+    /// `None` keeps the diff already recorded.
+    pub fn finish_session(
+        &self,
+        id: SessionId,
+        status: &SessionStatus,
+        changes: Option<DiffStat>,
+    ) -> Result<Session> {
         let encoded = serde_json::to_string(status)?;
         let ended_at = status.is_terminal().then(|| Timestamp::now().0);
         let changed = self.conn().execute(
-            "UPDATE sessions SET status = ?2, ended_at = COALESCE(ended_at, ?3) WHERE id = ?1",
-            params![id.0.to_string(), encoded, ended_at],
+            "UPDATE sessions SET status = ?2, ended_at = COALESCE(ended_at, ?3),
+                 files = COALESCE(?4, files), insertions = COALESCE(?5, insertions),
+                 deletions = COALESCE(?6, deletions)
+             WHERE id = ?1",
+            params![
+                id.0.to_string(),
+                encoded,
+                ended_at,
+                changes.map(|c| c.files),
+                changes.map(|c| c.insertions),
+                changes.map(|c| c.deletions),
+            ],
         )?;
         ensure_changed(changed, "session", id)?;
         self.get_session(id)
@@ -534,7 +578,13 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
     })
 }
 
+const SESSION_COLUMNS: &str = "id, workspace_id, agent, command, args, status, created_at, \
+     ended_at, prompt, files, insertions, deletions";
+
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
+    let files: Option<u32> = row.get(9)?;
+    let insertions: Option<u32> = row.get(10)?;
+    let deletions: Option<u32> = row.get(11)?;
     Ok(Session {
         id: SessionId(uuid_at(row, 0)?),
         workspace_id: WorkspaceId(uuid_at(row, 1)?),
@@ -544,6 +594,12 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
         status: json_at(row, 5)?,
         created_at: Timestamp(row.get(6)?),
         ended_at: row.get::<_, Option<i64>>(7)?.map(Timestamp),
+        prompt: row.get(8)?,
+        changes: files.map(|files| DiffStat {
+            files,
+            insertions: insertions.unwrap_or_default(),
+            deletions: deletions.unwrap_or_default(),
+        }),
     })
 }
 
@@ -594,6 +650,19 @@ impl hangar_core::ports::Store for Store {
 
     fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session> {
         Store::update_session_status(self, id, status).map_err(PortError::new)
+    }
+
+    fn finish_session(
+        &self,
+        id: SessionId,
+        status: &SessionStatus,
+        changes: Option<DiffStat>,
+    ) -> PortResult<Session> {
+        Store::finish_session(self, id, status, changes).map_err(PortError::new)
+    }
+
+    fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>> {
+        Store::list_sessions_since(self, since).map_err(PortError::new)
     }
 
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {

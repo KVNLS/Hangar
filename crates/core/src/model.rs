@@ -5,6 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::changes::DiffStat;
+
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -216,6 +218,12 @@ pub struct Session {
     pub status: SessionStatus,
     pub created_at: Timestamp,
     pub ended_at: Option<Timestamp>,
+    /// The first input the agent was given (the workspace task), if any.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// The workspace's diff when the session ended; `None` while running or when unknown.
+    #[serde(default)]
+    pub changes: Option<DiffStat>,
 }
 
 impl Session {
@@ -230,6 +238,8 @@ impl Session {
             status: SessionStatus::Starting,
             created_at: Timestamp::now(),
             ended_at: None,
+            prompt: None,
+            changes: None,
         }
     }
 }

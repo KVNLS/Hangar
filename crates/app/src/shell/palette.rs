@@ -79,6 +79,7 @@ impl HangarApp {
                 CommandItem::new()
                     .label(name.clone())
                     .keywords([project.clone(), ws.branch.clone().into()])
+                    .keywords(ws.task.clone())
                     .child(move |_, cx| {
                         let t = cx.tokens();
                         h_flex()

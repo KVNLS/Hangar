@@ -3,12 +3,14 @@
 
 use std::path::{Path, PathBuf};
 
+use hangar_core::changes::DiffStat;
 use hangar_core::ports::{NewWorktree, PortError, Store, VersionControl};
 use hangar_core::{
-    BRANCH_PREFIX, Project, ProjectId, SessionId, SessionStatus, Timestamp, Workspace,
-    WorkspaceGroupId, WorkspaceId, WorkspaceStatus, branch_name, slugify, unique_slug,
-    worktree_path,
+    BRANCH_PREFIX, Project, ProjectId, SessionId, Timestamp, Workspace, WorkspaceGroupId,
+    WorkspaceId, WorkspaceStatus, branch_name, slugify, unique_slug, worktree_path,
 };
+
+use crate::sessions::stopped;
 
 /// What to create: the name, where its branch starts and how it is named, the task, and the
 /// attempts it belongs to. Blank fields mean the defaults.
@@ -309,25 +311,21 @@ impl<'a> Workspaces<'a> {
         }
     }
 
-    fn stop_session(&self, id: SessionId, reason: &str) -> Result<()> {
-        self.store
-            .update_session_status(
-                id,
-                &SessionStatus::Failed {
-                    message: format!("stopped: {reason}"),
-                },
-            )
-            .map_err(WorkspaceError::StopSession)?;
-        Ok(())
-    }
-
-    /// Marks the workspace archived, recording `session` (if any) as stopped.
-    pub fn archive(&self, id: WorkspaceId, session: Option<SessionId>) -> Result<()> {
+    /// Marks the workspace archived, recording `session` (if any) as stopped with the
+    /// workspace's diff at that moment, when known.
+    pub fn archive(
+        &self,
+        id: WorkspaceId,
+        session: Option<SessionId>,
+        changes: Option<DiffStat>,
+    ) -> Result<()> {
         self.store
             .update_workspace_status(id, WorkspaceStatus::Archived)
             .map_err(WorkspaceError::Archive)?;
         if let Some(session) = session {
-            self.stop_session(session, "workspace archived")?;
+            self.store
+                .finish_session(session, &stopped("workspace archived"), changes)
+                .map_err(WorkspaceError::StopSession)?;
         }
         Ok(())
     }
@@ -479,6 +477,33 @@ mod tests {
         assert_eq!(ws.worktree_path, root().join("my-app/fix-login-2"));
         assert_eq!(git.calls(), ["add hangar/fix-login-2 from main"]);
         assert_eq!(store.list_workspaces(project.id).unwrap(), [ws]);
+    }
+
+    #[test]
+    fn archive_stops_the_session_with_the_workspace_diff() {
+        let (store, git) = (FakeStore::default(), FakeGit::default());
+        let project = project(&store);
+        let workspaces = Workspaces::new(&store, &git);
+        let ws = workspaces
+            .create(&project, &root(), &NewWorkspace::named("Docs"))
+            .unwrap();
+        let session = hangar_core::Session::new(ws.id, hangar_core::AgentKind::Claude);
+        store.insert_session(&session).unwrap();
+        let stat = DiffStat {
+            files: 1,
+            insertions: 2,
+            deletions: 3,
+        };
+        workspaces
+            .archive(ws.id, Some(session.id), Some(stat))
+            .unwrap();
+        assert_eq!(
+            store.get_workspace(ws.id).unwrap().status,
+            WorkspaceStatus::Archived
+        );
+        let recorded = store.list_sessions(ws.id).unwrap().remove(0);
+        assert!(crate::sessions::is_stopped(&recorded.status));
+        assert_eq!(recorded.changes, Some(stat));
     }
 
     #[test]

@@ -15,8 +15,11 @@ use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext, UpdateHook};
 use hangar_usecases::agents::StartRequest;
 
 use crate::pty::{self, AgentHandle};
+use hangar_core::changes::DiffStat;
 use hangar_core::ports::Store;
-use hangar_core::{Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId};
+use hangar_core::{
+    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
+};
 use hangar_terminal::ExitInfo;
 use hangar_usecases::sessions::Sessions;
 use hangar_usecases::settings::SettingsExt as _;
@@ -204,9 +207,7 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
                 if !session.status.is_terminal() {
                     store.update_session_status(
                         session.id,
-                        &SessionStatus::Failed {
-                            message: "Hangar quit while the session was running".into(),
-                        },
+                        &hangar_usecases::sessions::stopped("Hangar quit while it was running"),
                     )?;
                 }
             }
@@ -444,6 +445,7 @@ pub fn start_session_with(
 
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
     session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
+    session.prompt = extra.prompt.clone();
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
         .and_then(|()| Ok(adapter.launch(&ctx)?))
         .and_then(|launch| Ok(pty::spawn(launch, on_update)?))
@@ -492,6 +494,7 @@ pub fn start_acp_session(
 
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
     session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
+    session.prompt = extra.prompt.clone();
     let wanted = saved_agent_config(store, &adapter.id);
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
         .and_then(|()| {
@@ -566,26 +569,39 @@ fn write_private_files(worktree: &Path, files: &[(PathBuf, String)]) -> anyhow::
     Ok(())
 }
 
+/// Records how the session ended, with the workspace's diff then when known.
 pub fn finish_session(
     store: &dyn Store,
     id: SessionId,
     status: &SessionStatus,
+    changes: Option<DiffStat>,
 ) -> anyhow::Result<Session> {
-    Ok(Sessions::new(store).finish(id, status)?)
+    Ok(Sessions::new(store).finish(id, status, changes)?)
 }
 
 /// Records that a running session was stopped by Hangar (archive, delete).
-pub fn stop_session(store: &dyn Store, id: SessionId, reason: &str) -> anyhow::Result<()> {
-    Ok(Sessions::new(store).stop(id, reason)?)
+pub fn stop_session(
+    store: &dyn Store,
+    id: SessionId,
+    reason: &str,
+    changes: Option<DiffStat>,
+) -> anyhow::Result<()> {
+    Ok(Sessions::new(store).stop(id, reason, changes)?)
 }
 
-/// Marks the workspace archived, recording `session` (if any) as stopped.
+/// Sessions of every workspace that ended at or after `since`, the latest ended first.
+pub fn sessions_ended_since(store: &dyn Store, since: Timestamp) -> anyhow::Result<Vec<Session>> {
+    Ok(Sessions::new(store).ended_since(since)?)
+}
+
+/// Marks the workspace archived, recording `session` (if any) as stopped with `changes`.
 pub fn archive_workspace(
     store: &dyn Store,
     id: WorkspaceId,
     session: Option<SessionId>,
+    changes: Option<DiffStat>,
 ) -> anyhow::Result<()> {
-    Ok(workspaces(store).archive(id, session)?)
+    Ok(workspaces(store).archive(id, session, changes)?)
 }
 
 pub fn restore_workspace(store: &dyn Store, id: WorkspaceId) -> anyhow::Result<()> {

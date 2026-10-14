@@ -387,6 +387,8 @@ struct LiveState {
     saved_queue: Vec<(WorkspaceId, queue::StartRequest)>,
     /// Agents spawning off the main thread: they hold a slot before they have a session.
     starting: HashSet<WorkspaceId>,
+    /// Sessions that ended today, for the overview.
+    done_today: overview::DoneToday,
 }
 
 /// Projects and workspaces as loaded, and the operations in flight on them.
@@ -614,6 +616,7 @@ impl HangarApp {
                 agent_queue: Default::default(),
                 saved_queue: Vec::new(),
                 starting: HashSet::new(),
+                done_today: Default::default(),
             },
             work: WorkState {
                 projects: ProjectList::default(),

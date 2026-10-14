@@ -294,6 +294,7 @@ fn session_extras_write_files_and_reach_the_agent() {
             ("OUT".into(), out.display().to_string()),
         ],
         files: vec![(config.clone(), "{}".into())],
+        prompt: Some("Fix the build".into()),
     };
     let started = start_session_with(&store, &adapter, &ws, None, Arc::new(|| {}), &extra).unwrap();
     let exit = started
@@ -309,6 +310,10 @@ fn session_extras_write_files_and_reach_the_agent() {
     assert_eq!(
         started.session.args.last().map(String::as_str),
         Some("--flag")
+    );
+    assert_eq!(
+        store.list_sessions(ws.id).unwrap()[0].prompt.as_deref(),
+        Some("Fix the build")
     );
 
     let inside = AgentExtras {
@@ -545,13 +550,21 @@ fn archive_restore_and_load_keep_archived_workspaces() {
     let f = fixture();
     let ws = f.workspace("later");
     let session = f.store.list_sessions(ws.id).unwrap()[0].id;
-    archive_workspace(&f.store, ws.id, Some(session)).unwrap();
+    let stat = hangar_core::changes::DiffStat {
+        files: 1,
+        insertions: 5,
+        deletions: 2,
+    };
+    archive_workspace(&f.store, ws.id, Some(session), Some(stat)).unwrap();
     assert_eq!(
         f.store.get_workspace(ws.id).unwrap().status,
         WorkspaceStatus::Archived
     );
     let row = f.store.get_session(session).unwrap();
     assert!(matches!(row.status, SessionStatus::Failed { .. }));
+    assert_eq!(row.changes, Some(stat));
+    let ended = sessions_ended_since(&f.store, hangar_core::Timestamp(0)).unwrap();
+    assert_eq!(ended.iter().map(|s| s.id).collect::<Vec<_>>(), [session]);
     assert!(ws.worktree_path.is_dir());
 
     let loaded = load(&f.store).unwrap();
@@ -570,7 +583,7 @@ fn remove_project_requires_no_active_workspaces() {
     let err = remove_project(&f.store, f.project.id).unwrap_err();
     assert!(err.to_string().contains("busy"), "{err}");
 
-    archive_workspace(&f.store, ws.id, None).unwrap();
+    archive_workspace(&f.store, ws.id, None, None).unwrap();
     remove_project(&f.store, f.project.id).unwrap();
     assert!(f.store.list_projects().unwrap().is_empty());
     // The repository and the archived worktree stay on disk.

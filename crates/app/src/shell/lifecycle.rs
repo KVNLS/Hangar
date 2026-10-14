@@ -151,12 +151,13 @@ impl HangarApp {
             window.push_notification(Notification::warning(message), cx);
         }
         // Without the device tools the agent still runs: say why, don't block it.
-        let extras = self
+        let mut extras = self
             .agent_extras(adapter.id(), &workspace, cx)
             .unwrap_or_else(|err| {
                 tracing::warn!("agent starts without device tools: {err:#}");
                 Default::default()
             });
+        extras.prompt = input.clone();
         let waker = TerminalWaker::new();
         let hook = waker.hook();
         let agent_name: SharedString = adapter.display_name().to_owned().into();
@@ -235,8 +236,8 @@ impl HangarApp {
             return true;
         }
         let id = session.id;
-        self.persist(window, cx, move |store| {
-            ops::stop_session(store, id, "workspace closed while starting")
+        self.record_session_end(window, cx, move |store| {
+            ops::stop_session(store, id, "workspace closed while starting", None)
         });
         false
     }
@@ -251,8 +252,9 @@ impl HangarApp {
         if let Some(previous) = self.live.sessions.insert(workspace_id, live)
             && let Some(id) = previous.stop()
         {
-            self.persist(window, cx, move |store| {
-                ops::stop_session(store, id, "replaced by a new session")
+            let changes = self.diff_stat(workspace_id, cx);
+            self.record_session_end(window, cx, move |store| {
+                ops::stop_session(store, id, "replaced by a new session", changes)
             });
         }
         if self.layout.panes.slot(self.layout.panes.focused()) == Some(workspace_id) {
@@ -517,8 +519,9 @@ impl HangarApp {
         live.session.status = status.clone();
         let session_id = live.session.id;
         cx.notify();
-        self.persist(window, cx, move |store| {
-            ops::finish_session(store, session_id, &status).map(drop)
+        let changes = self.diff_stat(workspace_id, cx);
+        self.record_session_end(window, cx, move |store| {
+            ops::finish_session(store, session_id, &status, changes).map(drop)
         });
         self.drain_agent_queue(window, cx);
     }
@@ -549,6 +552,7 @@ impl HangarApp {
         let Some(store) = self.store.clone() else {
             return Task::ready(());
         };
+        let changes = self.diff_stat(workspace_id, cx);
         let (session, _) = self.close_session(workspace_id);
         self.close_run(workspace_id);
         self.close_mcp(workspace_id);
@@ -569,7 +573,9 @@ impl HangarApp {
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { ops::archive_workspace(&store, workspace_id, session) })
+                .spawn(async move {
+                    ops::archive_workspace(&store, workspace_id, session, changes)
+                })
                 .await;
             match device.await {
                 Ok(()) => tracing::info!(workspace = %workspace_id, "workspace device shut down"),
@@ -580,7 +586,10 @@ impl HangarApp {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.work.busy.remove(&workspace_id);
                 match result {
-                    Ok(()) => tracing::info!(workspace = %workspace_id, "workspace archived"),
+                    Ok(()) => {
+                        tracing::info!(workspace = %workspace_id, "workspace archived");
+                        this.refresh_done_today(cx);
+                    }
                     Err(err) => {
                         // The agent is already stopped; show the row where the store still has it.
                         this.work.projects
@@ -723,7 +732,7 @@ impl HangarApp {
                         tracing::warn!("agent still running after kill; removing worktree anyway");
                     }
                     if let Some(session) = session {
-                        ops::stop_session(&store, session, "workspace deleted")?;
+                        ops::stop_session(&store, session, "workspace deleted", None)?;
                     }
                     ops::delete_workspace(&store, workspace_id, options)
                 })

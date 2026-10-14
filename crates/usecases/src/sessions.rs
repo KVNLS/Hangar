@@ -3,6 +3,7 @@
 
 use std::error::Error as StdError;
 
+use hangar_core::changes::DiffStat;
 use hangar_core::ports::{PortError, Store};
 use hangar_core::{Session, SessionId, SessionStatus, Timestamp};
 
@@ -93,22 +94,47 @@ impl<'a> Sessions<'a> {
         }
     }
 
-    pub fn finish(&self, id: SessionId, status: &SessionStatus) -> Result<Session, SessionError> {
-        Ok(self.store.update_session_status(id, status)?)
+    /// Records how the session ended, with the workspace's diff at that moment when known.
+    pub fn finish(
+        &self,
+        id: SessionId,
+        status: &SessionStatus,
+        changes: Option<DiffStat>,
+    ) -> Result<Session, SessionError> {
+        Ok(self.store.finish_session(id, status, changes)?)
     }
 
     /// Records that a running session was stopped by Hangar (archive, delete).
-    pub fn stop(&self, id: SessionId, reason: &str) -> Result<(), SessionError> {
+    pub fn stop(
+        &self,
+        id: SessionId,
+        reason: &str,
+        changes: Option<DiffStat>,
+    ) -> Result<(), SessionError> {
         self.store
-            .update_session_status(
-                id,
-                &SessionStatus::Failed {
-                    message: format!("stopped: {reason}"),
-                },
-            )
+            .finish_session(id, &stopped(reason), changes)
             .map_err(SessionError::Stop)?;
         Ok(())
     }
+
+    /// Sessions of every workspace that ended at or after `since`, the latest ended first.
+    pub fn ended_since(&self, since: Timestamp) -> Result<Vec<Session>, SessionError> {
+        Ok(self.store.list_sessions_since(since)?)
+    }
+}
+
+const STOPPED_PREFIX: &str = "stopped: ";
+
+/// The status of a session Hangar stopped.
+pub fn stopped(reason: &str) -> SessionStatus {
+    SessionStatus::Failed {
+        message: format!("{STOPPED_PREFIX}{reason}"),
+    }
+}
+
+/// Whether `status` is one recorded by [`stopped`].
+pub fn is_stopped(status: &SessionStatus) -> bool {
+    matches!(status, SessionStatus::Failed { message } if message.starts_with(STOPPED_PREFIX))
 }
 
 /// `outer: inner: …`, like `anyhow`'s `{:#}`.
@@ -202,13 +228,62 @@ mod tests {
         let s = session();
         store.insert_session(&s).unwrap();
         Sessions::new(&store)
-            .stop(s.id, "workspace archived")
+            .stop(s.id, "workspace archived", None)
             .unwrap();
+        let recorded = store.sessions.lock().unwrap()[0].clone();
         assert_eq!(
-            store.sessions.lock().unwrap()[0].status,
+            recorded.status,
             SessionStatus::Failed {
                 message: "stopped: workspace archived".to_owned()
             }
         );
+        assert!(is_stopped(&recorded.status));
+        assert!(recorded.ended_at.is_some());
+    }
+
+    #[test]
+    fn the_prompt_is_recorded_on_start_and_the_diff_on_finish() {
+        let store = FakeStore::default();
+        let sessions = Sessions::new(&store);
+        let mut s = session();
+        s.prompt = Some("Fix the login crash".to_owned());
+        let started = sessions
+            .record_start(s, "Shell", Ok::<_, BoxError>(((), "/bin/sh".to_owned())))
+            .unwrap();
+        assert_eq!(
+            store.sessions.lock().unwrap()[0].prompt.as_deref(),
+            Some("Fix the login crash")
+        );
+
+        let stat = DiffStat {
+            files: 1,
+            insertions: 3,
+            deletions: 0,
+        };
+        let id = started.session.id;
+        let done = sessions
+            .finish(id, &SessionStatus::Exited { code: 0 }, Some(stat))
+            .unwrap();
+        assert_eq!(done.changes, Some(stat));
+        let ended = sessions.ended_since(Timestamp(0)).unwrap();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].id, id);
+        assert_eq!(ended[0].changes, Some(stat));
+    }
+
+    #[test]
+    fn a_stop_keeps_the_diff_it_is_given() {
+        let store = FakeStore::default();
+        let s = session();
+        store.insert_session(&s).unwrap();
+        let stat = DiffStat {
+            files: 4,
+            insertions: 9,
+            deletions: 9,
+        };
+        Sessions::new(&store)
+            .stop(s.id, "replaced by a new session", Some(stat))
+            .unwrap();
+        assert_eq!(store.sessions.lock().unwrap()[0].changes, Some(stat));
     }
 }

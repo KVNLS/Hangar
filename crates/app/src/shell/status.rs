@@ -94,7 +94,28 @@ pub(super) struct DiffCounts {
     pub deletions: usize,
 }
 
+impl DiffCounts {
+    /// As recorded with a finished session.
+    pub fn stat(self) -> hangar_core::changes::DiffStat {
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        hangar_core::changes::DiffStat {
+            files: n(self.files),
+            insertions: n(self.insertions),
+            deletions: n(self.deletions),
+        }
+    }
+}
+
 impl HangarApp {
+    /// The workspace's diff as recorded when its session ends; `None` when not computed.
+    pub(super) fn diff_stat(
+        &self,
+        id: WorkspaceId,
+        cx: &App,
+    ) -> Option<hangar_core::changes::DiffStat> {
+        self.diff_counts(id, cx).map(DiffCounts::stat)
+    }
+
     /// Polls terminal output counters and re-renders when a session starts or stops being active.
     pub(super) fn track_activity(cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {

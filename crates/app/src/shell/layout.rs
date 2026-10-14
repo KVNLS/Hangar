@@ -139,6 +139,9 @@ impl HangarApp {
             self.device_panel
                 .update(cx, |panel, cx| panel.set_visible(shown, window, cx));
         }
+        if screen == Screen::Overview {
+            self.refresh_done_today(cx);
+        }
         match screen {
             Screen::Review => {}
             Screen::Overview | Screen::Settings => window.focus(&self.layout.screen_focus, cx),

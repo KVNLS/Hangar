@@ -6,6 +6,7 @@ pub mod agents;
 pub mod batch;
 #[cfg(test)]
 mod fakes;
+pub mod history;
 pub mod review;
 pub mod sessions;
 pub mod settings;
