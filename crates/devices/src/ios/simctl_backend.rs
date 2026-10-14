@@ -106,6 +106,22 @@ impl Device for SimctlSimulator {
     fn send_input(&self, input: Input) -> Result<()> {
         super::sim_window::click(&self.info, input)
     }
+
+    fn boot(&self) -> Result<()> {
+        crate::simctl::boot(&self.info.udid)
+    }
+
+    fn shutdown(&self) -> Result<()> {
+        crate::simctl::shutdown(&self.info.udid)
+    }
+
+    fn install(&self, app_path: &std::path::Path) -> Result<()> {
+        crate::simctl::install(&self.info.udid, app_path)
+    }
+
+    fn launch(&self, bundle_id: &str) -> Result<()> {
+        crate::simctl::launch(&self.info.udid, bundle_id).map(|_| ())
+    }
 }
 
 impl Drop for SimctlSimulator {

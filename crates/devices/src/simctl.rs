@@ -19,6 +19,8 @@ struct SimctlDevice {
     state: String,
     #[serde(default)]
     device_type_identifier: Option<String>,
+    #[serde(default)]
+    is_available: Option<bool>,
 }
 
 /// Parses `xcrun simctl list devices [booted] -j`; returns only booted devices.
@@ -27,6 +29,29 @@ pub fn parse_booted(json: &str) -> Result<Vec<DeviceInfo>> {
     let mut out = Vec::new();
     for (runtime, devices) in list.devices {
         for d in devices.into_iter().filter(|d| d.state == "Booted") {
+            out.push(DeviceInfo {
+                udid: d.udid,
+                name: d.name,
+                runtime: runtime_name(&runtime),
+                state: d.state,
+                device_type: d.device_type_identifier,
+                screen: None,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Parses `xcrun simctl list devices -j`; returns every available device in any state
+/// (devices of unavailable runtimes are dropped).
+pub fn parse_all(json: &str) -> Result<Vec<DeviceInfo>> {
+    let list: DeviceList = serde_json::from_str(json).map_err(|e| Error::Parse(e.to_string()))?;
+    let mut out = Vec::new();
+    for (runtime, devices) in list.devices {
+        for d in devices
+            .into_iter()
+            .filter(|d| d.is_available != Some(false))
+        {
             out.push(DeviceInfo {
                 udid: d.udid,
                 name: d.name,
@@ -122,24 +147,132 @@ fn run(program: &str, args: &[&str]) -> Result<Vec<u8>> {
 pub fn list_booted() -> Result<Vec<DeviceInfo>> {
     let json = run("xcrun", &["simctl", "list", "devices", "booted", "-j"])?;
     let mut devices = parse_booted(&String::from_utf8_lossy(&json))?;
+    fill_screens(&mut devices)?;
+    Ok(devices)
+}
+
+/// Lists every available simulator (booted or not) with its screen geometry filled in when
+/// available. Entries are grouped by runtime identifier, in `simctl` order within a runtime.
+#[cfg(target_os = "macos")]
+pub fn list_all() -> Result<Vec<DeviceInfo>> {
+    let json = run("xcrun", &["simctl", "list", "devices", "-j"])?;
+    let mut devices = parse_all(&String::from_utf8_lossy(&json))?;
+    fill_screens(&mut devices)?;
+    Ok(devices)
+}
+
+#[cfg(target_os = "macos")]
+fn fill_screens(devices: &mut [DeviceInfo]) -> Result<()> {
     if devices.is_empty() {
-        return Ok(devices);
+        return Ok(());
     }
     let types_json = run("xcrun", &["simctl", "list", "devicetypes", "-j"])?;
     let types = parse_device_types(&String::from_utf8_lossy(&types_json))?;
-    for d in &mut devices {
-        let Some(bundle) = d.device_type.as_ref().and_then(|t| types.get(t)) else {
+    // Many simulators share a device type; read each capabilities.plist once.
+    let mut specs: BTreeMap<String, Option<ScreenSpec>> = BTreeMap::new();
+    for d in devices {
+        let Some(ty) = d.device_type.as_ref() else {
             continue;
         };
-        let plist = format!("{bundle}/Contents/Resources/capabilities.plist");
-        match run("plutil", &["-convert", "json", "-o", "-", &plist])
-            .and_then(|j| parse_screen_spec(&String::from_utf8_lossy(&j)))
-        {
-            Ok(spec) => d.screen = Some(spec),
-            Err(e) => tracing::warn!("no screen spec for {}: {e}", d.name),
-        }
+        let Some(bundle) = types.get(ty) else {
+            continue;
+        };
+        let spec = specs.entry(ty.clone()).or_insert_with(|| {
+            let plist = format!("{bundle}/Contents/Resources/capabilities.plist");
+            match run("plutil", &["-convert", "json", "-o", "-", &plist])
+                .and_then(|j| parse_screen_spec(&String::from_utf8_lossy(&j)))
+            {
+                Ok(spec) => Some(spec),
+                Err(e) => {
+                    tracing::warn!("no screen spec for {}: {e}", d.name);
+                    None
+                }
+            }
+        });
+        d.screen = *spec;
     }
-    Ok(devices)
+    Ok(())
+}
+
+/// Upper bound for `simctl bootstatus -b` (first boot of a fresh runtime can take minutes).
+#[cfg(target_os = "macos")]
+const BOOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Boots the simulator (if needed) and waits until it finished booting (`bootstatus -b`).
+/// Returns immediately when it is already booted.
+#[cfg(target_os = "macos")]
+pub fn boot(udid: &str) -> Result<()> {
+    run_timeout("xcrun", &["simctl", "bootstatus", udid, "-b"], BOOT_TIMEOUT)
+}
+
+/// Shuts the simulator down; already-shutdown devices are not an error.
+#[cfg(target_os = "macos")]
+pub fn shutdown(udid: &str) -> Result<()> {
+    match run("xcrun", &["simctl", "shutdown", udid]) {
+        Err(Error::Command(m)) if m.contains("current state: Shutdown") => Ok(()),
+        other => other.map(|_| ()),
+    }
+}
+
+/// `simctl install`: installs a `.app` bundle on a booted simulator.
+#[cfg(target_os = "macos")]
+pub fn install(udid: &str, app_path: &std::path::Path) -> Result<()> {
+    let path = app_path
+        .to_str()
+        .ok_or_else(|| Error::Parse("app path is not valid UTF-8".into()))?;
+    run("xcrun", &["simctl", "install", udid, path]).map(|_| ())
+}
+
+/// `simctl launch`: starts an installed app; returns its pid when simctl reports one.
+#[cfg(target_os = "macos")]
+pub fn launch(udid: &str, bundle_id: &str) -> Result<Option<u32>> {
+    let out = run("xcrun", &["simctl", "launch", udid, bundle_id])?;
+    Ok(parse_launch_pid(&String::from_utf8_lossy(&out)))
+}
+
+/// `com.example.app: 1234` → `1234`.
+pub fn parse_launch_pid(stdout: &str) -> Option<u32> {
+    stdout.trim().rsplit_once(':')?.1.trim().parse().ok()
+}
+
+/// Like [`run`] but kills the child after `timeout`.
+#[cfg(target_os = "macos")]
+fn run_timeout(program: &str, args: &[&str], timeout: std::time::Duration) -> Result<()> {
+    use std::process::Stdio;
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Command(format!(
+                "{program} {}: timed out after {}s",
+                args.join(" "),
+                timeout.as_secs()
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    if status.success() {
+        return Ok(());
+    }
+    let mut stderr = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut e, &mut stderr);
+    }
+    Err(Error::Command(format!(
+        "{program} {}: {}",
+        args.join(" "),
+        stderr.trim()
+    )))
 }
 
 #[cfg(test)]
@@ -180,6 +313,39 @@ mod tests {
             d.device_type.as_deref(),
             Some("com.apple.CoreSimulator.SimDeviceType.iPhone-17")
         );
+    }
+
+    #[test]
+    fn parses_all_available_devices() {
+        let json = r#"{"devices":{
+          "com.apple.CoreSimulator.SimRuntime.iOS-27-0":[
+            {"udid":"A","isAvailable":true,"deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17","state":"Booted","name":"iPhone 17"},
+            {"udid":"B","isAvailable":true,"state":"Shutdown","name":"iPhone 18 Pro"},
+            {"udid":"C","isAvailable":false,"state":"Shutdown","name":"Broken"},
+            {"udid":"D","state":"Shutting Down","name":"No availability key"}
+          ],
+          "com.apple.CoreSimulator.SimRuntime.iOS-26-5":[]}}"#;
+        let all = parse_all(json).unwrap();
+        let ids: Vec<_> = all
+            .iter()
+            .map(|d| (d.udid.as_str(), d.state.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            [("A", "Booted"), ("B", "Shutdown"), ("D", "Shutting Down")]
+        );
+        assert_eq!(all[1].runtime, "iOS 27.0");
+        assert!(all[1].device_type.is_none());
+        assert!(matches!(parse_all("{"), Err(Error::Parse(_))));
+    }
+
+    #[test]
+    fn launch_pid() {
+        assert_eq!(
+            parse_launch_pid("com.apple.mobilesafari: 4242\n"),
+            Some(4242)
+        );
+        assert_eq!(parse_launch_pid("garbage"), None);
     }
 
     #[test]

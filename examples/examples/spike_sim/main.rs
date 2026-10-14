@@ -22,6 +22,8 @@ fn main() -> anyhow::Result<()> {
     let mut udid: Option<String> = None;
     let mut bench: Option<u64> = None;
     let mut one_input: Option<hangar_devices::Input> = None;
+    let mut lifecycle: Vec<(String, String)> = Vec::new();
+    let mut list = false;
     let mut out = std::env::temp_dir().join("hangar-spike-b");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -44,6 +46,11 @@ fn main() -> anyhow::Result<()> {
                 });
             }
             "--home" => one_input = Some(hangar_devices::Input::Home),
+            "--list" => list = true,
+            "--boot" | "--shutdown" | "--install" | "--launch" => {
+                let v = args.next().with_context(|| format!("{a} needs a value"))?;
+                lifecycle.push((a.clone(), v));
+            }
             "--out" => out = args.next().context("--out needs a directory")?.into(),
             "-h" | "--help" => {
                 println!(
@@ -53,6 +60,56 @@ fn main() -> anyhow::Result<()> {
             }
             other => bail!("unknown argument {other:?}"),
         }
+    }
+
+    if list {
+        for d in hangar_devices::simctl::list_all()? {
+            let screen = d.screen.map_or_else(
+                || "?".to_owned(),
+                |s| {
+                    format!(
+                        "{}x{}@{}x ({}x{} pt)",
+                        s.width_px,
+                        s.height_px,
+                        s.scale,
+                        s.width_pt(),
+                        s.height_pt()
+                    )
+                },
+            );
+            println!(
+                "{}  {:<14} {:<26} {}  {screen}",
+                d.udid, d.state, d.name, d.runtime
+            );
+        }
+        return Ok(());
+    }
+    // Lifecycle commands act on --udid (or the first booted simulator for install/launch).
+    if !lifecycle.is_empty() {
+        let target = match &udid {
+            Some(u) => u.clone(),
+            None => hangar_devices::simctl::list_booted()?
+                .into_iter()
+                .next()
+                .map(|d| d.udid)
+                .context("--udid needed (no booted simulator)")?,
+        };
+        for (flag, value) in &lifecycle {
+            let t0 = std::time::Instant::now();
+            match flag.as_str() {
+                "--boot" => ios::boot(if value == "-" { &target } else { value })?,
+                "--shutdown" => ios::shutdown(if value == "-" { &target } else { value })?,
+                "--install" => {
+                    hangar_devices::simctl::install(&target, std::path::Path::new(value))?
+                }
+                _ => {
+                    let pid = hangar_devices::simctl::launch(&target, value)?;
+                    println!("pid {pid:?}");
+                }
+            }
+            println!("{flag} {value}: ok in {:.1}s", t0.elapsed().as_secs_f64());
+        }
+        return Ok(());
     }
 
     let booted = hangar_devices::simctl::list_booted()?;

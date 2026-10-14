@@ -36,6 +36,17 @@ impl std::str::FromStr for Backend {
     }
 }
 
+/// Boots a simulator and waits until it finished booting; usable before a [`Device`] exists.
+/// A no-op for an already booted simulator.
+pub fn boot(udid: &str) -> Result<()> {
+    crate::simctl::boot(udid)
+}
+
+/// Shuts a simulator down (no error if it is already shut down).
+pub fn shutdown(udid: &str) -> Result<()> {
+    crate::simctl::shutdown(udid)
+}
+
 pub fn open(info: DeviceInfo, backend: Backend) -> Result<Box<dyn Device>> {
     Ok(match backend {
         Backend::Private => Box::new(PrivateSimulator::open(info)?),
