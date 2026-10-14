@@ -105,6 +105,15 @@ Hangar detects which CLIs are on your `PATH` (Settings › Agents & providers).
 
 ## Getting started
 
+### Install a release
+
+Download `Hangar-<version>-arm64.dmg` from [Releases](https://github.com/KVNLS/Hangar/releases) and drag
+Hangar to Applications. Builds are signed with a development certificate but not notarized, so macOS blocks
+the first launch: right-click Hangar › Open › Open, or run
+`xattr -dr com.apple.quarantine /Applications/Hangar.app`. Apple Silicon only for now.
+
+### Build from source
+
 Requirements:
 - macOS, Rust (the toolchain in `rust-toolchain.toml` installs itself through `rustup`)
 - Xcode for the iOS simulator; the Android SDK and an AVD for Android (optional)
@@ -184,8 +193,8 @@ cargo run -p hangar-app
 ## Status
 
 Hangar is early and moving fast. Milestones M1–M9 are in (terminal, workspaces, review, Android and iOS
-devices, run loop, structured agents, MCP device tools, orchestration); M10 (hardening, signed `.app`)
-is in progress. See [PLAN.md](PLAN.md) for the roadmap and known gaps, and
+devices, run loop, structured agents, MCP device tools, orchestration); M10 (hardening, notarized `.app`)
+is in progress. v0.1.0 is the first packaged release. See [PLAN.md](PLAN.md) for the roadmap and known gaps, and
 [docs/HISTORY.md](docs/HISTORY.md) for what shipped.
 
 ## Acknowledgements

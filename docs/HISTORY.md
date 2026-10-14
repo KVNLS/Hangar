@@ -574,3 +574,13 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - Not done: resumed sessions possibly booking their earlier cost again needs OpenCode's real behaviour
   checked first.
 
+
+## Release v0.1.0 (2026-10-14, branch `release-v0.1.0`)
+- `scripts/release.sh`: `cargo build --release`, `Hangar.app` from `crates/app/bundle/Info.plist` (bundle id
+  `io.github.kvnls.hangar`) and an `.icns` built from the 1024 px brand icon with `sips`/`iconutil`; codesign
+  with the first Apple Development identity (no hardened runtime), a UDZO DMG with an Applications link,
+  SHA-256, then `publish` tags and runs `gh release create`. System tools only, no new dependencies.
+- Owner decision: no Developer ID yet, so the build is not notarized; Gatekeeper rejects it (`spctl`) and the
+  release notes give the right-click › Open / `xattr` workaround. arm64 only.
+- Checked: `codesign --verify --deep --strict` passes; the app copied out of the mounted DMG launches through
+  Launch Services. Fonts and icons are embedded, and Finder launches get the login-shell PATH (`login_env`).

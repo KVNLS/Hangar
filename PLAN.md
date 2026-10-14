@@ -51,7 +51,9 @@ output, not a library.
   - Onboarding (done 2026-10-08): a setup checklist on the welcome screen and in Settings › Setup (git and
     its identity, agents and ACP adapters, `gh` and its sign-in, Xcode, iOS runtimes, Android SDK and AVDs,
     JDK, Node), each with the command that fixes it; Hangar never runs installers itself.
-  - Distribution: .app bundle, .icns (light/tinted variants), signing and notarisation (question 6).
+  - Distribution: .app bundle, .icns and DMG shipped as v0.1.0 (`scripts/release.sh`, 2026-10-14), signed
+    with an Apple Development certificate, arm64 only. Still open: Developer ID + notarisation (question 6),
+    universal binary, light/tinted icon variants.
   - Done when: ARCHITECTURE "Done when" all ticked, the checklist seen, a signed .app runs on a clean user.
 
 ## Status
@@ -172,8 +174,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   the status bar; "Sandbox: worktree only" not shown (agents are not sandboxed); ⌘⏎ missing from the
   keybinding table; the toast covers the device panel's Shut down button for 2.8 s; queued starts not shown
   in the sidebar.
-- **Notifications:** clicking one does not open its workspace; unbundled macOS builds show them as
-  Finder's, and Windows as PowerShell's until Hangar is packaged with its own AUMID; only macOS was run.
+- **Notifications:** clicking one does not open its workspace; unbundled macOS builds (`cargo run`; the
+  release .app has its own bundle id) show them as Finder's, and Windows as PowerShell's until Hangar is packaged with its own AUMID; only macOS was run.
 
 ## Owner decisions
 - No ACP crate: the ACP client is hand-rolled (M7).
@@ -206,6 +208,6 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 2. `DeviceCatalog` / `HostResources` ports and the `DevicePool` state machine, checked on real simulators and
    emulators.
 3. Walk the on-screen checklist above.
-4. .app bundle, then signing and notarisation.
+4. Developer ID signing and notarisation (the .app bundle and DMG shipped in v0.1.0).
 5. Gemini over ACP: needs a `GEMINI_API_KEY` (or Vertex AI) to check turns, modes and MCP live, or drop the
    presets.
