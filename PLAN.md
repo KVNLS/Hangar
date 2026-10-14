@@ -83,6 +83,13 @@ Git access is the `git` CLI with porcelain output, not a library.
 - [x] M2 (first cut) — core models + Store + EventBus, worktree CLI wrapper, agents PtyAdapter + presets,
       sidebar (projects → workspaces, add project, new workspace) + two resizable terminal panes.
       End-to-end flow verified headlessly; UI look and click paths still need a manual pass.
+- [x] M3 Live changes & review — watcher, live diff, changes panel, commit/push/PR/merge
+- [x] M4 Android device panel — emulator boot/shutdown, gRPC frames/input (adb fallback), run live 2026-10-05
+- [x] M5 iOS device panel — headless boot/shutdown, hardware buttons, keyboard (no rotation on Xcode 27)
+- [x] UI v0.1 — design system + views, merged into main 2026-10-05
+- [ ] M6 Mobile run loop
+- [ ] M7 ACP structured agents
+- [ ] M8 MCP device tools
 
 ## Done since M2 first cut
 - Terminal: selection (drag/word/line/shift-extend, auto-scroll), Cmd-C/Cmd-A, mouse reporting (1000/1002/1003,
@@ -108,6 +115,12 @@ Git access is the `git` CLI with porcelain output, not a library.
 - M4 Android: SDK discovery, headless emulator boot/shutdown, gRPC frames/input (adb fallback), device panel
   with Boot/Shutdown, Back/Home/Apps/Power/Volume, keyboard text + `Input::Key`, rotation with landscape-aware
   input (spikes/m4-android-notes.md).
+- M4 leftovers (2026-10-05): running emulators keyed by AVD id in the picker (saved selection survives
+  reboots; a booted AVD opens without reselecting), boot stage + elapsed time while booting, stylus
+  handwriting turned off on emulators Hangar boots (the emulator touchscreen reports stylus support, so
+  Gboard's "Try out your stylus" sheet took every text field). Run live through the dev hooks
+  (Pixel_10_Pro, gRPC): boot then auto-open, relaunch reopens the saved AVD, tap, text, Lock, shutdown.
+  Volume keys: the first press only shows the volume panel (Android behaviour, same with adb).
 - M5 panel: iOS boot/shutdown from the panel (all simulators listed, booted first), Home/Lock/Volume, keyboard
   text + keys. Rotation not available on iOS (Xcode 27).
 - Device logs: `Device::logs` stream (adb logcat, simctl log stream) and a logs pane in the device panel
@@ -124,22 +137,18 @@ Git access is the `git` CLI with porcelain output, not a library.
   changes; Failed = exited non-zero.
 - Deferred until backed (not rendered, no placeholders): chat stream, tool-call cards, permission prompts and
   the Approval/Input states (M7); build progress, crash and "in use" device overlays, Run/Reload (M6); status bar
-  build/RAM; per-workspace target device; Clone
-  repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
-- Not checked visually by Claude (no screen capture): every view needs the owner's manual pass.
+  build/RAM; per-workspace target device; Clone repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
+- Owner's first visual pass applied (f23471f); Claude has no screen capture, so later visual changes still
+  need the owner's eye.
 
 ## Remaining gaps
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
 - Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
-- Devices: device panel controls, logs pane, Rotate and the boot stage text never checked visually (no
-  screen capture in agent sessions); logs pane fixed height, no horizontal scroll. Android run live through
-  the dev hooks (2026-10-05, Pixel_10_Pro, gRPC): boot from the panel then auto-open, saved AVD selection
-  reopened on relaunch, tap, text, Lock (screen asleep), shutdown. Volume: the first press only shows the
-  volume panel (same with `adb input keyevent`). The emulator touchscreen reports stylus support, so Gboard's
-  "Try out your stylus" sheet took every text field; Hangar boots now set `stylus_handwriting_enabled 0`
-  (emulators started elsewhere keep the sheet until it is turned off).
+- Devices: device panel controls, logs pane, Rotate and the boot stage text never checked visually by
+  Claude; logs pane fixed height, no horizontal scroll; emulators started outside Hangar keep Gboard's stylus
+  sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
 - Manual pass over the device panel (both platforms), then M6 mobile run loop.
