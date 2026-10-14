@@ -122,9 +122,7 @@ pub fn diff_paths(
             .ok(),
     };
     let runner = match &scratch {
-        Some(index) => git
-            .clone()
-            .with_env("GIT_INDEX_FILE", index.path.as_os_str()),
+        Some(index) => index.runner(&git),
         None => git.clone(),
     };
     let mut diffed = parse_patch(&runner.run_bytes(&args)?, opts)?;
@@ -148,48 +146,65 @@ pub fn diff_paths(
     Ok(files)
 }
 
-/// A copy of the worktree's index next to it, removed on drop.
+/// A scratch directory (removed on drop) with a copy of the worktree's index and an object
+/// store of its own: `add --intent-to-add` writes the empty blob, and nothing may land in the
+/// git directory (watchers on it would see a change and diff again).
 struct ScratchIndex {
-    path: PathBuf,
+    dir: PathBuf,
+    objects: PathBuf,
 }
 
 impl ScratchIndex {
     fn with_intent_to_add(git: &Git, paths: &[PathBuf]) -> Result<Self> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let index = git.run(["rev-parse", "--git-path", "index"])?;
-        let index = git.dir().join(index.trim());
+        let resolve = |what: &str| -> Result<PathBuf> {
+            let path = git.run(["rev-parse", "--git-path", what])?;
+            Ok(git.dir().join(path.trim()))
+        };
+        let (index, objects) = (resolve("index")?, resolve("objects")?);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = index.with_file_name(format!("index.hangar-diff-{}-{n}", std::process::id()));
-        std::fs::copy(&index, &path)?;
-        let scratch = Self { path };
+        let dir =
+            std::env::temp_dir().join(format!("hangar-diff-index-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(dir.join("objects"))?;
+        let scratch = Self { dir, objects };
+        // Read and write rather than `fs::copy`: on macOS that clones the file, and FSEvents
+        // reports the clone on the source, which a watcher of the git directory takes for a change.
+        std::fs::write(scratch.dir.join("index"), std::fs::read(&index)?)?;
         let mut list = Vec::new();
         for p in paths {
             list.extend_from_slice(p.as_os_str().as_encoded_bytes());
             list.push(0);
         }
-        git.clone()
-            .with_env("GIT_INDEX_FILE", scratch.path.as_os_str())
-            .run_bytes_with(
-                [
-                    "--literal-pathspecs",
-                    "add",
-                    "--intent-to-add",
-                    "--pathspec-from-file=-",
-                    "--pathspec-file-nul",
-                ],
-                Some(&list),
-                &[],
-            )?;
+        scratch.runner(git).run_bytes_with(
+            [
+                "--literal-pathspecs",
+                "add",
+                "--intent-to-add",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ],
+            Some(&list),
+            &[],
+        )?;
         Ok(scratch)
+    }
+
+    /// `git` reading the scratch index, writing objects to the scratch store and reading the
+    /// repository's objects through it.
+    fn runner(&self, git: &Git) -> Git {
+        git.clone()
+            .with_env("GIT_INDEX_FILE", self.dir.join("index").into_os_string())
+            .with_env(
+                "GIT_OBJECT_DIRECTORY",
+                self.dir.join("objects").into_os_string(),
+            )
+            .with_env("GIT_ALTERNATE_OBJECT_DIRECTORIES", self.objects.as_os_str())
     }
 }
 
 impl Drop for ScratchIndex {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-        let mut lock = self.path.clone().into_os_string();
-        lock.push(".lock");
-        let _ = std::fs::remove_file(lock);
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 

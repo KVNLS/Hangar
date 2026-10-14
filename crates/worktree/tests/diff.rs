@@ -356,12 +356,16 @@ fn plain_mv_shows_as_a_rename() {
     let fresh = find(&files, "fresh.txt");
     assert_eq!(fresh.status, FileStatus::Untracked);
     assert_eq!(texts(fresh), [(LineKind::Added, "new".to_owned())]);
-    let leftovers: Vec<_> = fs::read_dir(repo.path.join(".git"))
+    let pid = format!("hangar-diff-index-{}-", std::process::id());
+    let leftovers: Vec<_> = fs::read_dir(std::env::temp_dir())
         .unwrap()
         .flatten()
-        .filter(|e| e.file_name().to_string_lossy().contains("hangar-diff"))
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&pid))
         .collect();
-    assert!(leftovers.is_empty(), "scratch index left behind: {leftovers:?}");
+    assert!(
+        leftovers.is_empty(),
+        "scratch index left behind: {leftovers:?}"
+    );
 }
 
 #[test]
