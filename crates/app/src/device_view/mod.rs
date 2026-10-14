@@ -19,7 +19,7 @@ use hangar_devices::{DeviceInfo, Frame, Input, Key, Orientation};
 
 use geometry::{Gesture, Rect};
 use session::Outcome;
-pub use session::{DeviceSession, InputResult, LogSource, TextResult};
+pub use session::{DeviceHandle, DeviceSession, InputResult, TextResult};
 
 /// Key context of the device screen; bindings in it take precedence over app-wide ones.
 pub const KEY_CONTEXT: &str = "DeviceScreen";
@@ -148,8 +148,8 @@ impl DeviceView {
         self.session.backend()
     }
 
-    pub fn log_source(&self) -> LogSource {
-        self.session.log_source()
+    pub fn handle(&self) -> DeviceHandle {
+        self.session.handle()
     }
 
     /// Queues input for the device (hardware buttons, dev hooks).

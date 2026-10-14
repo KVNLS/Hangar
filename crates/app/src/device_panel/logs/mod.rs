@@ -19,7 +19,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_devices::{LogFilter, LogLevel, LogStream};
 
-use crate::device_view::LogSource;
+use crate::device_view::DeviceHandle;
 use model::{BUFFER_CAP, Follow, Line, LogModel};
 
 const POLL: Duration = Duration::from_millis(100);
@@ -121,7 +121,7 @@ const LEVELS: [LogLevel; 6] = [
 ];
 
 pub struct LogsPane {
-    source: LogSource,
+    source: DeviceHandle,
     /// Ask the device for its recent backlog (Android only).
     history: bool,
     settings: LogsSettings,
@@ -147,7 +147,7 @@ impl EventEmitter<LogsEvent> for LogsPane {}
 
 impl LogsPane {
     pub fn new(
-        source: LogSource,
+        source: DeviceHandle,
         history: bool,
         settings: LogsSettings,
         window: &mut Window,
@@ -273,7 +273,7 @@ impl LogsPane {
         let source = self.source.clone();
         let task = cx.background_executor().spawn(async move {
             source
-                .start(&filter)
+                .logs(&filter)
                 .map(|stream| OwnedStream(Some(stream)))
                 .map_err(|e| e.to_string())
         });

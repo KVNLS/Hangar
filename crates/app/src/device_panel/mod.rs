@@ -508,7 +508,7 @@ impl DevicePanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (Entity<LogsPane>, Subscription) {
-        let source = view.read(cx).log_source();
+        let source = view.read(cx).handle();
         let history = key.platform == Platform::Android;
         let settings = self.logs_settings;
         let logs = cx.new(|cx| LogsPane::new(source, history, settings, window, cx));

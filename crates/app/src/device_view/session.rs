@@ -45,27 +45,41 @@ enum Command {
     Shutdown,
 }
 
-/// A shared handle on the device for starting log streams. Releasing the last reference of a
-/// device can block (backends join threads), so it never happens on the caller's thread.
-pub struct LogSource(Option<Arc<dyn Device>>);
+/// A shared handle on the device for blocking calls that must not wait behind queued input (log
+/// streams, installs). Releasing the last reference of a device can block (backends join
+/// threads), so it never happens on the caller's thread.
+pub struct DeviceHandle(Option<Arc<dyn Device>>);
 
-impl LogSource {
+impl DeviceHandle {
+    fn device(&self) -> hangar_devices::Result<&Arc<dyn Device>> {
+        self.0
+            .as_ref()
+            .ok_or(hangar_devices::Error::Unsupported("device released"))
+    }
+
     /// Spawns the log process. Blocks: call from a background thread.
-    pub fn start(&self, filter: &LogFilter) -> hangar_devices::Result<LogStream> {
-        match &self.0 {
-            Some(device) => device.logs(filter),
-            None => Err(hangar_devices::Error::Unsupported("device released")),
-        }
+    pub fn logs(&self, filter: &LogFilter) -> hangar_devices::Result<LogStream> {
+        self.device()?.logs(filter)
+    }
+
+    /// Installs an `.app` bundle or an `.apk`. Blocks: call from a background thread.
+    pub fn install(&self, app: &std::path::Path) -> hangar_devices::Result<()> {
+        self.device()?.install(app)
+    }
+
+    /// Launches an installed app by bundle id / package name. Blocks.
+    pub fn launch(&self, app_id: &str) -> hangar_devices::Result<()> {
+        self.device()?.launch(app_id)
     }
 }
 
-impl Clone for LogSource {
+impl Clone for DeviceHandle {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl Drop for LogSource {
+impl Drop for DeviceHandle {
     fn drop(&mut self) {
         if let Some(device) = self.0.take() {
             let _ = std::thread::Builder::new()
@@ -77,7 +91,7 @@ impl Drop for LogSource {
 
 pub struct DeviceSession {
     info: DeviceInfo,
-    logs: LogSource,
+    handle: DeviceHandle,
     backend: &'static str,
     frames: FrameReceiver,
     input: mpsc::Sender<Command>,
@@ -92,14 +106,14 @@ impl DeviceSession {
         let frames = device.frames();
         let (input, rx) = mpsc::channel();
         let (results_tx, results) = unbounded_channel();
-        let logs = LogSource(Some(device.clone()));
+        let handle = DeviceHandle(Some(device.clone()));
         std::thread::Builder::new()
             .name("device-input".into())
             .spawn(move || input_worker(device, rx, results_tx))
             .context("failed to start the device input thread")?;
         Ok(Self {
             info,
-            logs,
+            handle,
             backend,
             frames,
             input,
@@ -115,8 +129,8 @@ impl DeviceSession {
         self.backend
     }
 
-    pub fn log_source(&self) -> LogSource {
-        self.logs.clone()
+    pub fn handle(&self) -> DeviceHandle {
+        self.handle.clone()
     }
 
     pub fn frames(&self) -> FrameReceiver {
