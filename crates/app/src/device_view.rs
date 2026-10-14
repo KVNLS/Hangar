@@ -1,11 +1,14 @@
 //! Live device screen: paints the latest frame of a [`DeviceSession`] aspect-fit in its bounds
 //! and turns mouse presses into touch input (click → tap, drag → swipe, hold → long press).
 //!
-//! Frames are converted to a `RenderImage` on the background executor; the previous image is
-//! released from the sprite atlas once a newer one has been painted.
+//! A live simulator surface is painted as is (`paint_surface`, zero-copy). Other frames are
+//! converted to a `RenderImage` on the background executor; the previous image is released from
+//! the sprite atlas once a newer one has been painted.
 
 pub mod geometry;
 mod session;
+#[cfg(target_os = "macos")]
+mod surface;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -15,7 +18,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_devices::{DeviceInfo, Frame, Input, Key, Orientation};
+use hangar_devices::{DeviceInfo, Frame, FramePixels, Input, Key, Orientation};
 
 use geometry::{Gesture, Rect};
 pub use session::{DeviceHandle, DeviceSession, InputResult, Outcome, TextResult};
@@ -45,10 +48,17 @@ pub enum DeviceViewEvent {
     Rotate(Orientation, Result<(), String>),
 }
 
+#[derive(Clone)]
+enum Picture {
+    Image(Arc<RenderImage>),
+    #[cfg(target_os = "macos")]
+    Surface(core_video::pixel_buffer::CVPixelBuffer),
+}
+
 struct Shown {
-    image: Arc<RenderImage>,
+    picture: Picture,
     frame: Frame,
-    /// Set once the image has been painted (and so uploaded to the atlas).
+    /// Set once the picture has been painted (an image is then in the atlas).
     painted: Rc<Cell<bool>>,
 }
 
@@ -65,6 +75,10 @@ pub struct DeviceView {
     press: u64,
     hold: Option<Task<()>>,
     stats: Rc<RefCell<Stats>>,
+    #[cfg(target_os = "macos")]
+    surfaces: surface::SurfaceCache,
+    /// A live surface could not be painted directly and is copied instead (logged once).
+    surface_fallback: bool,
     focus_handle: FocusHandle,
     _frames: Task<()>,
     _results: Task<()>,
@@ -84,15 +98,23 @@ impl DeviceView {
                     let Some(frame) = rx.borrow_and_update().clone() else {
                         continue;
                     };
-                    let built = cx
-                        .background_executor()
-                        .spawn(async move { to_render_image(&frame).map(|img| (img, frame)) })
-                        .await;
-                    let Some((image, frame)) = built else {
+                    let Ok(surface) = this.update(cx, |view, _| view.surface_picture(&frame))
+                    else {
+                        break;
+                    };
+                    let built = match surface {
+                        Some(picture) => Some((picture, frame)),
+                        None => cx
+                            .background_executor()
+                            .spawn(async move { to_render_image(&frame).map(|img| (img, frame)) })
+                            .await
+                            .map(|(img, frame)| (Picture::Image(img), frame)),
+                    };
+                    let Some((picture, frame)) = built else {
                         tracing::warn!("device frame has an invalid layout; skipped");
                         continue;
                     };
-                    let alive = this.update(cx, |view, cx| view.show(image, frame, cx));
+                    let alive = this.update(cx, |view, cx| view.show(picture, frame, cx));
                     if alive.is_err() {
                         break;
                     }
@@ -133,6 +155,9 @@ impl DeviceView {
             press: 0,
             hold: None,
             stats: Rc::new(RefCell::new(Stats::new(stats))),
+            #[cfg(target_os = "macos")]
+            surfaces: surface::SurfaceCache::default(),
+            surface_fallback: false,
             focus_handle: cx.focus_handle(),
             _frames: frames,
             _results: results,
@@ -232,16 +257,35 @@ impl DeviceView {
             .map(|s| &s.frame)
     }
 
-    fn show(&mut self, image: Arc<RenderImage>, frame: Frame, cx: &mut Context<Self>) {
+    /// The zero-copy picture of a live frame; `None` means "convert it to an image".
+    fn surface_picture(&mut self, frame: &Frame) -> Option<Picture> {
+        let FramePixels::Live(surface) = &frame.pixels else {
+            return None;
+        };
+        #[cfg(target_os = "macos")]
+        if let Some(buffer) = self.surfaces.buffer(surface) {
+            return Some(Picture::Surface(buffer));
+        }
+        if !self.surface_fallback {
+            self.surface_fallback = true;
+            tracing::warn!(
+                ?surface,
+                "live device surface cannot be painted directly; copying frames"
+            );
+        }
+        None
+    }
+
+    fn show(&mut self, picture: Picture, frame: Frame, cx: &mut Context<Self>) {
         self.stats.borrow_mut().received();
         if let Some(old) = self.shown.take() {
             // An image that never reached the atlas (window hidden) has nothing to free.
-            if old.painted.get() {
-                self.retired.push(old.image);
+            if let (Picture::Image(image), true) = (old.picture, old.painted.get()) {
+                self.retired.push(image);
             }
         }
         self.shown = Some(Shown {
-            image,
+            picture,
             frame,
             painted: Rc::new(Cell::new(false)),
         });
@@ -387,7 +431,7 @@ impl Render for DeviceView {
         let view = cx.entity();
         let shown = self.shown.as_ref().map(|s| {
             (
-                s.image.clone(),
+                s.picture.clone(),
                 s.painted.clone(),
                 s.frame.seq,
                 s.frame.captured_at,
@@ -402,7 +446,7 @@ impl Render for DeviceView {
             move |bounds, hitbox, window, _| {
                 window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
                 register_mouse_listeners(view, hitbox, window);
-                let Some((image, painted, seq, captured_at, (w, h))) = shown else {
+                let Some((picture, painted, seq, captured_at, (w, h))) = shown else {
                     image_rect.set(None);
                     return;
                 };
@@ -425,11 +469,17 @@ impl Render for DeviceView {
                     point(px(rect.x as f32), px(rect.y as f32)),
                     size(px(rect.width as f32), px(rect.height as f32)),
                 );
-                if let Err(err) =
-                    window.paint_image(target, target, Corners::default(), image, 0, false)
-                {
-                    tracing::warn!(%err, "failed to paint device frame");
-                    return;
+                match picture {
+                    Picture::Image(image) => {
+                        if let Err(err) =
+                            window.paint_image(target, target, Corners::default(), image, 0, false)
+                        {
+                            tracing::warn!(%err, "failed to paint device frame");
+                            return;
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    Picture::Surface(buffer) => window.paint_surface(target, buffer),
                 }
                 painted.set(true);
                 stats.borrow_mut().painted(seq, captured_at, (w, h));

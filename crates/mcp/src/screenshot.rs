@@ -95,7 +95,7 @@ fn fit(w: u32, h: u32, max_side: u32) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hangar_core::device::Pixels;
+    use hangar_core::device::FramePixels;
     use std::sync::Arc;
 
     fn frame(width: u32, height: u32, stride: usize) -> Frame {
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn rejects_bad_frames() {
         let mut f = frame(10, 10, 40);
-        f.pixels = Pixels::Bgra {
+        f.pixels = FramePixels::Bgra {
             stride: 40,
             data: Arc::from(vec![0u8; 100]),
         };
@@ -147,7 +147,7 @@ mod tests {
             Err(ScreenshotError::InvalidFrame(_))
         ));
         let mut f = frame(10, 10, 40);
-        if let Pixels::Bgra { stride, .. } = &mut f.pixels {
+        if let FramePixels::Bgra { stride, .. } = &mut f.pixels {
             *stride = 20;
         }
         assert!(encode_screenshot(&f, 1024).is_err());

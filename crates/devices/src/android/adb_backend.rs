@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use super::adb::{Adb, escape_input_text};
 use crate::geometry::device_to_pixels;
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Orientation, Pixels,
+    Device, DeviceInfo, Error, Frame, FramePixels, FrameReceiver, FrameSender, Input, Orientation,
     Platform, Result, ScreenSpec,
 };
 
@@ -121,7 +121,7 @@ pub fn screenshot(adb: &Adb, serial: &str, capture: Capture) -> Result<Frame> {
     Ok(Frame {
         width,
         height,
-        pixels: Pixels::Bgra {
+        pixels: FramePixels::Bgra {
             stride: width as usize * 4,
             data: Arc::from(bgra),
         },

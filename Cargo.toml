@@ -52,6 +52,9 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 objc2-io-surface = "0.3.2"
 objc2-core-graphics = "0.3.2"
 objc2-core-foundation = "0.3.2"
+# The CoreVideo types GPUI's `paint_surface` takes (hangar-app only; already built by gpui-pre).
+core-video = "0.5.2"
+core-foundation = "0.10.1"
 block2 = "0.6.2"
 libc = "0.2.190"
 tempfile = "3.27.0"

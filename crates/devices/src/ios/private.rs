@@ -20,7 +20,8 @@ use super::dispatch;
 use super::keymap;
 use super::runtime::{self, raw, responds};
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Pixels, Result, geometry,
+    Device, DeviceInfo, Error, Frame, FramePixels, FrameReceiver, FrameSender, Input, Result,
+    geometry,
 };
 
 mod surface;
@@ -452,7 +453,7 @@ impl Framebuffer {
         Some(Frame {
             width: u32::try_from(s.width()).ok()?,
             height: u32::try_from(s.height()).ok()?,
-            pixels: Pixels::Live(surface.clone()),
+            pixels: FramePixels::Live(surface.clone()),
             captured_at: Instant::now(),
             seq: self.seq,
         })

@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use hangar_devices::ios::{self, Backend};
-use hangar_devices::{DeviceInfo, Frame, Pixels, simctl};
+use hangar_devices::{DeviceInfo, Frame, FramePixels, simctl};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -41,7 +41,7 @@ fn lists_booted_with_screen_spec() -> TestResult {
 fn private_backend_delivers_frames() -> TestResult {
     let f = wait_frame(Backend::Private)?;
     assert!(f.width > 0 && f.height > 0);
-    assert!(matches!(f.pixels, Pixels::Live(_)), "{:?}", f.pixels);
+    assert!(matches!(f.pixels, FramePixels::Live(_)), "{:?}", f.pixels);
     let shot = f.snapshot().ok_or("surface snapshot failed")?;
     let (stride, bytes) = shot.bytes().ok_or("snapshot has no bytes")?;
     assert_eq!(bytes.len(), stride * f.height as usize);

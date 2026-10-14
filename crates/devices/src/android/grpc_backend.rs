@@ -12,7 +12,7 @@ use super::grpc::{self, Client, keys, proto};
 use super::sdk::AndroidSdk;
 use crate::geometry::{device_to_pixels, panel_pixels};
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Orientation, Pixels,
+    Device, DeviceInfo, Error, Frame, FramePixels, FrameReceiver, FrameSender, Input, Orientation,
     Platform, Result, ScreenSpec,
 };
 
@@ -242,7 +242,7 @@ async fn stream_frames(
                     tx.send_replace(Some(Frame {
                         width: w,
                         height: h,
-                        pixels: Pixels::Bgra {
+                        pixels: FramePixels::Bgra {
                             stride: w as usize * 4,
                             data: Arc::from(bgra),
                         },

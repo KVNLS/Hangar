@@ -33,7 +33,7 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub use hangar_core::device::{
-    Capabilities, DeviceInfo, Frame, Input, Key, LiveSurface, LogLevel, Orientation, Pixels,
+    Capabilities, DeviceInfo, Frame, FramePixels, Input, Key, LiveSurface, LogLevel, Orientation,
     Platform, ScreenSpec,
 };
 

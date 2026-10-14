@@ -177,13 +177,13 @@ pub struct DeviceInfo {
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub pixels: Pixels,
+    pub pixels: FramePixels,
     pub captured_at: Instant,
     pub seq: u64,
 }
 
 #[derive(Debug, Clone)]
-pub enum Pixels {
+pub enum FramePixels {
     /// Captured bytes, `stride` bytes per row.
     Bgra { stride: usize, data: Arc<[u8]> },
     /// A surface the backend keeps drawing into, shared with the GPU so the UI can show it without
@@ -203,7 +203,7 @@ impl Frame {
         Self {
             width,
             height,
-            pixels: Pixels::Bgra { stride, data },
+            pixels: FramePixels::Bgra { stride, data },
             captured_at: Instant::now(),
             seq,
         }
@@ -212,15 +212,15 @@ impl Frame {
     /// The captured bytes and their stride; `None` for a live surface (see [`Frame::snapshot`]).
     pub fn bytes(&self) -> Option<(usize, &[u8])> {
         match &self.pixels {
-            Pixels::Bgra { stride, data } => Some((*stride, data)),
-            Pixels::Live(_) => None,
+            FramePixels::Bgra { stride, data } => Some((*stride, data)),
+            FramePixels::Live(_) => None,
         }
     }
 
     /// This frame with its pixels frozen: a copy of a live surface's current contents, or a cheap
     /// clone of captured bytes. `None` if the surface cannot be read.
     pub fn snapshot(&self) -> Option<Frame> {
-        let Pixels::Live(surface) = &self.pixels else {
+        let FramePixels::Live(surface) = &self.pixels else {
             return Some(self.clone());
         };
         let stride = self.width as usize * 4;
@@ -229,7 +229,7 @@ impl Frame {
             return None;
         }
         Some(Frame {
-            pixels: Pixels::Bgra {
+            pixels: FramePixels::Bgra {
                 stride,
                 data: Arc::from(data),
             },
@@ -447,7 +447,7 @@ mod tests {
 
     fn live(surface: &Arc<Surface>) -> Frame {
         Frame {
-            pixels: Pixels::Live(surface.clone()),
+            pixels: FramePixels::Live(surface.clone()),
             ..Frame::bgra(4, 2, 16, Arc::from(vec![0u8; 32]), 1)
         }
     }

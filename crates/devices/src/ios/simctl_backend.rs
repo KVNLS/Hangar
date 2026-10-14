@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use crate::{Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Pixels, Result};
+use crate::{
+    Device, DeviceInfo, Error, Frame, FramePixels, FrameReceiver, FrameSender, Input, Result,
+};
 
 pub struct SimctlSimulator {
     info: DeviceInfo,
@@ -82,7 +84,7 @@ pub fn screenshot(udid: &str) -> Result<Frame> {
     Ok(Frame {
         width,
         height,
-        pixels: Pixels::Bgra {
+        pixels: FramePixels::Bgra {
             stride: width as usize * 4,
             data: Arc::from(bgra),
         },
