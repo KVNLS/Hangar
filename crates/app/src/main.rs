@@ -31,6 +31,14 @@
 //! - `HANGAR_DEV_PR=<title>` — open a draft pull request through `gh` (`1` = default title).
 //! - `HANGAR_DEV_MERGE=noff|squash` — merge into the base branch with the default message.
 //!
+//! Device panel (⌘⇧P; one per window, shared by all workspaces):
+//! - `HANGAR_DEV_DEVICE=<udid>` — open the device panel on that (booted) device; logs
+//!   `HANGAR_DEV_DEVICE frame painted` once a frame is on screen.
+//! - `HANGAR_DEV_DEVICE_TAP=<x>,<y>` — then tap at those device points and log whether a later
+//!   painted frame differs (`HANGAR_DEV_DEVICE_TAP painted frame changed`).
+//! - `HANGAR_DEVICE_BACKEND=private|simctl` — force an iOS backend (no automatic fallback).
+//! - The stats overlay (⌘⌥⇧P or the panel's Stats button) also logs `[device-stats]` lines.
+//!
 //! `HANGAR_GH=<program>` runs that `gh` instead of the one on the login PATH. Point it at a
 //! fake script when testing: the real `gh` acts on the user's GitHub account.
 

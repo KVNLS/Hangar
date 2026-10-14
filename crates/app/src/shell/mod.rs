@@ -16,8 +16,8 @@ use gpui_kit::component::resizable::{ResizablePanelEvent, ResizableState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _, WindowExt as _, h_flex, h_resizable,
-    resizable_panel, v_flex,
+    ActiveTheme as _, IconName, Selectable as _, Sizable as _, StyledExt as _, WindowExt as _,
+    h_flex, h_resizable, resizable_panel, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -31,12 +31,13 @@ use hangar_worktree::MergeStrategy;
 use crate::agents::{self, AgentChoice};
 use crate::changes::review::ReviewTarget;
 use crate::changes::{ChangesEvent, ChangesPanel, PanelSource, WorkspaceDiff};
+use crate::device_panel::{DevicePanel, DevicePanelEvent};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
 use crate::state::{
-    CHANGES_WIDTH_RANGE, ChangesLayout, PANE_COUNT, PaneLayout, Panes, ProjectList, changes_width,
-    sanitize_split, split_ratio, status_label,
+    CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, PANE_COUNT, PaneLayout,
+    Panes, ProjectList, changes_width, device_width, sanitize_split, split_ratio, status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
 use dialogs::DeleteWorkspaceDialog;
@@ -51,10 +52,14 @@ const MIN_PANES_WIDTH: f32 = 320.;
 /// Quiet time after a panel resize before the width is saved.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 
-actions!(hangar, [ToggleChanges]);
+actions!(hangar, [ToggleChanges, ToggleDevice, ToggleDeviceStats]);
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("cmd-shift-d", ToggleChanges, None)]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-shift-d", ToggleChanges, None),
+        KeyBinding::new("cmd-shift-p", ToggleDevice, None),
+        KeyBinding::new("cmd-alt-shift-p", ToggleDeviceStats, None),
+    ]);
 }
 
 /// Debug/automation hooks, read once at startup (documented in `main.rs`).
@@ -78,6 +83,11 @@ pub struct DevOptions {
     /// PR title (`1` = the default title).
     pub pr: Option<String>,
     pub merge: Option<MergeStrategy>,
+    /// Device id (simulator UDID) to open in the device panel.
+    pub device: Option<String>,
+    /// Tap at these device points once the device shows frames, then log whether the painted
+    /// frame changed.
+    pub device_tap: Option<(f64, f64)>,
 }
 
 impl DevOptions {
@@ -106,6 +116,16 @@ impl DevOptions {
                     tracing::error!(value = other, "HANGAR_DEV_MERGE: expected noff or squash");
                     None
                 }
+            }),
+            device: var("HANGAR_DEV_DEVICE"),
+            device_tap: var("HANGAR_DEV_DEVICE_TAP").and_then(|v| {
+                let parsed = v
+                    .split_once(',')
+                    .and_then(|(x, y)| Some((x.trim().parse().ok()?, y.trim().parse().ok()?)));
+                if parsed.is_none() {
+                    tracing::error!(value = %v, "HANGAR_DEV_DEVICE_TAP: expected X,Y in points");
+                }
+                parsed
             }),
         }
     }
@@ -167,6 +187,15 @@ impl Render for ChangesResize {
     }
 }
 
+/// Drag payload of the device panel's resize handle.
+struct DeviceResize;
+
+impl Render for DeviceResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 struct NewWorkspaceInput {
     project_id: ProjectId,
     input: Entity<InputState>,
@@ -196,6 +225,10 @@ pub struct HangarApp {
     changes: ChangesLayout,
     changes_panel: Entity<ChangesPanel>,
     save_changes: Option<Task<()>>,
+    /// The window's single device panel, shared by all workspaces.
+    device: DeviceLayout,
+    device_panel: Entity<DevicePanel>,
+    save_device: Option<Task<()>>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -259,6 +292,22 @@ impl HangarApp {
                 ChangesEvent::Close => this.set_changes_open(false, window, cx),
             },
         );
+        let device_panel = cx.new(|cx| DevicePanel::new(window, cx));
+        let device_sub = cx.subscribe_in(
+            &device_panel,
+            window,
+            |this, _, event: &DevicePanelEvent, window, cx| match event {
+                DevicePanelEvent::Close => this.set_device_open(false, window, cx),
+                DevicePanelEvent::Selected(key) => {
+                    this.device.selected = key.clone();
+                    this.save_device_layout(window, cx);
+                }
+                DevicePanelEvent::Stats(stats) => {
+                    this.device.stats = *stats;
+                    this.save_device_layout(window, cx);
+                }
+            },
+        );
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
@@ -310,8 +359,11 @@ impl HangarApp {
             changes: ChangesLayout::default(),
             changes_panel,
             save_changes: None,
+            device: DeviceLayout::default(),
+            device_panel,
+            save_device: None,
             focus,
-            _subscriptions: vec![select_sub, resize_sub, changes_sub],
+            _subscriptions: vec![select_sub, resize_sub, changes_sub, device_sub],
         }
     }
 
@@ -430,9 +482,28 @@ impl HangarApp {
         self.persist(window, cx, move |store| ops::save_changes(store, &changes));
     }
 
+    fn device_width_on_screen(&self) -> f32 {
+        if self.device.open {
+            self.device.width
+        } else {
+            0.
+        }
+    }
+
+    fn changes_width_on_screen(&self) -> f32 {
+        if self.changes.open {
+            self.changes.width
+        } else {
+            0.
+        }
+    }
+
     fn resize_changes(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
-        let max = (window.viewport_size().width.as_f32() - SIDEBAR_WIDTH - MIN_PANES_WIDTH)
-            .max(CHANGES_WIDTH_RANGE.0);
+        let max = (window.viewport_size().width.as_f32()
+            - SIDEBAR_WIDTH
+            - MIN_PANES_WIDTH
+            - self.device_width_on_screen())
+        .max(CHANGES_WIDTH_RANGE.0);
         let Some(width) = changes_width(width.min(max)) else {
             return;
         };
@@ -445,6 +516,58 @@ impl HangarApp {
         self.save_changes = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(SAVE_DEBOUNCE).await;
             let _ = this.update_in(cx, |this, window, cx| this.save_changes_layout(window, cx));
+        }));
+    }
+
+    fn set_device_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.device.open != open {
+            self.device.open = open;
+            tracing::info!(open, "device panel");
+            self.save_device_layout(window, cx);
+            cx.notify();
+        }
+        self.device_panel
+            .update(cx, |panel, cx| panel.set_visible(open, window, cx));
+    }
+
+    fn toggle_device(&mut self, _: &ToggleDevice, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_device_open(!self.device.open, window, cx);
+    }
+
+    fn toggle_device_stats(
+        &mut self,
+        _: &ToggleDeviceStats,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.device_panel.update(cx, |panel, cx| {
+            let stats = !panel.stats();
+            panel.set_stats(stats, cx);
+        });
+    }
+
+    fn save_device_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let device = self.device.clone();
+        self.persist(window, cx, move |store| ops::save_device(store, &device));
+    }
+
+    fn resize_device(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let max = (window.viewport_size().width.as_f32()
+            - SIDEBAR_WIDTH
+            - MIN_PANES_WIDTH
+            - self.changes_width_on_screen())
+        .max(DEVICE_WIDTH_RANGE.0);
+        let Some(width) = device_width(width.min(max)) else {
+            return;
+        };
+        if (width - self.device.width).abs() < 0.5 {
+            return;
+        }
+        self.device.width = width;
+        cx.notify();
+        self.save_device = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(SAVE_DEBOUNCE).await;
+            let _ = this.update_in(cx, |this, window, cx| this.save_device_layout(window, cx));
         }));
     }
 
@@ -469,6 +592,17 @@ impl HangarApp {
                 }
                 if let Some(changes) = loaded.changes {
                     self.changes = changes.sanitized();
+                }
+                if let Some(device) = loaded.device {
+                    self.device = device.sanitized();
+                    let (selected, stats) = (self.device.selected.clone(), self.device.stats);
+                    let open = self.device.open;
+                    self.device_panel.update(cx, |panel, cx| {
+                        panel.restore(selected, stats, cx);
+                        if open {
+                            panel.set_visible(true, window, cx);
+                        }
+                    });
                 }
                 self.sync_diffs(cx);
                 if let Some(agent) = loaded.agent.filter(|a| agents::preset(a).is_some()) {
@@ -1289,11 +1423,33 @@ impl HangarApp {
             }
         });
 
+        let device_open = self.device.open;
         let header = h_flex()
             .w_full()
-            .justify_between()
+            .gap_1()
             .items_center()
             .child(div().font_semibold().child("Hangar"))
+            .child(div().flex_1())
+            .child(
+                Button::new("device-toggle")
+                    .ghost()
+                    .small()
+                    .icon(if device_open {
+                        IconName::PanelRightClose
+                    } else {
+                        IconName::PanelRightOpen
+                    })
+                    .label("Device")
+                    .selected(device_open)
+                    .tooltip(if device_open {
+                        "Hide device (⌘⇧P)"
+                    } else {
+                        "Show device (⌘⇧P)"
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_device_open(!device_open, window, cx)
+                    })),
+            )
             .child(
                 Button::new("add-project")
                     .ghost()
@@ -1510,6 +1666,13 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
             this.set_changes_open(true, window, cx)
         });
     }
+    if let Some(id) = dev.device.clone() {
+        let tap = dev.device_tap;
+        let this = this.clone();
+        // Runs alongside the other hooks: waiting for frames must not hold them up.
+        cx.spawn(async move |cx| dev_device(this, id, tap, cx).await)
+            .detach();
+    }
     if let Some(repo) = dev.open.clone() {
         let open = dev.clone();
         if let Ok(task) =
@@ -1580,6 +1743,110 @@ async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut As
             task.await;
         }
     }
+}
+
+/// How long the device hooks wait for the device list and for frames.
+const DEV_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEV_POLL: Duration = Duration::from_millis(100);
+
+/// `HANGAR_DEV_DEVICE` (+ `HANGAR_DEV_DEVICE_TAP`): opens the device panel on the device, waits
+/// for a painted frame, then taps and logs whether a later painted frame differs.
+async fn dev_device(
+    this: WeakEntity<HangarApp>,
+    id: String,
+    tap: Option<(f64, f64)>,
+    cx: &mut AsyncWindowContext,
+) {
+    tracing::info!(%id, "HANGAR_DEV_DEVICE");
+    let Ok(panel) = this.update_in(cx, |this, window, cx| {
+        this.set_device_open(true, window, cx);
+        this.device_panel.clone()
+    }) else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + DEV_DEVICE_TIMEOUT;
+    let wait = |cx: &AsyncWindowContext| cx.background_executor().timer(DEV_POLL);
+    // Wait for a listing that knows the device.
+    let key = loop {
+        let found = panel.update(cx, |panel, _| {
+            let picker = panel.picker();
+            (picker.listed() && !picker.is_listing()).then(|| picker.find_id(&id))
+        });
+        match found {
+            Some(Some(key)) => break key,
+            Some(None) => {
+                tracing::error!(%id, "HANGAR_DEV_DEVICE: device not listed (is it booted?)");
+                return;
+            }
+            None if std::time::Instant::now() < deadline => wait(cx).await,
+            None => {
+                tracing::error!(%id, "HANGAR_DEV_DEVICE: device list not ready");
+                return;
+            }
+        }
+    };
+    let _ = panel.update_in(cx, |panel, window, cx| panel.select_device(key, window, cx));
+    let painted = |cx: &mut AsyncWindowContext| {
+        panel.update(cx, |panel, cx| {
+            panel
+                .view()
+                .and_then(|view| view.read(cx).painted_frame().cloned())
+        })
+    };
+    let baseline = loop {
+        if let Some(frame) = painted(cx) {
+            break frame;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::error!(%id, "HANGAR_DEV_DEVICE: no frame painted");
+            return;
+        }
+        wait(cx).await;
+    };
+    tracing::info!(
+        seq = baseline.seq,
+        width = baseline.width,
+        height = baseline.height,
+        "HANGAR_DEV_DEVICE frame painted"
+    );
+    let Some((x, y)) = tap else {
+        return;
+    };
+    // Let launch animations settle so the baseline is what the tap acts on.
+    cx.background_executor().timer(Duration::from_secs(2)).await;
+    let Some(baseline) = painted(cx) else {
+        return;
+    };
+    let sent_at = std::time::Instant::now();
+    let sent = panel.update(cx, |panel, cx| {
+        panel
+            .view()
+            .map(|view| view.read(cx).send(hangar_devices::Input::Tap { x, y }))
+            .is_some()
+    });
+    if !sent {
+        tracing::error!("HANGAR_DEV_DEVICE_TAP: device closed");
+        return;
+    }
+    tracing::info!(x, y, seq = baseline.seq, "HANGAR_DEV_DEVICE_TAP sent");
+    let tap_deadline = sent_at + Duration::from_secs(5);
+    while std::time::Instant::now() < tap_deadline {
+        wait(cx).await;
+        let Some(frame) = painted(cx) else {
+            continue;
+        };
+        let diff = frame.diff_ratio(&baseline);
+        if frame.seq != baseline.seq && diff > 0.002 {
+            tracing::info!(
+                seq = frame.seq,
+                diff_percent = diff * 100.0,
+                after_ms = sent_at.elapsed().as_millis() as u64,
+                "HANGAR_DEV_DEVICE_TAP painted frame changed"
+            );
+            return;
+        }
+    }
+    tracing::error!("HANGAR_DEV_DEVICE_TAP: painted frame did not change within 5 s");
 }
 
 /// `HANGAR_DEV_COMMIT`, `_PUSH`, `_PR`, `_MERGE`, in that order, on the workspace shown in the
@@ -1713,15 +1980,46 @@ impl Render for HangarApp {
                         .on_drag(ChangesResize, |_, _, _, cx| cx.new(|_| ChangesResize)),
                 )
         });
+        let device = self.device.open.then(|| {
+            div()
+                .relative()
+                .h_full()
+                .w(px(self.device.width))
+                .flex_shrink_0()
+                .border_l_1()
+                .border_color(cx.theme().border)
+                .child(self.device_panel.clone())
+                .child(
+                    div()
+                        .id("device-resize")
+                        .absolute()
+                        .left(px(-3.))
+                        .top_0()
+                        .h_full()
+                        .w(px(6.))
+                        .cursor_col_resize()
+                        .on_drag(DeviceResize, |_, _, _, cx| cx.new(|_| DeviceResize)),
+                )
+        });
         h_flex()
             .id("hangar")
             .key_context("Hangar")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::toggle_changes))
+            .on_action(cx.listener(Self::toggle_device))
+            .on_action(cx.listener(Self::toggle_device_stats))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ChangesResize>, window, cx| {
-                    let width = event.bounds.right() - event.event.position.x;
+                    // The device panel, when open, is right of the changes panel.
+                    let right = event.bounds.right() - px(this.device_width_on_screen());
+                    let width = right - event.event.position.x;
                     this.resize_changes(width.as_f32(), window, cx);
+                }),
+            )
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<DeviceResize>, window, cx| {
+                    let width = event.bounds.right() - event.event.position.x;
+                    this.resize_device(width.as_f32(), window, cx);
                 }),
             )
             .size_full()
@@ -1730,6 +2028,7 @@ impl Render for HangarApp {
             .child(self.render_sidebar(cx))
             .child(div().flex_1().min_w_0().h_full().child(panes))
             .children(changes)
+            .children(device)
     }
 }
 
