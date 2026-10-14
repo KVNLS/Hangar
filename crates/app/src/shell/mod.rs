@@ -46,7 +46,9 @@ use hangar_usecases::settings::SettingsExt as _;
 
 use crate::agents::{self, AgentChoice, AgentPreset};
 use crate::changes::review::ReviewTarget;
-use crate::changes::{ChangesEvent, ChangesPanel, ExitReview, PanelSource, WorkspaceDiff};
+use crate::changes::{
+    ChangesEvent, ChangesPanel, ExitReview, PanelSource, WorkspaceAgent, WorkspaceDiff,
+};
 use crate::chat_view::{ChatEvent, ChatView};
 use crate::device_panel::{DevicePanel, DevicePanelEvent};
 use crate::device_pool::{DevicePool, NoticeLevel, PoolEvent, WorkspaceRef};
@@ -406,6 +408,12 @@ impl HangarApp {
         let (pane_sizes, pane_sizes_sub) = Self::new_pane_sizes(window, cx);
 
         let changes_panel = cx.new(ChangesPanel::new);
+        let shell = cx.entity().downgrade();
+        changes_panel.update(cx, |panel, _| {
+            panel.set_agent_probe(Box::new(move |ws, cx| {
+                shell.upgrade()?.read(cx).workspace_agent(ws)
+            }))
+        });
         let changes_sub = cx.subscribe_in(
             &changes_panel,
             window,
@@ -598,6 +606,15 @@ impl HangarApp {
         .detach();
     }
 
+    fn workspace_agent(&self, ws: WorkspaceId) -> Option<WorkspaceAgent> {
+        let live = self.live.sessions.get(&ws)?;
+        Some(WorkspaceAgent {
+            name: live.agent_name.clone(),
+            kind: live.session.agent.clone(),
+            live: !live.session.status.is_terminal(),
+        })
+    }
+
     fn save_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agent = self.agent_setup.agent.to_string();
         self.persist(window, cx, move |store| ops::save_agent(store, &agent));
@@ -613,6 +630,8 @@ impl HangarApp {
         match loaded {
             Ok((store, loaded)) => {
                 self.store = Some(store.clone());
+                self.changes_panel
+                    .update(cx, |panel, cx| panel.set_store(store.clone(), cx));
                 self.work.projects = ProjectList::new(loaded.entries);
                 self.live.saved_chats = loaded.chats;
                 let workspaces: Vec<WorkspaceRef> = self

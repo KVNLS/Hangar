@@ -3,19 +3,27 @@
 
 use anyhow::anyhow;
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use std::sync::Arc;
+
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{IconName, Sizable as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    Disableable as _, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
+};
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
 use hangar_core::changes::ChangedPath;
-use hangar_core::ports::CodeHost;
+use hangar_core::ports::{CodeHost, Store};
 use hangar_core::review::{MergeOutcome, MergeStrategy, PullOutcome, PushOutcome, ReviewError};
 
-use super::{ChangesPanel, CommitBox};
+use hangar_usecases::settings::SettingsExt as _;
+
+use super::{AgentProbe, ChangesPanel, CommitBox, WorkspaceAgent};
 use crate::changes::dialogs::{MergeDialog, PrDialog};
 use crate::changes::model::short_sha;
 use crate::changes::review::{self, PrRequest, ReviewTarget};
+use crate::setting_keys;
 use crate::ui::components::UiButton;
 use crate::ui::{ActiveTokens as _, TypeScale as _};
 
@@ -290,40 +298,137 @@ impl ChangesPanel {
             .is_some_and(|s| self.info.contains_key(&s.workspace))
     }
 
+    /// Where the trailer setting is read from and saved.
+    pub fn set_store(&mut self, store: Arc<dyn Store>, cx: &mut Context<Self>) {
+        self.store = Some(store.clone());
+        cx.spawn(async move |this, cx| {
+            let saved = cx
+                .background_executor()
+                .spawn(async move { store.get_setting(&setting_keys::COAUTHOR_TRAILER) })
+                .await;
+            match saved {
+                Ok(Some(on)) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.coauthor = on;
+                        cx.notify();
+                    });
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(%err, "unreadable co-author trailer setting"),
+            }
+        })
+        .detach();
+    }
+
+    fn set_coauthor(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.coauthor = on;
+        cx.notify();
+        if let Some(store) = self.store.clone() {
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(err) = store.set_setting(&setting_keys::COAUTHOR_TRAILER, &on) {
+                        tracing::warn!(%err, "failed to save the co-author trailer setting");
+                    }
+                })
+                .detach();
+        }
+    }
+
+    /// How the panel learns which agent a workspace runs.
+    pub fn set_agent_probe(&mut self, probe: AgentProbe) {
+        self.agent_probe = Some(probe);
+    }
+
+    pub(super) fn workspace_agent(&self, cx: &App) -> Option<WorkspaceAgent> {
+        let workspace = self.workspace()?;
+        (self.agent_probe.as_ref()?)(workspace, cx)
+    }
+
+    /// The trailer the next commit gets, if the toggle is on and there is an agent to credit.
+    fn trailer(&self, cx: &App) -> Option<String> {
+        if !self.coauthor {
+            return None;
+        }
+        review::coauthor_trailer(&self.workspace_agent(cx)?.kind)
+    }
+
     fn commit_box(
         &mut self,
         workspace: WorkspaceId,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<TextareaState> {
+    ) -> (Entity<InputState>, Entity<TextareaState>) {
         if let Some(existing) = self.commit_boxes.get(&workspace) {
-            return existing.input.clone();
+            return (existing.subject.clone(), existing.body.clone());
         }
-        let input = cx.new(|cx| {
+        // No task text is stored per workspace: the name is the best default subject.
+        let name = self
+            .source
+            .as_ref()
+            .map(|s| s.name.to_string())
+            .unwrap_or_default();
+        let subject = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Subject")
+                .default_value(name)
+        });
+        let body = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Commit message")
+                .placeholder("Description (optional)")
                 .auto_grow(2, 8)
         });
-        let change = cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
+        let subscriptions = vec![
+            cx.subscribe(&subject, |_, _, _: &InputEvent, cx| cx.notify()),
+            cx.subscribe_in(&body, window, |this, _, event: &InputEvent, window, cx| {
+                // The textarea keeps ⌘⏎ (it inserts a newline); commit from here instead.
+                if let InputEvent::PressEnter {
+                    secondary: true, ..
+                } = event
+                {
+                    this.commit_shortcut(window, cx);
+                }
+                cx.notify();
+            }),
+        ];
         self.commit_boxes.insert(
             workspace,
             CommitBox {
-                input: input.clone(),
-                _change: change,
+                subject: subject.clone(),
+                body: body.clone(),
+                _subscriptions: subscriptions,
             },
         );
-        input
+        (subject, body)
+    }
+
+    /// ⌘⏎: commits when the Commit button would.
+    pub(super) fn commit_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        if self.current_busy().is_some() {
+            return;
+        }
+        let (subject, _) = self.commit_box(workspace, window, cx);
+        if review::commit_blocker(&subject.read(cx).value(), self.staged).is_none() {
+            self.commit_clicked(window, cx);
+        }
     }
 
     fn commit_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workspace) = self.workspace() else {
             return;
         };
-        let input = self.commit_box(workspace, window, cx);
-        let message = input.read(cx).value().to_string();
+        let (subject, body) = self.commit_box(workspace, window, cx);
+        let message = review::commit_message(
+            &subject.read(cx).value(),
+            &body.read(cx).value(),
+            self.trailer(cx).as_deref(),
+        );
         let task = self.commit(message, cx);
         Self::notify(task, "Commit", window, cx, move |oid, window, cx| {
-            input.update(cx, |state, cx| state.set_value("", window, cx));
+            subject.update(cx, |state, cx| state.set_value("", window, cx));
+            body.update(cx, |state, cx| state.set_value("", window, cx));
             window.push_notification(
                 Notification::success(format!("Committed {}", short_sha(&oid))),
                 cx,
@@ -477,9 +582,23 @@ impl ChangesPanel {
             .unwrap_or_default();
         let busy = self.busy.get(&workspace).copied();
         let info = self.info.get(&workspace).cloned();
-        let input = self.commit_box(workspace, window, cx);
-        let message = input.read(cx).value().to_string();
-        let commit_blocker = review::commit_blocker(&message, self.staged);
+        let (subject, body) = self.commit_box(workspace, window, cx);
+        let commit_blocker = review::commit_blocker(&subject.read(cx).value(), self.staged);
+        let agent = self.workspace_agent(cx);
+        let trailer = agent
+            .as_ref()
+            .and_then(|a| review::coauthor_trailer(&a.kind));
+        let coauthor = Checkbox::new("review-coauthor")
+            .label("Co-authored-by agent trailer")
+            .small()
+            .checked(self.coauthor && trailer.is_some())
+            .disabled(trailer.is_none())
+            .tooltip(match (&agent, &trailer) {
+                (_, Some(trailer)) => trailer.clone(),
+                (Some(agent), None) => format!("{} has no co-author identity", agent.name),
+                (None, None) => "No agent has run in this workspace".to_owned(),
+            })
+            .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_coauthor(*checked, cx)));
         let can_stage_all = self.stage.values().any(|c| c.unstaged || !c.staged);
         let t = cx.tokens();
 
@@ -547,6 +666,7 @@ impl ChangesPanel {
                 UiButton::new("review-commit")
                     .icon(IconName::Check)
                     .label("Commit")
+                    .kbd("⌘⏎")
                     .tooltip(commit_blocker.unwrap_or("Commit the staged files"))
                     .disabled(busy.is_some() || commit_blocker.is_some())
                     .on_click(cx.listener(|this, _, window, cx| this.commit_clicked(window, cx))),
@@ -589,7 +709,9 @@ impl ChangesPanel {
                     .into_iter()
                     .map(|note| div().text_size(px(11.)).text_color(t.tx3).child(note)),
             )
-            .child(Textarea::new(&input).small())
+            .child(Input::new(&subject).small())
+            .child(Textarea::new(&body).small())
+            .child(coauthor)
             .child(commit_row)
             .child(share_row)
             .into_any_element()

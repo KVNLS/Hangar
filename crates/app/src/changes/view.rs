@@ -11,15 +11,15 @@ use std::time::Instant;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::Icon;
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::TextareaState;
+use gpui_kit::component::input::{InputState, TextareaState};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, StyledExt as _, Theme, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_core::WorkspaceId;
 use hangar_core::changes::{ChangedPath, FileDiff, FileStatus, LineKind};
-use hangar_core::ports::CodeHost;
+use hangar_core::ports::{CodeHost, Store};
+use hangar_core::{AgentKind, WorkspaceId};
 
 use super::highlight::{RowStyles, highlight_rows};
 use super::language::language_for_path;
@@ -58,9 +58,23 @@ struct Source {
 
 /// One commit message box per workspace, so drafts survive switching panes.
 struct CommitBox {
-    input: Entity<TextareaState>,
-    _change: Subscription,
+    subject: Entity<InputState>,
+    body: Entity<TextareaState>,
+    _subscriptions: Vec<Subscription>,
 }
+
+/// The agent a workspace runs (or last ran), as the shell knows it.
+#[derive(Clone, Debug)]
+pub struct WorkspaceAgent {
+    pub name: SharedString,
+    pub kind: AgentKind,
+    /// Still running, so a prompt can reach it.
+    pub live: bool,
+}
+
+/// Looks up a workspace's agent. Called while rendering and from click handlers only, never
+/// from inside an update of the shell.
+pub type AgentProbe = Box<dyn Fn(WorkspaceId, &App) -> Option<WorkspaceAgent>>;
 
 /// The diff on screen. Rows and styles always belong to `file`.
 struct Shown {
@@ -96,6 +110,10 @@ pub struct ChangesPanel {
     info_tasks: HashMap<WorkspaceId, Task<()>>,
     busy: HashMap<WorkspaceId, Busy>,
     commit_boxes: HashMap<WorkspaceId, CommitBox>,
+    /// Credit the workspace's agent with a `Co-authored-by` trailer (saved setting).
+    coauthor: bool,
+    store: Option<Arc<dyn Store>>,
+    agent_probe: Option<AgentProbe>,
     /// Full-width review screen instead of the side panel.
     wide: bool,
     /// Side-by-side diff on the review screen.
@@ -110,7 +128,7 @@ pub struct ChangesPanel {
     _theme: Subscription,
 }
 
-actions!(changes, [ExitReview]);
+actions!(changes, [ExitReview, CommitStaged]);
 
 #[derive(Clone, Copy, Debug)]
 pub struct ReviewStats {
@@ -157,6 +175,9 @@ impl ChangesPanel {
             info_tasks: HashMap::new(),
             busy: HashMap::new(),
             commit_boxes: HashMap::new(),
+            coauthor: true,
+            store: None,
+            agent_probe: None,
             wide: false,
             split_view: true,
             base_names: HashMap::new(),
@@ -841,6 +862,9 @@ impl ChangesPanel {
             .key_context("ReviewScreen")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &ExitReview, _, cx| cx.emit(ChangesEvent::ExitReview)))
+            .on_action(
+                cx.listener(|this, _: &CommitStaged, window, cx| this.commit_shortcut(window, cx)),
+            )
             .bg(t.app)
             .child(top)
             .child(
@@ -995,6 +1019,10 @@ impl Render for ChangesPanel {
         };
         v_flex()
             .size_full()
+            .key_context("ChangesPanel")
+            .on_action(
+                cx.listener(|this, _: &CommitStaged, window, cx| this.commit_shortcut(window, cx)),
+            )
             .bg(cx.tokens().panel)
             .child(header)
             .child(body)

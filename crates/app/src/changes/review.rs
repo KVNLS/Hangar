@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
+use hangar_core::AgentKind;
 use hangar_core::changes::{ChangedPath, Status};
 use hangar_core::ports::CodeHost;
 use hangar_core::review::{
@@ -65,14 +66,47 @@ pub fn resolve_base_name(worktree: &Path, base: &str) -> Option<String> {
 }
 
 /// Why Commit is disabled, if it is.
-pub fn commit_blocker(message: &str, staged: usize) -> Option<&'static str> {
+pub fn commit_blocker(subject: &str, staged: usize) -> Option<&'static str> {
     if staged == 0 {
         Some("Stage files to commit")
-    } else if message.trim().is_empty() {
-        Some("Write a commit message")
+    } else if subject.trim().is_empty() {
+        Some("Write a commit subject")
     } else {
         None
     }
+}
+
+/// `Co-authored-by: Claude <noreply@anthropic.com>` for an agent preset; `None` for a shell or
+/// a custom command (no one to credit).
+pub fn coauthor_trailer(agent: &AgentKind) -> Option<String> {
+    let (name, email) = match agent {
+        AgentKind::Claude => ("Claude", "noreply@anthropic.com"),
+        AgentKind::Codex => ("Codex", "noreply@openai.com"),
+        AgentKind::OpenCode => ("OpenCode", "noreply@opencode.ai"),
+        AgentKind::Gemini => ("Gemini", "noreply@google.com"),
+        AgentKind::Shell | AgentKind::Custom(_) => return None,
+    };
+    Some(format!("Co-authored-by: {name} <{email}>"))
+}
+
+/// The commit message: subject, body and trailer separated by blank lines. The trailer is left
+/// out when the body already has it.
+pub fn commit_message(subject: &str, body: &str, trailer: Option<&str>) -> String {
+    let mut message = subject.trim().to_owned();
+    let body = body.trim();
+    if !body.is_empty() {
+        message.push_str("\n\n");
+        message.push_str(body);
+    }
+    if let Some(trailer) = trailer.map(str::trim).filter(|t| !t.is_empty())
+        && !body
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case(trailer))
+    {
+        message.push_str("\n\n");
+        message.push_str(trailer);
+    }
+    message
 }
 
 /// The branch's upstream when it is the same-named remote branch (where Push goes). A branch
@@ -291,8 +325,36 @@ mod tests {
     #[test]
     fn commit_and_push_text() {
         assert_eq!(commit_blocker("msg", 0), Some("Stage files to commit"));
-        assert_eq!(commit_blocker(" \n", 2), Some("Write a commit message"));
+        assert_eq!(commit_blocker(" \n", 2), Some("Write a commit subject"));
         assert_eq!(commit_blocker("msg", 1), None);
+
+        let claude = coauthor_trailer(&AgentKind::Claude);
+        assert_eq!(
+            claude.as_deref(),
+            Some("Co-authored-by: Claude <noreply@anthropic.com>")
+        );
+        assert!(
+            coauthor_trailer(&AgentKind::Codex)
+                .unwrap()
+                .contains("Codex <")
+        );
+        assert_eq!(coauthor_trailer(&AgentKind::Shell), None);
+        assert_eq!(coauthor_trailer(&AgentKind::Custom("aider".into())), None);
+        let trailer = claude.as_deref();
+        assert_eq!(commit_message(" Fix it ", "", None), "Fix it");
+        assert_eq!(
+            commit_message("Fix it", " Why.\n", trailer),
+            "Fix it\n\nWhy.\n\nCo-authored-by: Claude <noreply@anthropic.com>"
+        );
+        assert_eq!(
+            commit_message("Fix it", "", trailer),
+            "Fix it\n\nCo-authored-by: Claude <noreply@anthropic.com>"
+        );
+        let signed = "Why.\n\nco-authored-by: Claude <noreply@anthropic.com>";
+        assert_eq!(
+            commit_message("Fix it", signed, trailer),
+            format!("Fix it\n\n{signed}")
+        );
 
         let mut status = Status::default();
         assert_eq!(push_label(&status), "Publish");
