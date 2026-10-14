@@ -193,11 +193,20 @@ impl HangarApp {
                             (true, false) => "not on PATH",
                         }),
                 )
-                .child(
+                .child(if is_default {
+                    // The default row says so instead of showing a disabled button.
+                    div()
+                        .px_2()
+                        .font_mono()
+                        .text_size(px(11.))
+                        .text_color(t.acc)
+                        .child("Default")
+                        .into_any_element()
+                } else {
                     UiButton::new(SharedString::from(format!("default-{}", choice.id)))
                         .label("Make default")
                         .small()
-                        .disabled(is_default || !choice.installed)
+                        .disabled(!choice.installed)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.agent = id.clone();
                             this.agent_chosen_by_user = true;
@@ -207,8 +216,9 @@ impl HangarApp {
                             });
                             this.save_agent(window, cx);
                             cx.notify();
-                        })),
-                )
+                        }))
+                        .into_any_element()
+                })
         });
         v_flex()
             .gap_4()
