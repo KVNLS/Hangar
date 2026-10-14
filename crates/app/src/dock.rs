@@ -1,7 +1,6 @@
 //! The Dock tile: a badge with the number of agents waiting on the user, and a bounce when one
 //! starts waiting while Hangar is in the background. Both are public AppKit and work for an
-//! unbundled `cargo run` binary. Banner notifications (UNUserNotificationCenter) need the .app
-//! bundle: without a bundle identifier `currentNotificationCenter` raises, so none are sent.
+//! unbundled `cargo run` binary. System notifications are in `notify`.
 
 /// The Dock badge for `count` waiting agents: empty (no badge) at zero.
 pub fn badge_label(count: usize) -> String {

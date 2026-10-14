@@ -13,6 +13,7 @@ pub mod dock;
 pub mod files_view;
 pub mod login_env;
 pub mod mcp_host;
+pub mod notify;
 pub mod ops;
 pub mod paths;
 pub mod pty;

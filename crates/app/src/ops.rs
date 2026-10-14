@@ -55,6 +55,7 @@ pub struct Loaded {
     pub appearance: Option<Appearance>,
     pub ollama: Option<OllamaSettings>,
     pub notify_attention: Option<bool>,
+    pub notify_finished: Option<bool>,
     /// "Max concurrent agents".
     pub max_agents: Option<u32>,
     /// Starts that were waiting for a slot when Hangar quit.
@@ -271,6 +272,16 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let notify_finished = match store
+        .get_setting(&setting_keys::NOTIFY_FINISHED)
+        .context("failed to read the notification setting")
+    {
+        Ok(on) => on,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
+    };
     let max_agents = match store
         .get_setting(&setting_keys::MAX_AGENTS)
         .context("failed to read the max concurrent agents setting")
@@ -312,6 +323,7 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
         appearance,
         ollama,
         notify_attention,
+        notify_finished,
         max_agents,
         agent_queue,
         orchestration,
@@ -352,6 +364,12 @@ pub fn save_ollama(store: &dyn Store, ollama: &OllamaSettings) -> anyhow::Result
 pub fn save_notify_attention(store: &dyn Store, on: bool) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::NOTIFY_ATTENTION, &on)
+        .context("failed to save the notification setting")
+}
+
+pub fn save_notify_finished(store: &dyn Store, on: bool) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::NOTIFY_FINISHED, &on)
         .context("failed to save the notification setting")
 }
 

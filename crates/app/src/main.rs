@@ -158,6 +158,7 @@ fn run_app() {
             if let Err(err) = hangar_app::ui::init(component::ThemeMode::Dark, cx) {
                 tracing::error!("design system init failed, using the default theme: {err:#}");
             }
+            hangar_app::notify::init();
             hangar_app::terminal_view::init(cx);
             hangar_app::chat_view::init(cx);
             hangar_app::changes::init(cx);

@@ -648,6 +648,14 @@ fn notify_attention_round_trips() {
 }
 
 #[test]
+fn notify_finished_round_trips() {
+    let f = fixture();
+    assert_eq!(load(&f.store).unwrap().notify_finished, None);
+    save_notify_finished(&f.store, false).unwrap();
+    assert_eq!(load(&f.store).unwrap().notify_finished, Some(false));
+}
+
+#[test]
 fn device_settings_round_trip() {
     use crate::device_panel::{DeviceKey, Platform};
 

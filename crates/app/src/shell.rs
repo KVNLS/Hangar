@@ -831,6 +831,9 @@ impl HangarApp {
                 if let Some(on) = loaded.notify_attention {
                     self.attention.enabled = on;
                 }
+                if let Some(on) = loaded.notify_finished {
+                    self.attention.notify_finished = on;
+                }
                 if let Some(on) = loaded.orchestration {
                     self.apply_orchestration(on);
                 }
