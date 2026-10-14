@@ -617,3 +617,59 @@ fn gh_unauthenticated_and_missing() {
         Err(Error::GhMissing)
     ));
 }
+
+#[test]
+fn push_never_goes_to_a_tracked_base_branch() {
+    let fx = Fixture::new();
+    let main_before = git(&fx.origin, &["rev-parse", "main"]).trim().to_owned();
+
+    // A branch started from `origin/main` by plain git tracks it.
+    let tracked = fx.root.join("worktrees").join("tracked");
+    git(
+        &fx.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--track",
+            "-b",
+            "hangar/tracked",
+            tracked.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    assert_eq!(
+        git(&tracked, &["rev-parse", "--abbrev-ref", "@{u}"]).trim(),
+        "origin/main"
+    );
+    assert_eq!(upstream(&tracked).unwrap(), None);
+    fx.write(&tracked, "t.txt", "t\n");
+    stage(&tracked, &[p("t.txt")]).unwrap();
+    let head = commit(&tracked, "t", CommitOptions::default()).unwrap();
+
+    let out = push(&tracked, None).unwrap();
+    assert!(out.set_upstream);
+    assert_eq!(git(&fx.origin, &["rev-parse", "main"]).trim(), main_before);
+    assert_eq!(
+        git(&fx.origin, &["rev-parse", "hangar/tracked"]).trim(),
+        head
+    );
+    assert_eq!(
+        upstream(&tracked).unwrap().unwrap().name,
+        "origin/hangar/tracked"
+    );
+
+    // `create` from a remote-tracking base does not set up tracking at all.
+    let wt = fx.root.join("worktrees").join("from-origin");
+    create(
+        &fx.repo,
+        &CreateOptions {
+            branch: "hangar/from-origin".into(),
+            base: Some("origin/main".into()),
+            path: wt.clone(),
+            reuse_existing_branch: false,
+        },
+    )
+    .unwrap();
+    assert!(status(&wt).unwrap().upstream.is_none());
+}

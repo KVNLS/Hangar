@@ -161,7 +161,9 @@ pub struct Upstream {
     pub gone: bool,
 }
 
-/// Upstream of the checked-out branch; `None` when detached or none is set.
+/// Upstream of the checked-out branch; `None` when detached, when none is set, or when it
+/// tracks a differently named branch (e.g. the base it was started from): only a same-named
+/// branch on the remote is where [`push`] goes.
 pub fn upstream(worktree: &Path) -> Result<Option<Upstream>> {
     let Some(branch) = current_branch(worktree)? else {
         return Ok(None);
@@ -182,7 +184,9 @@ fn branch_upstream(worktree: &Path, branch: &str) -> Result<Option<Upstream>> {
     else {
         return Ok(None);
     };
-    if name.is_empty() || remote.is_empty() {
+    // A branch started from `origin/main` may track it; pushing "to the upstream" would then
+    // push the workspace onto the base. Only a same-named remote branch counts.
+    if name.is_empty() || remote.is_empty() || remote_ref != format!("refs/heads/{branch}") {
         return Ok(None);
     }
     let gone = parts.next().is_some_and(|t| t.contains("gone"));
@@ -227,8 +231,9 @@ pub struct PushOutcome {
     pub up_to_date: bool,
 }
 
-/// Pushes the checked-out branch. With an upstream it pushes there; otherwise to `remote`
-/// (default `origin`, or the only remote) with `-u`. Never forces.
+/// Pushes the checked-out branch to the same-named branch on the remote. With such an
+/// upstream it pushes there; otherwise to `remote` (default `origin`, or the only remote)
+/// with `-u`, replacing any upstream that pointed at another branch. Never forces.
 pub fn push(worktree: &Path, remote: Option<&str>) -> Result<PushOutcome> {
     let branch = current_branch(worktree)?.ok_or(Error::DetachedHead)?;
     let git = Git::new(worktree);
