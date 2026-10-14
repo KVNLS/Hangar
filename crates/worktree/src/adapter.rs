@@ -89,6 +89,7 @@ impl VersionControl for GitCli {
                 .filter(|c| c.kind != ChangeKind::Untracked)
                 .count(),
             untracked: status.untracked,
+            submodules: crate::initialized_submodules(worktree).map_err(PortError::new)?,
         })
     }
 

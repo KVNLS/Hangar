@@ -81,7 +81,8 @@ fn worktree_lifecycle_through_the_port() {
         vc.change_counts(&path).unwrap(),
         ChangeCounts {
             uncommitted: 1,
-            untracked: 1
+            untracked: 1,
+            submodules: 0,
         }
     );
     git(&path, &["add", "-A"]);
@@ -96,4 +97,63 @@ fn worktree_lifecycle_through_the_port() {
     assert!(!err.to_string().is_empty());
     vc.delete_branch(&repo, "hangar/x", true).unwrap();
     assert!(!vc.branch_exists(&repo, "hangar/x").unwrap());
+}
+
+#[test]
+fn initialized_submodules_are_counted_and_need_force_to_remove() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let init = |dir: &Path| {
+        fs::create_dir(dir).unwrap();
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["config", "user.name", "Hangar Test"]);
+        git(dir, &["config", "user.email", "test@hangar.invalid"]);
+        git(dir, &["config", "commit.gpgsign", "false"]);
+        fs::write(dir.join("README.md"), "one\n").unwrap();
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "--no-verify", "-q", "-m", "initial"]);
+    };
+    let (lib, repo) = (root.join("lib"), root.join("repo"));
+    init(&lib);
+    init(&repo);
+    let file = ["-c", "protocol.file.allow=always"];
+    git(
+        &repo,
+        &[
+            file[0],
+            file[1],
+            "submodule",
+            "add",
+            "-q",
+            lib.to_str().unwrap(),
+            "lib",
+        ],
+    );
+    git(&repo, &["commit", "--no-verify", "-q", "-m", "submodule"]);
+
+    let vc: &dyn VersionControl = &GitCli;
+    let path = root.join("worktrees/x");
+    vc.add_worktree(
+        &repo,
+        &NewWorktree {
+            branch: "hangar/x".into(),
+            base: "main".into(),
+            path: path.clone(),
+        },
+    )
+    .unwrap();
+    // Not initialized yet in the new worktree.
+    assert_eq!(vc.change_counts(&path).unwrap().submodules, 0);
+    git(
+        &path,
+        &[file[0], file[1], "submodule", "update", "-q", "--init"],
+    );
+    let counts = vc.change_counts(&path).unwrap();
+    assert_eq!(
+        (counts.uncommitted, counts.untracked, counts.submodules),
+        (0, 0, 1)
+    );
+
+    assert!(vc.remove_worktree(&repo, &path, false).is_err());
+    vc.remove_worktree(&repo, &path, true).unwrap();
 }

@@ -28,11 +28,11 @@ impl DeleteWorkspaceDialog {
     }
 
     /// The options to delete with, or `None` while the status is still loading. Force is
-    /// only set when the dirty status was shown to the user.
+    /// only set when what it loses (files, submodules) was shown to the user.
     pub fn options(&self) -> Option<DeleteOptions> {
         let summary = self.summary.as_ref()?;
         Some(DeleteOptions {
-            force: summary.as_ref().is_ok_and(DeleteSummary::is_dirty),
+            force: summary.as_ref().is_ok_and(DeleteSummary::needs_force),
             delete_branch: self.delete_branch,
         })
     }
@@ -46,7 +46,7 @@ impl Render for DeleteWorkspaceDialog {
             None => (vec!["Checking the worktree…".to_owned()], muted),
             Some(Ok(summary)) => (
                 summary.describe(&self.workspace.base),
-                if summary.is_dirty() {
+                if summary.needs_force() {
                     theme.danger
                 } else {
                     theme.foreground

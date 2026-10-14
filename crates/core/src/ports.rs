@@ -184,6 +184,9 @@ pub struct ChangeCounts {
     /// Staged, unstaged and conflicted paths.
     pub uncommitted: usize,
     pub untracked: usize,
+    /// Initialized submodules: git keeps their repositories inside the worktree's own git
+    /// directory, so removing the worktree needs `force` and deletes their local commits.
+    pub submodules: usize,
 }
 
 /// The version-control operations the workspace lifecycle needs.

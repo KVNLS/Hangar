@@ -92,6 +92,68 @@ fn create_rolls_back_branch_and_worktree_when_the_row_cannot_be_saved() {
 }
 
 #[test]
+fn create_refuses_a_head_base() {
+    let (store, git) = (FakeStore::default(), FakeGit::default());
+    let project = project(&store);
+    let err = Workspaces::new(&store, &git)
+        .create(
+            &project,
+            &root(),
+            &NewWorkspace {
+                base: Some("HEAD".into()),
+                ..NewWorkspace::named("x")
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, WorkspaceError::BaseIsHead), "{err}");
+    assert!(git.calls().is_empty());
+}
+
+#[test]
+fn branch_names_that_clash_as_paths_are_taken() {
+    // `hangar/dev/sub` exists: `hangar/dev` cannot be created, so the slug moves on.
+    let (store, git) = (
+        FakeStore::default(),
+        FakeGit::with_branches(&["hangar/dev/sub"]),
+    );
+    let proj = project(&store);
+    let ws = Workspaces::new(&store, &git)
+        .create(&proj, &root(), &NewWorkspace::named("dev"))
+        .unwrap();
+    assert_eq!(ws.branch, "hangar/dev-2");
+
+    // A branch named `hangar` blocks every `hangar/<slug>`: refused at once, by name.
+    let (store, git) = (FakeStore::default(), FakeGit::with_branches(&["hangar"]));
+    let proj = project(&store);
+    let err = Workspaces::new(&store, &git)
+        .create(&proj, &root(), &NewWorkspace::named("dev"))
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "branch `hangar/dev` cannot be created next to the existing branch `hangar`"
+    );
+
+    // A chosen branch under an existing one.
+    let (store, git) = (FakeStore::default(), FakeGit::with_branches(&["feature/x"]));
+    let proj = project(&store);
+    let err = Workspaces::new(&store, &git)
+        .create(
+            &proj,
+            &root(),
+            &NewWorkspace {
+                branch: Some("feature/x/y".into()),
+                ..NewWorkspace::named("y")
+            },
+        )
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "branch `feature/x/y` cannot be created next to the existing branch `feature/x`"
+    );
+    assert!(git.calls().is_empty());
+}
+
+#[test]
 fn create_refuses_bad_or_taken_branch_names_before_touching_git() {
     let (store, git) = (FakeStore::default(), FakeGit::with_branches(&["taken"]));
     let project = project(&store);
@@ -173,5 +235,30 @@ fn remove_project_lists_the_active_workspaces() {
     assert_eq!(
         err.to_string(),
         "archive or delete its workspaces first: One"
+    );
+}
+
+#[test]
+fn initialized_submodules_need_force_and_are_named() {
+    let summary = DeleteSummary {
+        exists: true,
+        ahead: Some(0),
+        submodules: 2,
+        ..DeleteSummary::default()
+    };
+    assert!(!summary.is_dirty() && summary.needs_force());
+    let lines = summary.describe("main");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("2 initialized submodule(s)")),
+        "{lines:?}"
+    );
+    assert!(
+        !DeleteSummary {
+            exists: true,
+            ..DeleteSummary::default()
+        }
+        .needs_force()
     );
 }

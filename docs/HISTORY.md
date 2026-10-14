@@ -533,3 +533,15 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   workspace no longer exists (this database's assignments only). Seen live with a throwaway copy; the
   Delete button itself was not clicked (it reuses the pool's `delete_clone`).
 
+## Workspace edge cases (2026-10-12, branch `workspace-edges`)
+- A repository without commits is refused when added ("no commits yet").
+- A project base is never the literal `HEAD`: with a detached HEAD and no main/master, the only local
+  branch is used, else the user is asked to check one out; `create` refuses a `HEAD` base left by older
+  projects.
+- Branch names that clash as paths (`hangar` vs `hangar/dev`, `hangar/dev` vs `hangar/dev/sub`) count as
+  taken for the slug or are refused by name; the slug probe reads the branch list once.
+- Initialized submodules are counted (`ChangeCounts.submodules`); the delete dialog lists them and forces
+  only then, since git will not remove such a worktree otherwise.
+- Tested against real repositories (`app::ops`, `worktree` adapter) and with fakes (`usecases`); not run
+  through the UI.
+
