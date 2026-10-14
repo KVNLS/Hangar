@@ -163,6 +163,11 @@ impl VersionControl for FakeGit {
     fn branch_exists(&self, _: &Path, name: &str) -> PortResult<bool> {
         Ok(self.branches.lock().unwrap().contains(name))
     }
+    fn local_branches(&self, _: &Path) -> PortResult<Vec<String>> {
+        let mut names: Vec<String> = self.branches.lock().unwrap().iter().cloned().collect();
+        names.sort();
+        Ok(names)
+    }
     fn add_worktree(&self, _: &Path, worktree: &NewWorktree) -> PortResult<PathBuf> {
         self.record(format!("add {} from {}", worktree.branch, worktree.base));
         self.branches

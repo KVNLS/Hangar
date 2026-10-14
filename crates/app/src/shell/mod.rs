@@ -37,12 +37,12 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_agents::acp::AcpSession;
 use hangar_core::ports::Store;
+use hangar_core::review::MergeStrategy;
 use hangar_core::{
     AgentState, Project, ProjectId, Session, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
 use hangar_terminal::ExitInfo;
 use hangar_usecases::settings::SettingsExt as _;
-use hangar_worktree::MergeStrategy;
 
 use crate::agents::{self, AgentChoice, AgentPreset};
 use crate::changes::review::ReviewTarget;
@@ -660,10 +660,10 @@ impl HangarApp {
                 cx,
             );
         }
-        let mut gh = hangar_worktree::Gh::new().with_path_env(path.value.clone());
-        if let Some(program) = std::env::var_os("HANGAR_GH").filter(|p| !p.is_empty()) {
-            gh = gh.with_program(program);
-        }
+        let gh = crate::adapters::code_host(
+            path.value.clone(),
+            std::env::var_os("HANGAR_GH").filter(|p| !p.is_empty()),
+        );
         self.changes_panel
             .update(cx, |panel, cx| panel.set_gh(gh, cx));
         // find_program stats files; cheap enough for five presets but keep it off this thread.

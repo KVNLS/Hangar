@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hangar_worktree::{FileDiff, FileStatus, Hunk, LineKind};
+use hangar_core::changes::{FileDiff, FileStatus, Hunk, LineKind};
 
 /// Changed files of a workspace by path. `Arc` so a live update only replaces what changed.
 pub type FileMap = BTreeMap<PathBuf, Arc<FileDiff>>;
@@ -411,7 +411,7 @@ pub fn widest_row(file: &FileDiff, rows: &[DiffRow]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hangar_worktree::DiffLine;
+    use hangar_core::changes::DiffLine;
 
     fn line(kind: LineKind, text: &str) -> DiffLine {
         DiffLine {

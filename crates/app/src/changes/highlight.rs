@@ -8,7 +8,7 @@ use std::sync::Arc;
 use gpui_kit::HighlightStyle;
 use gpui_kit::base::input::Rope;
 use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
-use hangar_worktree::FileDiff;
+use hangar_core::changes::FileDiff;
 
 use super::model::{DiffRow, DisplayLine, Side, side_sources, split_runs};
 
@@ -68,7 +68,7 @@ pub type Theme = Arc<HighlightTheme>;
 mod tests {
     use super::*;
     use crate::changes::model::flatten;
-    use hangar_worktree::{DiffLine, FileStatus, Hunk, LineKind};
+    use hangar_core::changes::{DiffLine, FileStatus, Hunk, LineKind};
 
     #[test]
     fn rust_rows_get_styles_from_both_sides() {

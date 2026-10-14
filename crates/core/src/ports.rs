@@ -5,6 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::changes::{DiffOptions, FileDiff, GitDirs, Status};
+use crate::review::{
+    CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
+    Upstream,
+};
 use crate::{
     Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
@@ -133,6 +137,8 @@ pub trait VersionControl: Send + Sync {
     fn default_branch(&self, repo: &Path) -> PortResult<Option<String>>;
     fn is_valid_branch_name(&self, repo: &Path, name: &str) -> PortResult<bool>;
     fn branch_exists(&self, repo: &Path, name: &str) -> PortResult<bool>;
+    /// Local branch names, for picking a workspace's base.
+    fn local_branches(&self, repo: &Path) -> PortResult<Vec<String>>;
     /// Creates the branch and its worktree; returns the worktree path as created.
     fn add_worktree(&self, repo: &Path, worktree: &NewWorktree) -> PortResult<PathBuf>;
     fn worktrees(&self, repo: &Path) -> PortResult<Vec<ListedWorktree>>;
@@ -163,4 +169,41 @@ pub trait Changes: Send + Sync {
     fn git_dirs(&self, worktree: &Path) -> PortResult<GitDirs>;
     /// The subset of `paths` the repository ignores.
     fn ignored(&self, worktree: &Path, paths: &[PathBuf]) -> PortResult<Vec<PathBuf>>;
+    /// Tracked and untracked, not ignored, files of the worktree, relative to it.
+    fn list_files(&self, worktree: &Path) -> PortResult<Vec<PathBuf>>;
+}
+
+/// The git side of reviewing a workspace: stage, commit, publish, merge into the base.
+pub trait ReviewOps: Send + Sync {
+    fn stage(&self, worktree: &Path, paths: &[PathBuf]) -> Result<(), ReviewError>;
+    fn unstage(&self, worktree: &Path, paths: &[PathBuf]) -> Result<(), ReviewError>;
+    fn stage_all(&self, worktree: &Path) -> Result<(), ReviewError>;
+    /// Commits what is staged; returns the new `HEAD`.
+    fn commit(&self, worktree: &Path, message: &str) -> Result<String, ReviewError>;
+    /// The same-named remote branch the checked-out branch tracks, if any.
+    fn upstream(&self, worktree: &Path) -> Result<Option<Upstream>, ReviewError>;
+    /// Pushes the checked-out branch to its same-named remote branch. Never forces.
+    fn push(&self, worktree: &Path) -> Result<PushOutcome, ReviewError>;
+    /// Rebases local commits onto the fetched upstream; a conflicting rebase is aborted.
+    fn pull_rebase(&self, worktree: &Path) -> Result<PullOutcome, ReviewError>;
+    /// Merges local `branch` into local `base` where `base` is checked out, or refuses.
+    fn merge_into_base(
+        &self,
+        repo: &Path,
+        branch: &str,
+        base: &str,
+        strategy: MergeStrategy,
+        message: &str,
+    ) -> Result<MergeOutcome, ReviewError>;
+    /// Subject of the newest commit in `base..HEAD`.
+    fn last_subject(&self, worktree: &Path, base: &str) -> Result<Option<String>, ReviewError>;
+    fn has_remote(&self, worktree: &Path) -> Result<bool, ReviewError>;
+}
+
+/// Where pull requests live (GitHub through `gh`).
+pub trait CodeHost: Send + Sync {
+    fn status(&self) -> Result<GhStatus, ReviewError>;
+    fn pr_for_branch(&self, worktree: &Path, branch: &str) -> Result<Option<PrInfo>, ReviewError>;
+    /// Opens the pull request; returns its URL.
+    fn create_pr(&self, worktree: &Path, request: &CreatePr) -> Result<String, ReviewError>;
 }

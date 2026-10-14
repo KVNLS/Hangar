@@ -6,6 +6,7 @@ pub mod changes;
 pub mod device;
 mod model;
 pub mod ports;
+pub mod review;
 mod setting;
 mod slug;
 

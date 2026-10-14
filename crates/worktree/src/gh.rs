@@ -6,6 +6,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use hangar_core::review::{CreatePr, GhStatus, PrInfo};
+
 use crate::error::{Error, Result};
 
 /// How to run `gh`: the program and, optionally, the `PATH` it is looked up in and runs with
@@ -23,35 +25,6 @@ impl Default for Gh {
             path_env: None,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GhStatus {
-    Installed {
-        authenticated: bool,
-        /// Logged-in account, when it could be read.
-        account: Option<String>,
-    },
-    Missing,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrInfo {
-    pub number: u64,
-    pub url: String,
-    /// `OPEN`, `CLOSED` or `MERGED`.
-    pub state: String,
-    pub title: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CreatePr {
-    pub base: String,
-    /// Branch the PR is opened from; must already be pushed.
-    pub head: String,
-    pub title: String,
-    pub body: String,
-    pub draft: bool,
 }
 
 impl Gh {

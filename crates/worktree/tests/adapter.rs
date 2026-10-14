@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use hangar_core::ports::{ChangeCounts, NewWorktree, VersionControl};
+use hangar_core::ports::{ChangeCounts, Changes, NewWorktree, VersionControl};
 use hangar_worktree::GitCli;
 use tempfile::TempDir;
 
@@ -59,6 +59,7 @@ fn worktree_lifecycle_through_the_port() {
         .unwrap();
     assert_eq!(created, path);
     assert!(vc.branch_exists(&repo, "hangar/x").unwrap());
+    assert_eq!(vc.local_branches(&repo).unwrap(), ["hangar/x", "main"]);
     let listed = vc.worktrees(&repo).unwrap();
     assert_eq!(listed.len(), 2);
     assert!(listed[0].is_main && !listed[1].is_main);
@@ -68,6 +69,9 @@ fn worktree_lifecycle_through_the_port() {
     assert_eq!(vc.commits_ahead(&path, "main").unwrap(), 0);
     fs::write(path.join("README.md"), "two\n").unwrap();
     fs::write(path.join("new.txt"), "new\n").unwrap();
+    let mut files = Changes::list_files(&GitCli, &path).unwrap();
+    files.sort();
+    assert_eq!(files, [Path::new("README.md"), Path::new("new.txt")]);
     assert_eq!(
         vc.change_counts(&path).unwrap(),
         ChangeCounts {

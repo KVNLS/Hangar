@@ -165,7 +165,7 @@ impl HangarApp {
                         .unwrap_or_default();
                     let branches = repo
                         .as_ref()
-                        .map(|r| hangar_worktree::local_branches(r))
+                        .map(|r| crate::adapters::version_control().local_branches(r))
                         .transpose()
                         .unwrap_or_else(|err| {
                             tracing::warn!("cannot list branches: {err:#}");

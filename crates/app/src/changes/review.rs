@@ -5,31 +5,15 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use hangar_core::Workspace;
-use hangar_worktree::{
-    ChangedPath, CommitOptions, CreatePr, Error as GitError, Gh, GhStatus, MergeStrategy, PrInfo,
-    Status,
+use hangar_core::changes::{ChangedPath, Status};
+use hangar_core::ports::CodeHost;
+use hangar_core::review::{
+    GhStatus, MergeOutcome, MergeStrategy, PrInfo, PushOutcome, ReviewError,
 };
+use hangar_usecases::review::Reviews;
+pub use hangar_usecases::review::{PrRequest, ReviewInfo, ReviewTarget, local_base};
 
-/// What the panel acts on: the workspace and its project's repository.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReviewTarget {
-    pub workspace: Workspace,
-    pub repo: PathBuf,
-}
-
-impl ReviewTarget {
-    /// Local branch to merge into and to open pull requests against.
-    pub fn base_branch(&self) -> String {
-        local_base(&self.workspace.base)
-    }
-}
-
-/// `origin/main` → `main`. Only the `origin/` prefix is stripped: other remotes are rare for a
-/// workspace base and `feature/x` must stay as is.
-pub fn local_base(base: &str) -> String {
-    base.strip_prefix("origin/").unwrap_or(base).to_owned()
-}
+use crate::adapters;
 
 /// Staging state of one listed file, from the worktree status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,8 +135,8 @@ pub fn pr_label(pr: &PrInfo) -> String {
 
 /// Errors the user can act on, worded for the UI; everything else is shown in full.
 pub fn describe(err: &anyhow::Error) -> String {
-    match err.downcast_ref::<GitError>() {
-        Some(GitError::MergeConflicts { paths, base, .. }) => {
+    match err.downcast_ref::<ReviewError>() {
+        Some(ReviewError::MergeConflicts { paths, base, .. }) => {
             let shown: Vec<String> = paths
                 .iter()
                 .take(8)
@@ -174,124 +158,58 @@ pub fn describe(err: &anyhow::Error) -> String {
 /// Merge refusals shown inside the dialog rather than as a notification.
 pub fn is_merge_refusal(err: &anyhow::Error) -> bool {
     matches!(
-        err.downcast_ref::<GitError>(),
+        err.downcast_ref::<ReviewError>(),
         Some(
-            GitError::BaseNotReady { .. }
-                | GitError::MergeConflicts { .. }
-                | GitError::AlreadyMerged { .. }
-                | GitError::EmptyMessage
+            ReviewError::BaseNotReady { .. }
+                | ReviewError::MergeConflicts { .. }
+                | ReviewError::AlreadyMerged { .. }
+                | ReviewError::EmptyMessage
         )
     )
-}
-
-/// What the toolbar needs beyond the live status.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReviewInfo {
-    pub gh: GhStatus,
-    pub pr: Option<PrInfo>,
-    /// Why the PR lookup failed (network, auth); the toolbar still works.
-    pub pr_error: Option<String>,
-    pub last_subject: Option<String>,
-    /// The repository has at least one remote (push and pull requests need one).
-    pub remote: bool,
 }
 
 /// Why push and pull requests are unavailable for lack of a remote.
 pub const NO_REMOTE: &str = "Add a Git remote to publish this branch and open pull requests";
 
-pub fn load_info(gh: &Gh, target: &ReviewTarget) -> ReviewInfo {
-    let ws = &target.workspace;
-    let last_subject = hangar_worktree::Git::new(&ws.worktree_path)
-        .run(["log", "-1", "--format=%s", &format!("{}..HEAD", ws.base)])
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty());
-    let remote = hangar_worktree::Git::new(&ws.worktree_path)
-        .run(["remote"])
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(true);
-    let gh_status = gh.status().unwrap_or_else(|err| {
-        tracing::warn!(%err, "gh auth status failed");
-        GhStatus::Missing
-    });
-    let (pr, pr_error) = if remote && gh_blocker(&gh_status).is_none() {
-        match gh.pr_for_branch(&ws.worktree_path, &ws.branch) {
-            Ok(pr) => (pr, None),
-            Err(err) => {
-                tracing::warn!(%err, branch = %ws.branch, "gh pr view failed");
-                (None, Some(err.to_string()))
-            }
-        }
-    } else {
-        (None, None)
-    };
-    ReviewInfo {
-        gh: gh_status,
-        pr,
-        pr_error,
-        last_subject,
-        remote,
-    }
+pub fn load_info(gh: &dyn CodeHost, target: &ReviewTarget) -> ReviewInfo {
+    Reviews::new(adapters::review_ops(), gh).load_info(target)
 }
 
 pub fn run_stage(worktree: &Path, paths: &[PathBuf], stage: bool) -> anyhow::Result<()> {
+    let git = adapters::review_ops();
     if stage {
-        hangar_worktree::stage(worktree, paths).context("failed to stage")
+        git.stage(worktree, paths).context("failed to stage")
     } else {
-        hangar_worktree::unstage(worktree, paths).context("failed to unstage")
+        git.unstage(worktree, paths).context("failed to unstage")
     }
 }
 
 pub fn run_stage_all(worktree: &Path) -> anyhow::Result<()> {
-    hangar_worktree::stage_all(worktree).context("failed to stage all changes")
+    adapters::review_ops()
+        .stage_all(worktree)
+        .context("failed to stage all changes")
 }
 
 /// Returns the new HEAD.
 pub fn run_commit(worktree: &Path, message: &str) -> anyhow::Result<String> {
-    Ok(hangar_worktree::commit(
-        worktree,
-        message,
-        CommitOptions::default(),
-    )?)
+    Ok(adapters::review_ops().commit(worktree, message)?)
 }
 
-pub fn run_push(worktree: &Path) -> anyhow::Result<hangar_worktree::PushOutcome> {
-    Ok(hangar_worktree::push(worktree, None)?)
+pub fn run_push(worktree: &Path) -> anyhow::Result<PushOutcome> {
+    Ok(adapters::review_ops().push(worktree)?)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrRequest {
-    pub title: String,
-    pub body: String,
-    pub draft: bool,
+pub fn run_pull_rebase(worktree: &Path) -> anyhow::Result<hangar_core::review::PullOutcome> {
+    Ok(adapters::review_ops().pull_rebase(worktree)?)
 }
 
 /// Pushes the branch if the remote lacks commits, then opens the PR. Returns its URL.
 pub fn run_create_pr(
-    gh: &Gh,
+    gh: &dyn CodeHost,
     target: &ReviewTarget,
     request: &PrRequest,
 ) -> anyhow::Result<String> {
-    let ws = &target.workspace;
-    if request.title.trim().is_empty() {
-        anyhow::bail!("the pull request title is empty");
-    }
-    let upstream = hangar_worktree::upstream(&ws.worktree_path)?;
-    if upstream.as_ref().is_none_or(|u| u.ahead > 0 || u.gone) {
-        hangar_worktree::push(&ws.worktree_path, None)
-            .context("failed to push before opening the pull request")?;
-    }
-    let url = gh.create_pr(
-        &ws.worktree_path,
-        &CreatePr {
-            base: target.base_branch(),
-            head: ws.branch.clone(),
-            title: request.title.trim().to_owned(),
-            body: request.body.clone(),
-            draft: request.draft,
-        },
-    )?;
-    Ok(url)
+    Ok(Reviews::new(adapters::review_ops(), gh).create_pr(target, request)?)
 }
 
 /// Returns the new commit on the base branch.
@@ -299,11 +217,10 @@ pub fn run_merge(
     target: &ReviewTarget,
     strategy: MergeStrategy,
     message: &str,
-) -> anyhow::Result<hangar_worktree::MergeOutcome> {
-    Ok(hangar_worktree::merge_into_base(
-        &target.repo,
-        &target.workspace.branch,
-        &target.base_branch(),
+) -> anyhow::Result<MergeOutcome> {
+    Ok(hangar_usecases::review::merge(
+        adapters::review_ops(),
+        target,
         strategy,
         message,
     )?)
@@ -312,7 +229,7 @@ pub fn run_merge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hangar_worktree::ChangeKind;
+    use hangar_core::changes::ChangeKind;
 
     fn change(staged: bool, unstaged: bool) -> ChangedPath {
         ChangedPath {
@@ -411,7 +328,7 @@ mod tests {
 
     #[test]
     fn error_wording() {
-        let conflicts = anyhow::Error::new(GitError::MergeConflicts {
+        let conflicts = anyhow::Error::new(ReviewError::MergeConflicts {
             branch: "hangar/x".into(),
             base: "main".into(),
             paths: (0..10).map(|i| PathBuf::from(format!("f{i}"))).collect(),
@@ -422,7 +339,7 @@ mod tests {
             "{text}"
         );
         assert!(is_merge_refusal(&conflicts));
-        let ready = anyhow::Error::new(GitError::BaseNotReady {
+        let ready = anyhow::Error::new(ReviewError::BaseNotReady {
             reason: "dirty".into(),
         });
         assert!(is_merge_refusal(&ready));

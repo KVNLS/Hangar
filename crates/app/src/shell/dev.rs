@@ -847,7 +847,11 @@ async fn run_review_hooks(
             }
             let path = worktree.clone();
             staged = executor
-                .spawn(async move { hangar_worktree::status(&path).map(|s| s.staged) })
+                .spawn(async move {
+                    crate::adapters::changes()
+                        .status(&path, &[])
+                        .map(|s| s.staged)
+                })
                 .await
                 .unwrap_or(0);
             if staged > 0 {
