@@ -1,17 +1,39 @@
-//! Command palette (⌘K): workspaces (those needing you first) and the app's commands.
+//! Command palette (⌘K): workspaces needing you (all of them while searching), then actions,
+//! device and app commands.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 
 use super::*;
+use crate::device_panel::DeviceKey;
 use crate::ui::components::StateGlyph;
 use crate::ui::{ActiveTokens as _, RADIUS_CARD, TypeScale as _, overlay_shadow};
 
 pub(super) struct Palette {
     state: Entity<CommandState>,
-    /// Workspaces in the order of the first group, to resolve a confirmed row.
-    workspaces: Vec<WorkspaceId>,
+    /// Every active workspace and its state, in sidebar order.
+    workspaces: Vec<(AgentState, WorkspaceId)>,
+}
+
+/// Section indexes of the palette's groups (the workspace group is always first).
+const WORKSPACE_SECTION: usize = 0;
+const DEVICE_SECTION: usize = 2;
+
+/// The first group: workspaces needing you (approval, input, failed) when the query is empty,
+/// every workspace while searching; "needs you" order, sidebar order within a state.
+pub(super) fn workspace_group<T: Copy>(
+    items: &[(AgentState, T)],
+    searching: bool,
+) -> (&'static str, Vec<T>) {
+    let mut rows: Vec<(AgentState, T)> = items
+        .iter()
+        .copied()
+        .filter(|(state, _)| searching || state.needs_you())
+        .collect();
+    rows.sort_by_key(|(state, _)| *state);
+    let label = if searching { "Workspaces" } else { "Needs you" };
+    (label, rows.into_iter().map(|(_, id)| id).collect())
 }
 
 impl HangarApp {
@@ -21,7 +43,7 @@ impl HangarApp {
         }
         let state = cx.new(|cx| CommandState::new(window, cx));
         state.update(cx, |state, cx| state.focus(window, cx));
-        let mut workspaces: Vec<(AgentState, WorkspaceId)> = self
+        let workspaces: Vec<(AgentState, WorkspaceId)> = self
             .work
             .projects
             .entries()
@@ -29,12 +51,7 @@ impl HangarApp {
             .flat_map(|e| e.active())
             .map(|ws| (self.agent_state(ws.id, cx), ws.id))
             .collect();
-        // Stable: within a state, sidebar order.
-        workspaces.sort_by_key(|(state, _)| *state);
-        self.layout.palette = Some(Palette {
-            state,
-            workspaces: workspaces.into_iter().map(|(_, id)| id).collect(),
-        });
+        self.layout.palette = Some(Palette { state, workspaces });
         cx.notify();
     }
 
@@ -49,7 +66,9 @@ impl HangarApp {
     pub(super) fn render_palette(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let palette = self.layout.palette.as_ref()?;
         let t = cx.tokens();
-        let rows = palette.workspaces.iter().filter_map(|id| {
+        let searching = !palette.state.read(cx).query(cx).trim().is_empty();
+        let (group_label, workspaces) = workspace_group(&palette.workspaces, searching);
+        let rows = workspaces.iter().filter_map(|id| {
             let ws = self.work.projects.workspace(*id)?;
             let project = self.work.projects.project(ws.project_id)?;
             let state = self.agent_state(*id, cx);
@@ -86,18 +105,19 @@ impl HangarApp {
         let command = |label: &'static str, icon: Lucide, action: Box<dyn Action>| {
             CommandItem::new().label(label).icon(icon).action(action)
         };
-        let commands = CommandGroup::new().label("Commands").items([
+        let actions = CommandGroup::new().label("Actions").items([
             command("New workspace…", Lucide::Plus, Box::new(NewWorkspace)),
-            command("Review changes", Lucide::FileDiff, Box::new(OpenReview)),
-            command("Build and run", Lucide::Hammer, Box::new(Run)),
-            command("Stop the run", Lucide::Square, Box::new(StopRun)),
             command(
-                "Restart dev server",
-                Lucide::RotateCw,
-                Box::new(RestartServer),
+                "Open overview",
+                Lucide::LayoutGrid,
+                Box::new(ToggleOverview),
             ),
-            command("Overview", Lucide::LayoutGrid, Box::new(ToggleOverview)),
-            command("Settings", Lucide::Settings, Box::new(OpenSettings)),
+            command("Review changes", Lucide::FileDiff, Box::new(OpenReview)),
+            command(
+                "Next needing you",
+                Lucide::ArrowRight,
+                Box::new(NextNeedingYou),
+            ),
             command("Show device", Lucide::Smartphone, Box::new(ShowDeviceTab)),
             command(
                 "Show changes",
@@ -105,11 +125,6 @@ impl HangarApp {
                 Box::new(ShowChangesTab),
             ),
             command("Show files", Lucide::Folder, Box::new(ShowFilesTab)),
-            command(
-                "Next workspace needing you",
-                Lucide::ArrowRight,
-                Box::new(NextNeedingYou),
-            ),
             command("Split pane right", Lucide::Columns2, Box::new(SplitPane)),
             command("Close pane", Lucide::X, Box::new(ClosePane)),
             command("Toggle sidebar", Lucide::PanelLeft, Box::new(ToggleSidebar)),
@@ -119,29 +134,76 @@ impl HangarApp {
                 Box::new(FilterWorkspaces),
             ),
             command("Add project…", Lucide::FolderOpen, Box::new(AddProject)),
+        ]);
+        // Shut-down simulators and emulators the device panel can boot. While the query is empty
+        // only the panel's selected device is offered, so a long simulator list stays out of the way.
+        let picker = self.device_panel.read(cx).picker();
+        let selected = picker.selected().cloned();
+        let boots: Vec<(DeviceKey, SharedString)> = picker
+            .entries()
+            .iter()
+            .filter(|e| e.key.platform.can_boot(&e.info))
+            .filter(|e| searching || selected.as_ref() == Some(&e.key))
+            .map(|e| (e.key.clone(), format!("Boot {}", e.info.name).into()))
+            .collect();
+        let device_commands = [
+            command("Build and run", Lucide::Hammer, Box::new(Run)),
+            command("Stop the run", Lucide::Square, Box::new(StopRun)),
+            command(
+                "Restart dev server",
+                Lucide::RotateCw,
+                Box::new(RestartServer),
+            ),
+        ];
+        let first_boot = device_commands.len();
+        let device = CommandGroup::new()
+            .label("Device")
+            .items(device_commands)
+            .items(
+                boots
+                    .iter()
+                    .map(|(_, label)| CommandItem::new().label(label.clone()).icon(Lucide::Power)),
+            );
+        let app_commands = CommandGroup::new().label("App").items([
             command(
                 "Toggle light / dark theme",
                 Lucide::SunMoon,
                 Box::new(ToggleTheme),
             ),
+            command("Settings", Lucide::Settings, Box::new(OpenSettings)),
         ]);
         let app = cx.entity().downgrade();
-        let workspaces = palette.workspaces.clone();
+        let requery = app.clone();
         let cancel = app.clone();
         let command = Command::new(&palette.state)
             .bordered(false)
             .max_h(px(400.))
             .placeholder("Search workspaces and commands…")
-            .group(CommandGroup::new().label("Workspaces").items(rows))
-            .group(commands)
+            .group(CommandGroup::new().label(group_label).items(rows))
+            .group(actions)
+            .group(device)
+            .group(app_commands)
+            // The first group changes with the query (needs you / all workspaces).
+            .on_query(move |_, _, cx| {
+                let _ = requery.update(cx, |_, cx| cx.notify());
+            })
             .on_confirm(move |ix: IndexPath, window, cx| {
-                let selected = (ix.section == 0)
+                let workspace = (ix.section == WORKSPACE_SECTION)
                     .then(|| workspaces.get(ix.row).copied())
                     .flatten();
+                let boot = (ix.section == DEVICE_SECTION)
+                    .then(|| ix.row.checked_sub(first_boot))
+                    .flatten()
+                    .and_then(|i| boots.get(i))
+                    .map(|(key, _)| key.clone());
                 let _ = app.update(cx, |this, cx| {
                     this.close_palette(window, cx);
-                    if let Some(id) = selected {
+                    if let Some(id) = workspace {
                         this.select_workspace(id, window, cx);
+                    }
+                    if let Some(key) = boot {
+                        this.device_panel
+                            .update(cx, |panel, cx| panel.boot_device(key, window, cx));
                     }
                 });
             })
@@ -193,5 +255,40 @@ impl HangarApp {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the shell glob-imports gpui, whose `test` macro would shadow `#[test]`.
+    use super::workspace_group;
+    use hangar_core::AgentState::*;
+
+    #[test]
+    fn empty_query_lists_only_workspaces_needing_you() {
+        let items = [
+            (Idle, 1),
+            (Failed, 2),
+            (Review, 3),
+            (Approval, 4),
+            (Input, 5),
+            (Working, 6),
+        ];
+        assert_eq!(workspace_group(&items, false), ("Needs you", vec![4, 5, 2]));
+    }
+
+    #[test]
+    fn searching_lists_every_workspace_in_needs_you_order() {
+        let items = [
+            (Idle, 1),
+            (Review, 2),
+            (Approval, 3),
+            (Idle, 4),
+            (Working, 5),
+        ];
+        assert_eq!(
+            workspace_group(&items, true),
+            ("Workspaces", vec![3, 2, 5, 1, 4])
+        );
     }
 }
