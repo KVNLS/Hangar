@@ -81,12 +81,15 @@ Git access is the `git` CLI with porcelain output, not a library.
   `check_ignored`; `hangar-files` Watcher (150 ms debounce) + LiveDiff (incremental status).
   Write → DiffUpdate ~220–245 ms p50 (see spikes/m3-files-notes.md).
 
+- M3 UI: per-workspace changes panel (file list + virtualized diff view, Swift/Kotlin/TS/... highlighting via
+  gpui-component tree-sitter features), sidebar change badges, panel state persisted; LiveDiff started lazily,
+  stopped on archive/delete. Verified end to end: edit → panel update 214 ms.
+
 ## Remaining gaps
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
 
 ## Next
-- M3 UI: per-workspace changes panel (file list + diff view with highlighting) fed by LiveDiff.
 - M3 review actions: commit, push/PR (via `gh` if installed), merge back into base.
 - Then M4 Android device panel.
