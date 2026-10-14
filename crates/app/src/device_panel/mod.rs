@@ -45,6 +45,8 @@ pub enum DevicePanelEvent {
 struct DeviceOption {
     value: SharedString,
     title: SharedString,
+    /// Booted (green dot) or shut down (grey dot).
+    ready: bool,
 }
 
 impl SelectItem for DeviceOption {
@@ -56,6 +58,21 @@ impl SelectItem for DeviceOption {
 
     fn value(&self) -> &Self::Value {
         &self.value
+    }
+
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = cx.tokens();
+        h_flex()
+            .gap(px(6.))
+            .items_center()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .size(px(6.))
+                    .rounded_full()
+                    .bg(if self.ready { t.grn } else { t.tx3 }),
+            )
+            .child(self.title.clone())
     }
 }
 
@@ -463,6 +480,7 @@ impl DevicePanel {
             .map(|e| DeviceOption {
                 value: e.key.value().into(),
                 title: entry_title(e).into(),
+                ready: e.ready,
             })
             .collect();
         let selected: Option<SharedString> = match self.workspace {
