@@ -89,6 +89,17 @@ impl HangarApp {
                     )
                     .child(crumbs)
                     .child(
+                        UiButton::new("overview-toggle")
+                            .icon(Lucide::LayoutGrid)
+                            .label("Overview")
+                            .kbd("⌘⇧O")
+                            .ghost()
+                            .selected(self.screen == Screen::Overview)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.toggle_overview(window, cx)),
+                            ),
+                    )
+                    .child(
                         UiButton::new("device-toggle")
                             .icon(Lucide::Smartphone)
                             .ghost()

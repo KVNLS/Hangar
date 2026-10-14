@@ -6,6 +6,7 @@ mod dialogs;
 mod layout;
 mod lifecycle;
 mod new_workspace;
+mod overview;
 mod palette;
 mod sidebar;
 mod status;
@@ -78,7 +79,8 @@ actions!(
         SubmitSheet,
         CloseSheet,
         OpenPalette,
-        ToggleTheme
+        ToggleTheme,
+        ToggleOverview
     ]
 );
 
@@ -90,6 +92,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-n", NewWorkspace, None),
         KeyBinding::new("cmd-k", OpenPalette, None),
+        KeyBinding::new("cmd-shift-o", ToggleOverview, None),
         KeyBinding::new("cmd-p", FilterWorkspaces, None),
         KeyBinding::new("cmd-o", AddProject, None),
         KeyBinding::new("cmd-1", ShowDeviceTab, None),
@@ -174,6 +177,8 @@ enum Screen {
     Workspace,
     /// Full-width diff review of the focused workspace (⌘⇧R).
     Review,
+    /// Every workspace as a card, grouped by state (⌘⇧O).
+    Overview,
 }
 
 pub struct HangarApp {
@@ -194,6 +199,7 @@ pub struct HangarApp {
     /// Agent presets with their install state (all assumed installed until the PATH is known).
     agent_choices: Vec<AgentChoice>,
     palette: Option<palette::Palette>,
+    overview_by_project: bool,
     creating: HashSet<ProjectId>,
     /// Workspaces with an archive, restore or delete in flight.
     busy: HashSet<WorkspaceId>,
@@ -345,6 +351,7 @@ impl HangarApp {
             new_workspace: None,
             agent_choices: initial_choices,
             palette: None,
+            overview_by_project: false,
             creating: HashSet::new(),
             busy: HashSet::new(),
             diffs: HashMap::new(),

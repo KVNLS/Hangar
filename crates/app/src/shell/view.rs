@@ -14,6 +14,14 @@ impl Render for HangarApp {
         }
         let main = match self.screen {
             Screen::Review => div().flex_1().min_h_0().child(self.changes_panel.clone()),
+            Screen::Overview => div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .when(self.sidebar_open, |this| {
+                    this.child(self.render_sidebar(cx))
+                })
+                .child(self.render_overview(cx)),
             Screen::Workspace => {
                 let right_panel = self.render_right_panel(cx);
                 div()
@@ -60,6 +68,11 @@ impl Render for HangarApp {
                 cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),
             )
             .on_action(|_: &ToggleTheme, window, cx| HangarApp::toggle_theme(window, cx))
+            .on_action(
+                cx.listener(|this, _: &ToggleOverview, window, cx| {
+                    this.toggle_overview(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
                 if let Some(project) = this.current_project() {
                     this.sidebar_open = true;

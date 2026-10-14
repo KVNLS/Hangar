@@ -58,6 +58,8 @@ pub struct DevOptions {
     pub pr: Option<String>,
     /// Open the full-width review screen once the changes panel lists files.
     pub review: bool,
+    /// Open the overview, log what it counts, then go back.
+    pub overview: bool,
     pub merge: Option<MergeStrategy>,
     /// Device id (simulator UDID) to open in the device panel.
     pub device: Option<String>,
@@ -151,6 +153,7 @@ impl DevOptions {
             push: flag("HANGAR_DEV_PUSH"),
             pr: var("HANGAR_DEV_PR"),
             review: flag("HANGAR_DEV_REVIEW"),
+            overview: flag("HANGAR_DEV_OVERVIEW"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
                 "squash" => Some(MergeStrategy::Squash),
@@ -243,6 +246,19 @@ pub(super) async fn run_dev_hooks(
     run_review_hooks(&this, &dev, cx).await;
     if dev.review {
         dev_review(&this, cx).await;
+    }
+    if dev.overview {
+        let _ = this.update_in(cx, |this, window, cx| {
+            this.set_screen(Screen::Overview, window, cx)
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        let _ = this.update_in(cx, |this, window, cx| {
+            let counts = this.state_counts(cx);
+            tracing::info!(?counts, screen = ?this.screen, "HANGAR_DEV_OVERVIEW");
+            this.set_screen(Screen::Workspace, window, cx);
+        });
     }
     let find = |this: &mut HangarApp, hook: &str, slug: &str| {
         let found = this.workspace_by_slug(slug);

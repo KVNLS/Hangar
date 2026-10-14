@@ -10,11 +10,43 @@ use super::*;
 const ACTIVE_WINDOW: Duration = Duration::from_secs(3);
 const ACTIVITY_TICK: Duration = Duration::from_secs(1);
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Activity {
     bytes: u64,
     last_output: Option<Instant>,
     active: bool,
+    /// Last meaningful line on the terminal screen, refreshed when output arrives.
+    pub last_line: Option<SharedString>,
+}
+
+/// Characters agent TUIs draw boxes and prompts with; trimmed from screen lines.
+fn is_decoration(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '\u{2500}'..='\u{259F}' | '>' | '›' | '❯' | '$' | '%' | '#' | '·' | '•' | '*'
+        )
+}
+
+/// The last screen row (bottom-up) that says something: decoration trimmed, at least two
+/// alphanumeric characters.
+pub(super) fn summary_line<I: DoubleEndedIterator<Item = String>>(rows: I) -> Option<String> {
+    rows.rev().find_map(|row| {
+        let text = row.trim_matches(is_decoration).trim();
+        (text.chars().filter(|c| c.is_alphanumeric()).count() >= 2).then(|| text.to_owned())
+    })
+}
+
+/// `now`, `42s`, `11m`, `3h`, `2d` since `then_ms` (Unix milliseconds).
+pub(super) fn age_label(then_ms: i64, now_ms: i64) -> String {
+    let secs = (now_ms - then_ms).max(0) / 1000;
+    match secs {
+        0..=9 => "now".to_owned(),
+        10..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
+    }
 }
 
 /// Changed files, insertions and deletions of a workspace's live diff.
@@ -52,6 +84,10 @@ impl HangarApp {
             if bytes != activity.bytes {
                 activity.bytes = bytes;
                 activity.last_output = Some(now);
+                let snapshot = live.view.read(cx).session().terminal().snapshot();
+                activity.last_line = summary_line((0..snapshot.rows).map(|r| snapshot.row_text(r)))
+                    .map(SharedString::from);
+                changed = true;
             }
             let active = activity
                 .last_output
@@ -93,5 +129,50 @@ impl HangarApp {
             .into_iter()
             .filter_map(|s| counts.get(&s).map(|n| (s, *n)))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the shell glob-imports gpui, whose `test` macro would shadow `#[test]`.
+    use super::{age_label, summary_line};
+
+    fn rows(lines: &[&str]) -> std::vec::IntoIter<String> {
+        lines
+            .iter()
+            .map(|l| (*l).to_owned())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn summary_skips_boxes_prompts_and_blanks() {
+        let screen = rows(&[
+            "⏺ Editing OrderListScreen.kt",
+            "  LazyColumn with sticky headers",
+            "╭──────────────────────╮",
+            "│ >                    │",
+            "╰──────────────────────╯",
+            "",
+        ]);
+        assert_eq!(
+            summary_line(screen).as_deref(),
+            Some("LazyColumn with sticky headers")
+        );
+        assert_eq!(summary_line(rows(&["$ ", "", "│ │"])), None);
+        assert_eq!(
+            summary_line(rows(&["❯ npm test"])).as_deref(),
+            Some("npm test")
+        );
+    }
+
+    #[test]
+    fn ages() {
+        assert_eq!(age_label(0, 5_000), "now");
+        assert_eq!(age_label(0, 42_000), "42s");
+        assert_eq!(age_label(0, 11 * 60_000), "11m");
+        assert_eq!(age_label(0, 3 * 3_600_000), "3h");
+        assert_eq!(age_label(0, 49 * 3_600_000), "2d");
+        assert_eq!(age_label(10_000, 0), "now");
     }
 }

@@ -78,16 +78,26 @@ impl HangarApp {
         let wide = screen == Screen::Review;
         self.changes_panel
             .update(cx, |panel, cx| panel.set_wide(wide, window, cx));
-        // The device panel is not on the review screen: stop streaming while it is hidden.
+        // The device panel is only on the workspace screen: stop streaming while it is hidden.
         if self.device.open {
+            let shown = screen == Screen::Workspace;
             self.device_panel
-                .update(cx, |panel, cx| panel.set_visible(!wide, window, cx));
+                .update(cx, |panel, cx| panel.set_visible(shown, window, cx));
         }
         if !wide {
             window.focus(&self.focus, cx);
             self.focus_terminal(window, cx);
         }
         cx.notify();
+    }
+
+    pub(super) fn toggle_overview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let screen = if self.screen == Screen::Overview {
+            Screen::Workspace
+        } else {
+            Screen::Overview
+        };
+        self.set_screen(screen, window, cx);
     }
 
     pub(super) fn set_changes_open(
