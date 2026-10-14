@@ -10,11 +10,13 @@ use anyhow::{Context as _, anyhow};
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, AgentHandle, PtyAdapter, SpawnContext, UpdateHook};
 use hangar_core::{
-    BRANCH_PREFIX, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
-    WorkspaceId, WorkspaceStatus, branch_name, slugify, unique_slug, worktree_path,
+    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
 };
 use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
+use hangar_usecases::workspaces::Workspaces;
+pub use hangar_usecases::workspaces::{DeleteOptions, DeleteOutcome, DeleteSummary};
+use hangar_worktree::GitCli;
 
 use crate::agents::{self, AgentExtras};
 use crate::setting_keys;
@@ -209,25 +211,7 @@ pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {
 
 /// Registers the repository containing `path`, or returns the existing project for it.
 pub fn add_project(store: &Store, path: &Path) -> anyhow::Result<Project> {
-    let root = hangar_worktree::repo_root(path)
-        .with_context(|| format!("{} is not inside a Git repository", path.display()))?;
-    if let Some(existing) = store
-        .list_projects()?
-        .into_iter()
-        .find(|p| p.repo_path == root)
-    {
-        return Ok(existing);
-    }
-    let base = hangar_worktree::default_branch(&root)
-        .with_context(|| format!("failed to read branches of {}", root.display()))?
-        .unwrap_or_else(|| "HEAD".to_owned());
-    let name = root
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| root.display().to_string());
-    let project = Project::new(name, root, base);
-    store.insert_project(&project)?;
-    Ok(project)
+    Ok(workspaces(store).add_project(path)?)
 }
 
 /// Creates the branch, the worktree and the workspace row. The slug gets a numeric suffix when
@@ -252,89 +236,7 @@ pub fn create_workspace_from(
     base: Option<&str>,
     branch: Option<&str>,
 ) -> anyhow::Result<Workspace> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(anyhow!("workspace name is empty"));
-    }
-    let repo = &project.repo_path;
-    let base = base
-        .map(str::trim)
-        .filter(|b| !b.is_empty())
-        .unwrap_or(&project.default_base)
-        .to_owned();
-    let chosen = branch.map(str::trim).filter(|b| !b.is_empty());
-    if let Some(chosen) = chosen {
-        if !hangar_worktree::is_valid_branch_name(repo, chosen)? {
-            return Err(anyhow!("`{chosen}` is not a valid branch name"));
-        }
-        if hangar_worktree::branch_exists(repo, chosen)? {
-            return Err(anyhow!("branch `{chosen}` already exists"));
-        }
-    }
-    let project_slug = slugify(&project.name);
-    let existing: Vec<String> = store
-        .list_workspaces(project.id)?
-        .into_iter()
-        .map(|ws| ws.slug)
-        .collect();
-    let mut git_error = None;
-    let slug = unique_slug(&slugify(name), |candidate| {
-        if existing.iter().any(|s| s == candidate)
-            || worktree_path(worktrees_root, &project_slug, candidate).exists()
-        {
-            return true;
-        }
-        if chosen.is_some() {
-            return false;
-        }
-        match hangar_worktree::branch_exists(repo, &branch_name(candidate)) {
-            Ok(taken) => taken,
-            Err(err) => {
-                git_error.get_or_insert(err);
-                false
-            }
-        }
-    });
-    if let Some(err) = git_error {
-        return Err(err).context("failed to check existing branches");
-    }
-
-    let branch = chosen.map_or_else(|| branch_name(&slug), str::to_owned);
-    let path = worktree_path(worktrees_root, &project_slug, &slug);
-    let options = hangar_worktree::CreateOptions {
-        branch: branch.clone(),
-        base: Some(base.clone()),
-        path: path.clone(),
-        reuse_existing_branch: false,
-    };
-    let worktree = hangar_worktree::create(repo, &options)
-        .with_context(|| format!("failed to create worktree {}", path.display()))?;
-
-    let workspace = Workspace {
-        id: WorkspaceId::new(),
-        project_id: project.id,
-        name: name.to_owned(),
-        slug,
-        branch,
-        base,
-        worktree_path: worktree.path,
-        status: WorkspaceStatus::Active,
-        created_at: Timestamp::now(),
-    };
-    if let Err(err) = store.insert_workspace(&workspace) {
-        rollback_worktree(repo, &path, &workspace.branch);
-        return Err(err).context("failed to save workspace");
-    }
-    Ok(workspace)
-}
-
-fn rollback_worktree(repo: &Path, path: &Path, branch: &str) {
-    if let Err(err) = hangar_worktree::remove(repo, path, true) {
-        tracing::warn!(%err, "rollback: failed to remove worktree");
-    }
-    if let Err(err) = hangar_worktree::delete_branch(repo, branch, true) {
-        tracing::warn!(%err, "rollback: failed to delete branch");
-    }
+    Ok(workspaces(store).create(project, name, worktrees_root, base, branch)?)
 }
 
 pub struct StartedSession {
@@ -528,15 +430,7 @@ pub fn finish_session(
 
 /// Records that a running session was stopped by Hangar (archive, delete).
 pub fn stop_session(store: &Store, id: SessionId, reason: &str) -> anyhow::Result<()> {
-    store
-        .update_session_status(
-            id,
-            &SessionStatus::Failed {
-                message: format!("stopped: {reason}"),
-            },
-        )
-        .context("failed to record the stopped session")?;
-    Ok(())
+    Ok(workspaces(store).stop_session(id, reason)?)
 }
 
 /// Marks the workspace archived, recording `session` (if any) as stopped.
@@ -545,99 +439,18 @@ pub fn archive_workspace(
     id: WorkspaceId,
     session: Option<SessionId>,
 ) -> anyhow::Result<()> {
-    store
-        .update_workspace_status(id, WorkspaceStatus::Archived)
-        .context("failed to archive the workspace")?;
-    if let Some(session) = session {
-        stop_session(store, session, "workspace archived")?;
-    }
-    Ok(())
+    Ok(workspaces(store).archive(id, session)?)
 }
 
 pub fn restore_workspace(store: &Store, id: WorkspaceId) -> anyhow::Result<()> {
-    store
-        .update_workspace_status(id, WorkspaceStatus::Active)
-        .context("failed to restore the workspace")
-}
-
-/// What deleting a workspace would throw away.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DeleteSummary {
-    /// The worktree directory still exists.
-    pub exists: bool,
-    /// Staged, unstaged and conflicted paths.
-    pub uncommitted: usize,
-    pub untracked: usize,
-    /// Commits on the workspace branch that are not on its base; `None` if unknown.
-    pub ahead: Option<u32>,
-}
-
-impl DeleteSummary {
-    /// Removing the worktree needs `--force` (and loses work).
-    pub fn is_dirty(&self) -> bool {
-        self.uncommitted > 0 || self.untracked > 0
-    }
-
-    pub fn describe(&self, base: &str) -> Vec<String> {
-        if !self.exists {
-            return vec!["The worktree directory no longer exists.".to_owned()];
-        }
-        let mut lines = Vec::new();
-        if self.is_dirty() {
-            lines.push(format!(
-                "{} uncommitted and {} untracked file(s) will be lost.",
-                self.uncommitted, self.untracked
-            ));
-        } else {
-            lines.push("No uncommitted or untracked files.".to_owned());
-        }
-        match self.ahead {
-            Some(0) => lines.push(format!("No commits ahead of {base}.")),
-            Some(n) => lines.push(format!("{n} commit(s) ahead of {base}.")),
-            None => lines.push(format!("Could not count commits ahead of {base}.")),
-        }
-        lines
-    }
+    Ok(workspaces(store).restore(id)?)
 }
 
 /// Reads the worktree's status for the delete confirmation.
 pub fn delete_summary(workspace: &Workspace) -> anyhow::Result<DeleteSummary> {
-    let path = &workspace.worktree_path;
-    if !path.exists() {
-        return Ok(DeleteSummary::default());
-    }
-    let status = hangar_worktree::status(path)
-        .with_context(|| format!("failed to read the status of {}", path.display()))?;
-    let uncommitted = status
-        .changes
-        .iter()
-        .filter(|c| c.kind != hangar_worktree::ChangeKind::Untracked)
-        .count();
-    let ahead = hangar_worktree::Git::new(path)
-        .run(["rev-list", "--count", &format!("{}..HEAD", workspace.base)])
-        .map_err(|err| tracing::warn!(%err, "failed to count commits ahead of base"))
-        .ok()
-        .and_then(|out| out.trim().parse().ok());
-    Ok(DeleteSummary {
-        exists: true,
-        uncommitted,
-        untracked: status.untracked,
-        ahead,
-    })
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DeleteOptions {
-    /// Discard uncommitted and untracked files. Only set after the user saw them listed.
-    pub force: bool,
-    /// Also delete the `hangar/<slug>` branch (never forced: unmerged branches are kept).
-    pub delete_branch: bool,
-}
-
-#[derive(Debug, Default)]
-pub struct DeleteOutcome {
-    /// The workspace is gone but its branch could not be deleted.
-    pub branch_error: Option<String>,
+    Ok(hangar_usecases::workspaces::delete_summary(
+        &GitCli, workspace,
+    )?)
 }
 
 /// Removes the workspace's worktree, prunes, optionally deletes its branch, then deletes its
@@ -648,77 +461,17 @@ pub fn delete_workspace(
     id: WorkspaceId,
     options: DeleteOptions,
 ) -> anyhow::Result<DeleteOutcome> {
-    let workspace = store.get_workspace(id)?;
-    let project = store.get_project(workspace.project_id)?;
-    let repo = &project.repo_path;
-    let path = &workspace.worktree_path;
-
-    if path.exists() {
-        let wanted = canonical(path);
-        let listed = hangar_worktree::list(repo)
-            .with_context(|| format!("failed to list worktrees of {}", repo.display()))?
-            .into_iter()
-            .find(|wt| canonical(&wt.path) == wanted);
-        match listed {
-            Some(wt) if !wt.is_main && !wt.bare => {
-                hangar_worktree::remove(repo, path, options.force)
-                    .with_context(|| format!("failed to remove worktree {}", path.display()))?;
-            }
-            Some(_) => {
-                return Err(anyhow!(
-                    "refusing to delete {}: it is the repository's main working tree",
-                    path.display()
-                ));
-            }
-            None => {
-                return Err(anyhow!(
-                    "refusing to delete {}: it is not a worktree of {}",
-                    path.display(),
-                    repo.display()
-                ));
-            }
-        }
-    }
-    if let Err(err) = hangar_worktree::prune(repo) {
-        tracing::warn!(%err, "git worktree prune failed");
-    }
-
-    let mut outcome = DeleteOutcome::default();
-    if options.delete_branch {
-        if !workspace.branch.starts_with(BRANCH_PREFIX) {
-            outcome.branch_error = Some(format!(
-                "kept branch `{}`: not created by Hangar",
-                workspace.branch
-            ));
-        } else if let Err(err) = hangar_worktree::delete_branch(repo, &workspace.branch, false) {
-            outcome.branch_error = Some(format!("kept branch `{}`: {err}", workspace.branch));
-        }
-    }
-    store
-        .delete_workspace(id)
-        .context("the worktree was removed but the workspace could not be deleted")?;
-    Ok(outcome)
+    Ok(workspaces(store).delete(id, options)?)
 }
 
 /// Forgets the project (and its archived workspaces) without touching the repository or any
 /// worktree on disk. Refused while it has active workspaces.
 pub fn remove_project(store: &Store, id: ProjectId) -> anyhow::Result<()> {
-    let active: Vec<String> = store
-        .list_workspaces(id)?
-        .into_iter()
-        .filter(|w| w.status == WorkspaceStatus::Active)
-        .map(|w| w.name)
-        .collect();
-    if !active.is_empty() {
-        return Err(anyhow!(
-            "archive or delete its workspaces first: {}",
-            active.join(", ")
-        ));
-    }
-    store
-        .delete_project(id)
-        .context("failed to remove project")?;
-    Ok(())
+    Ok(workspaces(store).remove_project(id)?)
+}
+
+fn workspaces(store: &Store) -> Workspaces<'_> {
+    Workspaces::new(store, &GitCli)
 }
 
 /// Session status for a finished program.
@@ -758,7 +511,7 @@ pub fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::agents;
-    use hangar_core::{SessionStatus, Setting};
+    use hangar_core::{SessionStatus, Setting, WorkspaceStatus, branch_name};
     use hangar_store_sqlite::Store;
     use hangar_terminal::ExitInfo;
     use std::path::Path;

@@ -2999,6 +2999,7 @@ dependencies = [
  "hangar-runner",
  "hangar-store-sqlite",
  "hangar-terminal",
+ "hangar-usecases",
  "hangar-worktree",
  "image",
  "libc",
@@ -3019,6 +3020,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -3123,9 +3125,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-usecases"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-worktree"
 version = "0.1.0"
 dependencies = [
+ "hangar-core",
  "libc",
  "serde_json",
  "tempfile",

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use hangar_devices::capacity::{BootRefusal, DeviceCost, HostResources, MAX_SLOTS};
 use serde::{Deserialize, Serialize};
 
-use crate::device_panel::Platform;
+use hangar_core::device::Platform;
 
 /// How long a run or tool call waits in a device's lease queue before giving up.
 pub const LEASE_TIMEOUT: Duration = Duration::from_secs(10 * 60);

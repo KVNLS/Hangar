@@ -12,6 +12,7 @@ publish = false
 [workspace.dependencies]
 hangar-core = { path = "crates/core" }
 hangar-store-sqlite = { path = "crates/store-sqlite" }
+hangar-usecases = { path = "crates/usecases" }
 hangar-worktree = { path = "crates/worktree" }
 hangar-agents = { path = "crates/agents" }
 hangar-terminal = { path = "crates/terminal" }

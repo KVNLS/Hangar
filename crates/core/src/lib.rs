@@ -4,6 +4,7 @@
 mod agent_state;
 pub mod device;
 mod model;
+pub mod ports;
 mod setting;
 mod slug;
 

@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, ffi, params};
 use uuid::Uuid;
 
+use hangar_core::ports::{PortError, PortResult};
 use hangar_core::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Setting, Timestamp,
     Workspace, WorkspaceId, WorkspaceStatus,
@@ -513,4 +514,54 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
         created_at: Timestamp(row.get(6)?),
         ended_at: row.get::<_, Option<i64>>(7)?.map(Timestamp),
     })
+}
+
+impl hangar_core::ports::Store for Store {
+    fn insert_project(&self, project: &Project) -> PortResult<()> {
+        Store::insert_project(self, project).map_err(PortError::new)
+    }
+
+    fn list_projects(&self) -> PortResult<Vec<Project>> {
+        Store::list_projects(self).map_err(PortError::new)
+    }
+
+    fn get_project(&self, id: ProjectId) -> PortResult<Project> {
+        Store::get_project(self, id).map_err(PortError::new)
+    }
+
+    fn delete_project(&self, id: ProjectId) -> PortResult<()> {
+        Store::delete_project(self, id).map_err(PortError::new)
+    }
+
+    fn insert_workspace(&self, workspace: &Workspace) -> PortResult<()> {
+        Store::insert_workspace(self, workspace).map_err(PortError::new)
+    }
+
+    fn list_workspaces(&self, project: ProjectId) -> PortResult<Vec<Workspace>> {
+        Store::list_workspaces(self, project).map_err(PortError::new)
+    }
+
+    fn get_workspace(&self, id: WorkspaceId) -> PortResult<Workspace> {
+        Store::get_workspace(self, id).map_err(PortError::new)
+    }
+
+    fn update_workspace_status(&self, id: WorkspaceId, status: WorkspaceStatus) -> PortResult<()> {
+        Store::update_workspace_status(self, id, status).map_err(PortError::new)
+    }
+
+    fn delete_workspace(&self, id: WorkspaceId) -> PortResult<()> {
+        Store::delete_workspace(self, id).map_err(PortError::new)
+    }
+
+    fn insert_session(&self, session: &Session) -> PortResult<()> {
+        Store::insert_session(self, session).map_err(PortError::new)
+    }
+
+    fn list_sessions(&self, workspace: WorkspaceId) -> PortResult<Vec<Session>> {
+        Store::list_sessions(self, workspace).map_err(PortError::new)
+    }
+
+    fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session> {
+        Store::update_session_status(self, id, status).map_err(PortError::new)
+    }
 }

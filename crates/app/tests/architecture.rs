@@ -14,7 +14,8 @@ use serde_json::Value;
 const ALLOWED: &[(&str, &[&str])] = &[
     ("hangar-core", &[]),
     ("hangar-store-sqlite", &["hangar-core"]),
-    ("hangar-worktree", &[]),
+    ("hangar-usecases", &["hangar-core"]),
+    ("hangar-worktree", &["hangar-core"]),
     ("hangar-terminal", &[]),
     ("hangar-devices", &["hangar-core"]),
     ("hangar-agents", &["hangar-terminal"]),
@@ -29,7 +30,7 @@ const OUTER: &[&str] = &["hangar-app", "hangar-examples"];
 const UI: &[&str] = &["gpui-kit", "gpui", "gpui-pre", "gpui-component"];
 
 /// External crates the domain crate may use: data and error derives only, no I/O or runtime.
-const CORE_EXTERNAL: &[&str] = &["serde", "uuid"];
+const CORE_EXTERNAL: &[&str] = &["serde", "thiserror", "uuid"];
 
 struct Package {
     name: String,
