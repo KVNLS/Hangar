@@ -180,6 +180,7 @@ impl From<Error> for ReviewError {
             Error::AlreadyMerged { branch, base } => Self::AlreadyMerged { branch, base },
             Error::GhMissing => Self::GhMissing,
             Error::GhTimeout { .. } => Self::GhNotAnswering,
+            Error::NotGitHub => Self::NotGitHub,
             other => Self::Other(PortError::new(other)),
         }
     }

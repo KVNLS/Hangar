@@ -616,8 +616,11 @@ impl ChangesPanel {
             .on_click(cx.listener(|this, _, window, cx| this.push_clicked(window, cx)));
 
         let gh_blocker = info.as_ref().and_then(|i| review::gh_blocker(&i.gh));
+        let not_github = info.as_ref().is_some_and(|i| !i.github);
         let pr_blocker = if no_remote {
             Some(review::NO_REMOTE.to_owned())
+        } else if not_github {
+            Some(review::NOT_GITHUB.to_owned())
         } else {
             gh_blocker.clone()
         };

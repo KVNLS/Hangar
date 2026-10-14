@@ -12,6 +12,13 @@ use hangar_core::review::{CreatePr, GhStatus, PrInfo};
 
 use crate::error::{Error, Result};
 
+/// `gh`'s answer in a repository with no GitHub remote.
+fn not_github(stderr: &str) -> bool {
+    stderr.contains(
+        "none of the git remotes configured for this repository point to a known GitHub host",
+    )
+}
+
 /// How long `gh auth status` may take.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -158,6 +165,9 @@ impl Gh {
             let stderr = String::from_utf8_lossy(&out.stderr);
             if stderr.contains("no pull requests found") {
                 return Ok(None);
+            }
+            if not_github(&stderr) {
+                return Err(Error::NotGitHub);
             }
             return Err(Self::failure(&args, &out));
         }

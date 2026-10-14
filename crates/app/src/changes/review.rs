@@ -238,6 +238,8 @@ pub fn is_merge_refusal(err: &anyhow::Error) -> bool {
 
 /// Why push and pull requests are unavailable for lack of a remote.
 pub const NO_REMOTE: &str = "Add a Git remote to publish this branch and open pull requests";
+pub const NOT_GITHUB: &str =
+    "Pull requests need a GitHub remote; this repository's remotes are elsewhere";
 
 pub fn load_info(gh: &dyn CodeHost, target: &ReviewTarget) -> ReviewInfo {
     Reviews::new(adapters::review_ops(), gh).load_info(target)
