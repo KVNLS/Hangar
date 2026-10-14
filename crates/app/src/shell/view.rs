@@ -644,25 +644,23 @@ impl HangarApp {
     ) -> EmptyState {
         let agent = self.agent_for(ws_id);
         let resumable = self.resumable_chat(ws_id, &agent).is_some();
+        // The agent's name goes in the hint, which wraps; the buttons keep short labels so a
+        // narrow pane does not overflow.
+        let name = agent_display_name(&agent);
         let state = EmptyState::new(Lucide::Terminal, "No agent running").hint(if resumable {
-            "Pick up the last conversation or start a new one."
+            format!("Resume the last {name} conversation or start a new one.")
         } else {
-            "Start an agent to work in this workspace."
+            format!("Start {name} to work in this workspace.")
         });
         if self.work.busy.contains(&ws_id) {
             return state;
         }
-        let name = agent_display_name(&agent);
         let start = h_flex()
             .items_center()
             .child(
                 UiButton::new(("empty-start", pane))
                     .icon(Lucide::Play)
-                    .label(if resumable {
-                        format!("Resume {name}")
-                    } else {
-                        format!("Start {name}")
-                    })
+                    .label(if resumable { "Resume" } else { "Start" })
                     .primary()
                     .small()
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -671,9 +669,9 @@ impl HangarApp {
             )
             .child(self.agent_menu(pane, ws_id, agent, cx));
         state.action(
-            h_flex()
-                .justify_center()
-                .gap_2()
+            v_flex()
+                .items_center()
+                .gap_1p5()
                 .child(start)
                 .when(resumable, |this| {
                     this.child(
