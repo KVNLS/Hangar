@@ -928,8 +928,54 @@ mod tests {
         };
         save_device(&f.store, &device).unwrap();
         let loaded = load(&f.store).unwrap();
-        assert_eq!(loaded.device, Some(device));
+        assert_eq!(loaded.device, Some(device.clone()));
         assert!(loaded.settings_error.is_none());
+
+        let android = DeviceLayout {
+            selected: Some(DeviceKey {
+                platform: Platform::Android,
+                id: "emulator-5554".into(),
+            }),
+            ..device
+        };
+        save_device(&f.store, &android).unwrap();
+        assert_eq!(load(&f.store).unwrap().device, Some(android));
+
+        // A value saved before Android existed (platform written as a plain string).
+        #[derive(serde::Serialize)]
+        struct Saved {
+            open: bool,
+            width: f32,
+            selected: SavedKey,
+            stats: bool,
+        }
+        #[derive(serde::Serialize)]
+        struct SavedKey {
+            platform: &'static str,
+            id: &'static str,
+        }
+        f.store
+            .set_setting(
+                DEVICE_SETTING,
+                &Saved {
+                    open: true,
+                    width: 400.0,
+                    selected: SavedKey {
+                        platform: "ios",
+                        id: "U",
+                    },
+                    stats: false,
+                },
+            )
+            .unwrap();
+        let old = load(&f.store).unwrap().device.unwrap();
+        assert_eq!(
+            old.selected,
+            Some(DeviceKey {
+                platform: Platform::Ios,
+                id: "U".into()
+            })
+        );
 
         // Fields added later default when an older value is read.
         #[derive(serde::Serialize)]
