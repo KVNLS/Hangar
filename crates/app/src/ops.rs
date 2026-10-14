@@ -12,11 +12,10 @@ use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext, UpdateHook};
 
 use crate::pty::{self, AgentHandle};
-use hangar_core::{
-    Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
-};
+use hangar_core::{Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId};
 use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
+use hangar_usecases::sessions::Sessions;
 use hangar_usecases::workspaces::Workspaces;
 pub use hangar_usecases::workspaces::{DeleteOptions, DeleteOutcome, DeleteSummary};
 
@@ -359,34 +358,16 @@ pub fn start_acp_session(
 /// Records the outcome of starting an agent: `Running` with its command, or `Failed`.
 fn record_start<T>(
     store: &Store,
-    mut session: Session,
+    session: Session,
     display_name: &str,
     spawned: anyhow::Result<(T, String)>,
 ) -> anyhow::Result<(Session, T, Option<anyhow::Error>)> {
-    match spawned {
-        Ok((agent, command)) => {
-            session.command = command;
-            session.status = SessionStatus::Running;
-            let record_error = store
-                .insert_session(&session)
-                .context("the agent started but its session could not be saved")
-                .err();
-            Ok((session, agent, record_error))
-        }
-        Err(err) => {
-            session.status = SessionStatus::Failed {
-                message: format!("{err:#}"),
-            };
-            session.ended_at = Some(Timestamp::now());
-            let err = err.context(format!("failed to start {display_name}"));
-            match store.insert_session(&session) {
-                Ok(()) => Err(err),
-                Err(record) => {
-                    Err(err.context(format!("the failure could not be saved: {record}")))
-                }
-            }
-        }
-    }
+    let started = Sessions::new(store).record_start(session, display_name, spawned)?;
+    Ok((
+        started.session,
+        started.agent,
+        started.record_error.map(anyhow::Error::new),
+    ))
 }
 
 /// Writes each file with mode 0600, creating missing directories with mode 0700.
@@ -427,12 +408,12 @@ pub fn finish_session(
     id: SessionId,
     status: &SessionStatus,
 ) -> anyhow::Result<Session> {
-    Ok(store.update_session_status(id, status)?)
+    Ok(Sessions::new(store).finish(id, status)?)
 }
 
 /// Records that a running session was stopped by Hangar (archive, delete).
 pub fn stop_session(store: &Store, id: SessionId, reason: &str) -> anyhow::Result<()> {
-    Ok(workspaces(store).stop_session(id, reason)?)
+    Ok(Sessions::new(store).stop(id, reason)?)
 }
 
 /// Marks the workspace archived, recording `session` (if any) as stopped.
@@ -514,7 +495,7 @@ pub fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::agents;
-    use hangar_core::{SessionStatus, Setting, WorkspaceStatus, branch_name};
+    use hangar_core::{SessionStatus, Setting, Timestamp, WorkspaceStatus, branch_name};
     use hangar_store_sqlite::Store;
     use hangar_terminal::ExitInfo;
     use std::path::Path;
@@ -731,12 +712,23 @@ mod tests {
         let Some(agents::AgentPreset::Pty(adapter)) = agents::preset("claude") else {
             panic!("claude is a terminal preset");
         };
-        assert!(
-            start_session(&store, &adapter, &ws, Some("/nonexistent"), Arc::new(|| {})).is_err()
+        let Err(err) = start_session(&store, &adapter, &ws, Some("/nonexistent"), Arc::new(|| {}))
+        else {
+            panic!("claude is not on /nonexistent");
+        };
+        let cause = "claude: `claude` was not found on PATH";
+        assert_eq!(
+            format!("{err:#}"),
+            format!("failed to start Claude Code: {cause}")
         );
         let sessions = store.list_sessions(ws.id).unwrap();
         assert_eq!(sessions.len(), 1);
-        assert!(matches!(sessions[0].status, SessionStatus::Failed { .. }));
+        assert_eq!(
+            sessions[0].status,
+            SessionStatus::Failed {
+                message: cause.to_owned()
+            }
+        );
     }
 
     #[test]
