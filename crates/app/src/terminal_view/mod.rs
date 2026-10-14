@@ -14,6 +14,7 @@ mod stats;
 use std::ops::Range;
 use std::sync::Arc;
 
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use hangar_terminal::{
     ExitInfo, GridSize, Key, SpawnOptions, TerminalConfig, TerminalError, TerminalSession,
@@ -57,9 +58,9 @@ pub struct TerminalViewOptions {
 impl Default for TerminalViewOptions {
     fn default() -> Self {
         Self {
-            font_family: "Menlo".into(),
-            font_size: px(13.),
-            line_height: 1.25,
+            font_family: crate::ui::FONT_MONO.into(),
+            font_size: px(12.),
+            line_height: 1.5,
             option_as_meta: false,
             stats: std::env::var_os("HANGAR_TERM_STATS").is_some_and(|v| v == "1"),
         }
@@ -416,7 +417,14 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let background = self.session.terminal().palette().background;
+        let background = {
+            let palette = crate::ui::theme::terminal_palette(cx.theme().is_dark());
+            let mut terminal = self.session.terminal();
+            if terminal.palette() != &palette {
+                terminal.set_palette(palette);
+            }
+            terminal.palette().background
+        };
         div()
             .id("terminal")
             .key_context(KEY_CONTEXT)

@@ -238,6 +238,11 @@ impl Terminal {
         &self.palette
     }
 
+    /// Replaces the default colours (theme change). Program overrides (OSC 4/10/11/12) still win.
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
+    }
+
     /// Plain-data copy of the visible screen, with colours resolved to RGB.
     pub fn snapshot(&self) -> Snapshot {
         let grid = self.term.grid();
@@ -539,6 +544,22 @@ mod tests {
         let reply = String::from_utf8(t.take_replies()).unwrap();
         // Palette::default background is #16181c.
         assert!(reply.starts_with("\x1b]11;rgb:1616/1818/1c1c"), "{reply:?}");
+    }
+
+    #[test]
+    fn set_palette_changes_defaults_but_not_program_overrides() {
+        let mut t = term(10, 3);
+        t.set_palette(Palette {
+            background: Rgb::from_hex(0x0f1013),
+            ..Palette::default()
+        });
+        assert_eq!(t.snapshot().background, Rgb::from_hex(0x0f1013));
+        t.advance(b"\x1b]11;?\x07");
+        let reply = String::from_utf8(t.take_replies()).unwrap();
+        assert!(reply.starts_with("\x1b]11;rgb:0f0f/1010/1313"), "{reply:?}");
+        t.advance(b"\x1b]11;#ff0000\x07");
+        t.set_palette(Palette::default());
+        assert_eq!(t.snapshot().background, Rgb::from_hex(0xff0000));
     }
 
     #[test]

@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 
 use super::metrics::{RADIUS_CARD, RADIUS_CONTROL};
 use super::text::{FONT_MONO, FONT_UI};
+use hangar_terminal::{Palette as Palette16, Rgb};
+
 use super::tokens::{DARK_HEX, LIGHT_HEX, Palette};
 
 fn hex(v: u32) -> String {
@@ -168,6 +170,25 @@ pub fn init(mode: ThemeMode, cx: &mut App) -> anyhow::Result<()> {
     theme.light_theme = Rc::new(light);
     Theme::change(mode, None, cx);
     Ok(())
+}
+
+/// Terminal default colors for the current appearance: `term` background, `tx` text. Dark keeps
+/// the terminal crate's ANSI set; light uses darker hues that read on a near-white background.
+pub fn terminal_palette(dark: bool) -> Palette16 {
+    let p = if dark { &DARK_HEX } else { &LIGHT_HEX };
+    let rgb = |v: u32| Rgb::from_hex(v >> 8);
+    let mut palette = Palette16::default();
+    if !dark {
+        palette.ansi = [
+            0x17181B, 0xC9362D, 0x1F8049, 0xA8650C, 0x3F5BE0, 0x7647C9, 0x0E7C86, 0x6E7781,
+            0x878B93, 0xE5584F, 0x2A9D5C, 0xC17A12, 0x5B74F0, 0x9466DE, 0x1A98A4, 0x8C959F,
+        ]
+        .map(Rgb::from_hex);
+    }
+    palette.background = rgb(p.term);
+    palette.foreground = rgb(p.tx);
+    palette.cursor = rgb(p.tx2);
+    palette
 }
 
 #[cfg(test)]
