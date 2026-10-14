@@ -25,8 +25,18 @@ impl HangarApp {
             let mut created = Vec::new();
             for name in names {
                 let (agent, target) = (dev.agent.clone(), dev.target.clone());
+                let input = dev.input.clone();
                 let Ok(create) = this.update_in(cx, |this, window, cx| {
-                    this.create_workspace(project.id, name, agent, target, (None, None), window, cx)
+                    this.create_workspace(
+                        project.id,
+                        name,
+                        agent,
+                        target,
+                        (None, None),
+                        input,
+                        window,
+                        cx,
+                    )
                 }) else {
                     break;
                 };
@@ -34,16 +44,6 @@ impl HangarApp {
                     continue;
                 };
                 created.push(workspace_id);
-                if let Some(input) = dev.input.clone() {
-                    let _ = this.update(cx, |this, cx| {
-                        let Some(live) = this.live.sessions.get(&workspace_id) else {
-                            return;
-                        };
-                        if let Err(err) = live.send_text(&input, cx) {
-                            tracing::error!("HANGAR_DEV_INPUT: {err:#}");
-                        }
-                    });
-                }
             }
             created
         })

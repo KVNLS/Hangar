@@ -24,6 +24,7 @@ gpui_kit::assets::icon_assets!(
         GitFork,
         GitPullRequest,
         Hammer,
+        Hourglass,
         House,
         Keyboard,
         LayoutGrid,

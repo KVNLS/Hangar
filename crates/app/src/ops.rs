@@ -45,6 +45,8 @@ pub struct Loaded {
     pub device: Option<DeviceLayout>,
     pub appearance: Option<Appearance>,
     pub ollama: Option<OllamaSettings>,
+    /// "Max concurrent agents".
+    pub max_agents: Option<u32>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -156,6 +158,16 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let max_agents = match store
+        .get_setting(&setting_keys::MAX_AGENTS)
+        .context("failed to read the max concurrent agents setting")
+    {
+        Ok(max_agents) => max_agents,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
+    };
     Ok(Loaded {
         entries,
         chats,
@@ -165,6 +177,7 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
         device,
         appearance,
         ollama,
+        max_agents,
         settings_error,
     })
 }
@@ -197,6 +210,12 @@ pub fn save_ollama(store: &dyn Store, ollama: &OllamaSettings) -> anyhow::Result
     store
         .set_setting(&setting_keys::OLLAMA, ollama)
         .context("failed to save the Ollama settings")
+}
+
+pub fn save_max_agents(store: &dyn Store, limit: u32) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::MAX_AGENTS, &limit)
+        .context("failed to save the max concurrent agents")
 }
 
 pub fn save_agent(store: &dyn Store, agent: &str) -> anyhow::Result<()> {

@@ -284,8 +284,10 @@ impl HangarApp {
                     this.run_focused(window, cx);
                 }))
         });
+        let queued = workspace_id.and_then(|id| Some((id, self.queued_ahead(id)?)));
         let start = workspace.and_then(|ws| {
             let can_start = !self.work.busy.contains(&ws.id)
+                && queued.is_none()
                 && live.is_none_or(|l| l.session.status.is_terminal());
             let ws_id = ws.id;
             let resumable = self
@@ -382,6 +384,12 @@ impl HangarApp {
         let run_view = workspace_id.and_then(|id| self.run_view(id, shown));
         let body = match (run_view, live) {
             (Some(view), _) => body.child(view),
+            (None, _) if let Some((id, ahead)) = queued => body
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(t.term)
+                .child(self.render_queued_pane(id, ahead, cx)),
             (None, Some(live)) => body.child(live.view()),
             (None, None) => body
                 .flex()

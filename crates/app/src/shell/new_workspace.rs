@@ -317,23 +317,17 @@ impl HangarApp {
             id,
         });
         self.close_new_workspace(window, cx);
-        let create =
-            self.create_workspace(project_id, name, agent, target, (base, branch), window, cx);
-        cx.spawn(async move |this, cx| {
-            let id = create.await?;
-            if task.is_empty() {
-                return Some(());
-            }
-            this.update(cx, |this, cx| {
-                let live = this.live.sessions.get(&id)?;
-                if let Err(err) = live.send_text(&task, cx) {
-                    tracing::error!("could not send the task to the agent: {err:#}");
-                }
-                Some(())
-            })
-            .ok()
-            .flatten()
-        })
+        let input = Some(task).filter(|t| !t.is_empty());
+        self.create_workspace(
+            project_id,
+            name,
+            agent,
+            target,
+            (base, branch),
+            input,
+            window,
+            cx,
+        )
         .detach();
     }
 
