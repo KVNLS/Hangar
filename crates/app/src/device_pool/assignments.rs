@@ -7,9 +7,11 @@ use hangar_core::WorkspaceId;
 use crate::device_panel::{DeviceKey, Platform};
 use crate::setting_keys;
 
-use super::backend::{self, Target};
+use hangar_core::device::{Target, clone_name};
+
 use super::policy::{Assignment, LeaseQueue};
 use super::{DevicePool, PoolDevice, PoolKey, State, WorkspaceRef, default_assignment};
+use crate::adapters;
 
 impl DevicePool {
     /// Records the workspace (name, worktree) for later calls that only have its id.
@@ -71,7 +73,7 @@ impl DevicePool {
             if let Some(udid) = clone {
                 let deleted = cx
                     .background_executor()
-                    .spawn(async move { backend::delete_clone(&udid) })
+                    .spawn(async move { adapters::device_catalog(Platform::Ios).delete_clone(&udid) })
                     .await;
                 if let Err(err) = deleted {
                     tracing::warn!(target: "device_pool", "could not delete the replaced simulator: {err:#}");
@@ -176,7 +178,7 @@ impl DevicePool {
             PoolKey::Own(ws) => {
                 let a = self.assignments.get(ws)?;
                 let w = self.workspaces.get(ws)?;
-                let name = backend::clone_name(&w.project, &w.slug);
+                let name = clone_name(&w.project, &w.slug);
                 let target = match a.platform {
                     Platform::Ios => Target::IosOwn {
                         udid: a.own.clone(),

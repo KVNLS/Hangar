@@ -2,6 +2,7 @@
 
 pub mod android;
 pub mod capacity;
+pub mod catalog;
 pub mod contract;
 pub mod geometry;
 pub mod logs;

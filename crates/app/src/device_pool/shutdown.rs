@@ -5,7 +5,8 @@ use std::time::Instant;
 use anyhow::anyhow;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_devices::capacity::Pressure;
+use hangar_core::device::Pressure;
+use hangar_core::ports::PortResult;
 use hangar_usecases::settings::SettingsExt as _;
 
 use crate::device_panel::Platform;
@@ -14,6 +15,7 @@ use crate::setting_keys;
 
 use super::policy::{self, Assignment, LEASE_TIMEOUT};
 use super::{DevicePool, NoticeLevel, PoolEvent, PoolKey, State, backend};
+use crate::adapters;
 
 impl DevicePool {
     /// Shuts a pool device down (no-op when it is not running).
@@ -51,8 +53,9 @@ impl DevicePool {
                 cx.spawn(async move |this, cx| {
                     let result = cx
                         .background_executor()
-                        .spawn(async move { backend::shutdown(platform, &id) })
-                        .await;
+                        .spawn(async move { adapters::device_catalog(platform).shutdown(&id) })
+                        .await
+                        .map_err(anyhow::Error::from);
                     this.update(cx, |pool, cx| pool.finish_shutdown(&key, &result, cx))?;
                     result
                 })
@@ -107,11 +110,7 @@ impl DevicePool {
         }
     }
 
-    pub(super) fn on_monitor(
-        &mut self,
-        pressure: hangar_devices::Result<Pressure>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn on_monitor(&mut self, pressure: PortResult<Pressure>, cx: &mut Context<Self>) {
         let now = Instant::now();
         for device in self.devices.values_mut() {
             for (ws, reply) in device.leases.expire(now, LEASE_TIMEOUT) {
@@ -245,7 +244,7 @@ impl DevicePool {
             // Possibly still running from an earlier launch of Hangar.
             let (platform, target) = (device.platform, device.target.clone());
             return cx.background_executor().spawn(async move {
-                if backend::shutdown_if_running(platform, &target)? {
+                if adapters::device_catalog(platform).shutdown_if_running(&target)? {
                     tracing::info!(target: "device_pool", ?target, "device left from an earlier run shut down");
                 }
                 Ok(())
@@ -260,7 +259,7 @@ impl DevicePool {
         cx.spawn(async move |this, cx| {
             let running = cx
                 .background_executor()
-                .spawn(async { backend::RunningSet::scan() })
+                .spawn(async { backend::running() })
                 .await;
             let _ = this.update(cx, |pool, cx| {
                 let owned: Vec<WorkspaceId> = pool.assignments.keys().copied().collect();
@@ -319,7 +318,7 @@ impl DevicePool {
                             platform: Platform::Ios,
                             own: Some(udid),
                             ..
-                        }) => backend::delete_clone(&udid),
+                        }) => Ok(adapters::device_catalog(Platform::Ios).delete_clone(&udid)?),
                         _ => Ok(()),
                     }
                 })
@@ -357,8 +356,9 @@ impl DevicePool {
         cx.spawn(async move |_, cx| {
             let _ = shutdown.await;
             cx.background_executor()
-                .spawn(async move { backend::delete_clone(&udid) })
-                .await
+                .spawn(async move { adapters::device_catalog(Platform::Ios).delete_clone(&udid) })
+                .await?;
+            Ok(())
         })
     }
 
@@ -379,7 +379,9 @@ impl DevicePool {
         tracing::info!(target: "device_pool", workspace = %ws, serial = %conflict.serial, "shutting down the emulator in the way");
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .spawn(async move { backend::clear_conflict(&conflict) })
+                .spawn(async move {
+                    adapters::device_catalog(Platform::Android).clear_conflict(&conflict)
+                })
                 .await?;
             this.update(cx, |pool, cx| pool.ensure(ws, cx))?.await
         })

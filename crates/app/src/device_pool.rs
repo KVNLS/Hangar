@@ -26,26 +26,22 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use gpui_kit::*;
+use hangar_core::device::capacity::{self, DeviceCost, HostResources, Pressure};
+use hangar_core::device::{Conflict, Target};
+use hangar_core::ports::PortResult;
 use hangar_core::ports::Store;
 use hangar_core::{Setting, WorkspaceId};
-use hangar_devices::capacity::{self, DeviceCost, HostResources, Pressure};
 use hangar_usecases::settings::SettingsExt as _;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::device_panel::{BackendReason, DeviceKey, Platform};
 use crate::device_view::DeviceSession;
-use crate::setting_keys;
-use backend::Target;
+use crate::{adapters, setting_keys};
 use policy::{Assignment, LeaseQueue, Limit};
 
-#[cfg(target_os = "macos")]
-async fn booted_simulators() -> hangar_devices::Result<Vec<String>> {
-    hangar_devices::simctl::booted_udids()
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn booted_simulators() -> hangar_devices::Result<Vec<String>> {
-    Ok(Vec::new())
+async fn booted_simulators() -> PortResult<Vec<String>> {
+    let running = adapters::device_catalog(Platform::Ios).running()?;
+    Ok(running.into_iter().map(|r| r.id).collect())
 }
 
 /// How often memory pressure, lease timeouts, the cap and open simulators are checked.
@@ -204,7 +200,7 @@ struct PoolDevice {
     leases: LeaseQueue<WorkspaceId, LeaseReply>,
     error: Option<String>,
     /// The last boot was blocked by an instance running outside the pool.
-    conflict: Option<backend::Conflict>,
+    conflict: Option<Conflict>,
 }
 
 impl PoolDevice {
@@ -271,7 +267,7 @@ impl DevicePool {
                 cx.background_executor().timer(MONITOR_TICK).await;
                 let pressure = cx
                     .background_executor()
-                    .spawn(async { capacity::pressure_with_override() })
+                    .spawn(async { adapters::host_monitor().pressure() })
                     .await;
                 let Ok(open) = this.update(cx, |pool, _| pool.open_simulators()) else {
                     break;
@@ -303,7 +299,7 @@ impl DevicePool {
             host_error: None,
             pressure: None,
             bases: BTreeMap::new(),
-            android_cost: capacity::android_cost(&hangar_devices::android::AvdCost::DEFAULT),
+            android_cost: adapters::device_catalog(Platform::Android).cost(None),
             assignments: HashMap::new(),
             workspaces: HashMap::new(),
             devices: HashMap::new(),
@@ -372,8 +368,8 @@ impl DevicePool {
                 .background_executor()
                 .spawn(async move {
                     (
-                        capacity::detect(),
-                        backend::cost(Platform::Android, android_base.as_deref()),
+                        adapters::host_monitor().detect(),
+                        adapters::device_catalog(Platform::Android).cost(android_base.as_deref()),
                     )
                 })
                 .await;
@@ -594,7 +590,8 @@ fn default_assignment(
     ) {
         (Some(base), _) => base.clone(),
         (None, Some(last)) => last.id,
-        (None, None) => backend::bases(platform)?
+        (None, None) => adapters::device_catalog(platform)
+            .bases()?
             .into_iter()
             .next()
             .map(|(id, _)| id)

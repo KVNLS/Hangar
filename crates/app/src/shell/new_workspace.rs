@@ -183,7 +183,7 @@ impl HangarApp {
                         .unwrap_or_default();
                     let mut bases = HashMap::new();
                     for platform in Platform::ALL {
-                        match backend::bases(platform) {
+                        match crate::adapters::device_catalog(platform).bases() {
                             Ok(list) => {
                                 bases.insert(platform, list);
                             }

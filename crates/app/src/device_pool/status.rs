@@ -5,8 +5,8 @@ use hangar_core::WorkspaceId;
 use crate::device_panel::{DeviceKey, Platform};
 use crate::device_view::DeviceSession;
 
-use super::backend::{self, Target};
 use super::{DevicePool, DeviceRow, DeviceStatus, PoolKey, State};
+use hangar_core::device::{Target, clone_name};
 
 impl DevicePool {
     /// What the panel shows for the workspace.
@@ -120,7 +120,7 @@ impl DevicePool {
                 rows.push(DeviceRow {
                     key,
                     platform: Platform::Ios,
-                    name: backend::clone_name(&w.project, &w.slug),
+                    name: clone_name(&w.project, &w.slug),
                     state: "not open",
                     busy: false,
                     workspaces: vec![w.name.clone()],

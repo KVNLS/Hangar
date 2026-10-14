@@ -6,7 +6,11 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 
-use hangar_core::ports::{Changes, CodeHost, ReviewOps, Store, ToolProbe, VersionControl};
+use hangar_core::device::Platform;
+use hangar_core::ports::{
+    Changes, CodeHost, HostMonitor, ReviewOps, Store, ToolProbe, VersionControl,
+};
+use hangar_devices::catalog::SystemHost;
 use hangar_store_sqlite::Store as SqliteStore;
 use hangar_worktree::{Gh, GitCli};
 
@@ -14,6 +18,19 @@ use crate::setup_probe::SystemProbe;
 
 pub fn version_control() -> &'static dyn VersionControl {
     &GitCli
+}
+
+/// The simulators (iOS) or emulators (Android) behind [`hangar_core::ports::DeviceCatalog`].
+pub fn device_catalog(platform: Platform) -> &'static DeviceCatalog {
+    hangar_devices::catalog::for_platform(platform)
+}
+
+/// The catalog port with the devices crate's open device.
+pub type DeviceCatalog = hangar_devices::catalog::Catalog;
+
+/// This Mac's memory, cores and memory pressure.
+pub fn host_monitor() -> &'static dyn HostMonitor {
+    &SystemHost
 }
 
 pub fn changes() -> Arc<dyn Changes> {

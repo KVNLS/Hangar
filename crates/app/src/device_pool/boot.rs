@@ -5,16 +5,17 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_devices::capacity;
+use hangar_core::device::{Conflict, Target};
 use tokio::sync::oneshot;
 
 use crate::device_panel::{BackendReason, Platform};
 use crate::device_view::DeviceSession;
 use crate::setting_keys;
 
-use super::backend::{self, Target};
+use super::backend;
 use super::policy::{self, Capacity, LEASE_TIMEOUT, Slot};
 use super::{DevicePool, OpenError, Opened, PoolKey, SLOT_POLL, State};
+use crate::adapters;
 
 impl DevicePool {
     pub(super) fn slots(&self, except: Option<&PoolKey>) -> Vec<Slot<PoolKey>> {
@@ -124,11 +125,13 @@ impl DevicePool {
             }
         };
         let probe_target = target.clone();
-        let probed = cx
-            .background_executor()
-            .spawn(async move { backend::probe(&probe_target) })
-            .await
-            .map_err(failed)?;
+        let probed =
+            cx.background_executor()
+                .spawn(async move {
+                    adapters::device_catalog(probe_target.platform()).probe(&probe_target)
+                })
+                .await
+                .map_err(|e| failed(e.into()))?;
         let running = match probed {
             Some(running) => {
                 this.update(cx, |pool, _| {
@@ -148,8 +151,9 @@ impl DevicePool {
                     .background_executor()
                     .spawn(async {
                         // `HANGAR_PRESSURE` (tests) applies to the guard too.
-                        capacity::detect().map(|mut host| {
-                            if let Ok(p) = capacity::pressure_with_override() {
+                        let monitor = adapters::host_monitor();
+                        monitor.detect().map(|mut host| {
+                            if let Ok(p) = monitor.pressure() {
                                 host.pressure = p;
                             }
                             host
@@ -185,9 +189,11 @@ impl DevicePool {
                     let create_target = target.clone();
                     let created = cx
                         .background_executor()
-                        .spawn(async move { backend::create_if_missing(&create_target) })
+                        .spawn(async move {
+                            adapters::device_catalog(platform).create_if_missing(&create_target)
+                        })
                         .await
-                        .map_err(failed)?;
+                        .map_err(|e| failed(e.into()))?;
                     if let (Some(udid), Target::IosOwn { udid: own, .. }) = (created, &mut target) {
                         *own = Some(udid.clone());
                         let recorded = target.clone();
@@ -207,7 +213,7 @@ impl DevicePool {
                 let booted = cx
                     .background_executor()
                     .spawn(async move {
-                        backend::boot(&boot_target, &|s| {
+                        adapters::device_catalog(platform).boot(&boot_target, &|s| {
                             if let Ok(mut stage) = progress_stage.lock() {
                                 *stage = s;
                             }
@@ -217,14 +223,14 @@ impl DevicePool {
                 match booted {
                     Ok(running) => running,
                     Err(err) => {
-                        let conflict = err.downcast_ref::<backend::Conflict>().cloned();
+                        let conflict = err.inner().downcast_ref::<Conflict>().cloned();
                         let _ = this.update(cx, |pool, _| {
                             if let Some(d) = pool.devices.get_mut(key) {
                                 d.running = false;
                                 d.conflict = conflict;
                             }
                         });
-                        return Err(failed(err));
+                        return Err(failed(err.into()));
                     }
                 }
             }

@@ -9,7 +9,7 @@ use gpui_kit::*;
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent};
 
 use super::picker::{DeviceEntry, DeviceKey, Effect};
-use super::platform::{BackendReason, Listing, PlatformDevices as _};
+use super::platform::{BackendReason, Listing};
 use super::{
     BOOT_TICK, Booting, Connection, DeviceOption, DevicePanel, DevicePanelEvent, InputStatus,
     entry_title, input_status, plural_chars,
@@ -49,11 +49,7 @@ impl DevicePanel {
             .entries()
             .iter()
             // The pool's own devices are not bases; several instances of one AVD are one choice.
-            .filter(|e| {
-                !e.info
-                    .name
-                    .starts_with(crate::device_pool::backend::CLONE_PREFIX)
-            })
+            .filter(|e| !e.info.name.starts_with(hangar_core::device::CLONE_PREFIX))
             .filter(|e| seen.insert(e.key.value()))
             .map(|e| DeviceOption {
                 value: e.key.value().into(),
@@ -108,11 +104,13 @@ impl DevicePanel {
         let stage = Arc::new(Mutex::new("booting".to_owned()));
         let reported = stage.clone();
         let task = cx.background_executor().spawn(async move {
-            platform.boot(&entry.info, &|s| {
-                if let Ok(mut stage) = reported.lock() {
-                    *stage = s;
-                }
-            })
+            crate::adapters::device_catalog(platform)
+                .boot_listed(&entry.info, &|s| {
+                    if let Ok(mut stage) = reported.lock() {
+                        *stage = s;
+                    }
+                })
+                .map_err(anyhow::Error::from)
         });
         let task_key = key.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
@@ -256,7 +254,7 @@ impl DevicePanel {
         let forced = self.forced_backend.clone();
         let platform = key.platform;
         let task = cx.background_executor().spawn(async move {
-            let opened = platform.open(info, forced.as_deref())?;
+            let opened = crate::adapters::device_catalog(platform).open(info, forced.as_deref())?;
             let session = DeviceSession::start(Arc::from(opened.device))?;
             anyhow::Ok((session, opened.reason))
         });

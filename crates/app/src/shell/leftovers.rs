@@ -1,7 +1,7 @@
 //! At startup: simulator copies Hangar made for workspaces that no longer exist (see
 //! `device_pool::orphans`). The user decides; nothing is deleted without the button.
 
-use crate::device_pool::{backend, orphans};
+use crate::device_pool::orphans;
 use crate::shell::toast::ToastKind;
 
 use super::*;
@@ -23,10 +23,12 @@ impl HangarApp {
             let found = cx
                 .background_executor()
                 .spawn(async move {
-                    let on_mac = backend::list_clones()?
-                        .into_iter()
-                        .map(|d| d.udid)
-                        .collect();
+                    let on_mac =
+                        crate::adapters::device_catalog(hangar_core::device::Platform::Ios)
+                            .list_clones()?
+                            .into_iter()
+                            .map(|d| d.udid)
+                            .collect();
                     let found = orphans::find(store.as_ref(), existing, &on_mac)?;
                     anyhow::Ok((store, found))
                 })

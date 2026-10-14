@@ -1,24 +1,10 @@
 //! Device picker state, independent of the UI: the listed devices, the user's selection and
 //! which device should be open. Every change returns the [`Effect`] the panel must carry out.
 
+pub use hangar_core::device::DeviceKey;
 use hangar_devices::DeviceInfo;
-use serde::{Deserialize, Serialize};
 
 use super::platform::Platform;
-
-/// Identifies a device across launches (saved in settings).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct DeviceKey {
-    pub platform: Platform,
-    pub id: String,
-}
-
-impl DeviceKey {
-    /// Value used by the picker's select (`ios:<UDID>`).
-    pub fn value(&self) -> String {
-        format!("{}:{}", self.platform.id(), self.id)
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceEntry {

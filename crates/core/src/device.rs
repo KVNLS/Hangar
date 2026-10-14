@@ -5,8 +5,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub mod capacity;
+pub mod catalog;
 
 pub use capacity::{BootRefusal, DeviceCost, HostResources, Pressure};
+pub use catalog::{
+    BackendReason, CLONE_PREFIX, Conflict, DeviceKey, Opened, Running, RunningInstance, RunningSet,
+    Target, clone_name,
+};
 
 /// `DeviceInfo::state` values Hangar acts on (simctl and the Android adapter use the same words).
 pub mod state {

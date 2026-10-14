@@ -8,7 +8,6 @@ use std::collections::HashSet;
 use hangar_core::WorkspaceId;
 use hangar_core::ports::Store;
 
-use super::backend;
 use super::policy::Assignment;
 use crate::device_panel::Platform;
 use crate::setting_keys;
@@ -57,7 +56,7 @@ pub fn find(
 pub fn delete(store: &dyn Store, orphans: &[Orphan]) -> anyhow::Result<usize> {
     let mut deleted = 0;
     for orphan in orphans {
-        backend::delete_clone(&orphan.udid)?;
+        crate::adapters::device_catalog(Platform::Ios).delete_clone(&orphan.udid)?;
         store.remove_setting(&orphan.key)?;
         deleted += 1;
     }
