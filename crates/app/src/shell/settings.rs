@@ -114,6 +114,12 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         self.settings_tab = tab;
+        if tab == SettingsTab::Agents
+            && self.ollama.settings.enabled
+            && self.ollama.status != ollama::OllamaStatus::Loading
+        {
+            self.refresh_ollama(window, cx);
+        }
         if tab == SettingsTab::Devices && !self.device_panel.read(cx).picker().listed() {
             self.device_panel
                 .update(cx, |panel, cx| panel.refresh(window, cx));
@@ -228,6 +234,7 @@ impl HangarApp {
                 cx,
             ))
             .child(card(cx).children(rows))
+            .child(self.render_ollama_card(cx))
     }
 
     /// "Devices at once", the detected capacity and memory pressure.

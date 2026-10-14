@@ -63,6 +63,8 @@ pub struct DevOptions {
     /// After the runs: save each dev workspace's latest frame here and log its device status.
     pub pool_frames: Option<PathBuf>,
     pub agent: String,
+    /// Ollama host whose models OpenCode gets for this run (not saved).
+    pub ollama: Option<String>,
     pub input: Option<String>,
     pub archive: Option<String>,
     pub restore: Option<String>,
@@ -207,6 +209,7 @@ impl DevOptions {
             }),
             pool_frames: var("HANGAR_DEV_POOL_FRAMES").map(PathBuf::from),
             agent: var("HANGAR_DEV_AGENT").unwrap_or_else(|| agents::FALLBACK_AGENT.to_owned()),
+            ollama: var("HANGAR_DEV_OLLAMA"),
             input: var("HANGAR_DEV_INPUT"),
             archive: var("HANGAR_DEV_ARCHIVE"),
             restore: var("HANGAR_DEV_RESTORE"),
@@ -268,6 +271,13 @@ pub(super) async fn run_dev_hooks(
     dev: DevOptions,
     cx: &mut AsyncWindowContext,
 ) {
+    if let Some(host) = dev.ollama.clone()
+        && let Ok(listed) = this.update_in(cx, |this, window, cx| {
+            this.use_ollama_for_run(host, window, cx)
+        })
+    {
+        listed.await;
+    }
     if let Some(changes) = dev.changes.clone() {
         tracing::info!(%changes, "HANGAR_DEV_CHANGES");
         let _ = this.update_in(cx, |this, window, cx| {

@@ -141,8 +141,22 @@ impl HangarApp {
         env
     }
 
-    /// Args, env and files that give `adapter`'s agent the device tools of `workspace`.
+    /// Args, env and files that give `adapter`'s agent the device tools of `workspace`, and
+    /// the Ollama provider when it is on.
     pub(super) fn agent_extras(
+        &self,
+        agent_id: &str,
+        workspace: &Workspace,
+        cx: &App,
+    ) -> anyhow::Result<AgentExtras> {
+        let mut extras = self.mcp_extras(agent_id, workspace, cx)?;
+        if let Some(provider) = self.ollama.opencode_provider() {
+            agents::apply_ollama(&mut extras, agent_id, &provider)?;
+        }
+        Ok(extras)
+    }
+
+    fn mcp_extras(
         &self,
         agent_id: &str,
         workspace: &Workspace,

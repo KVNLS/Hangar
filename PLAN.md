@@ -62,6 +62,7 @@ Git access is the `git` CLI with porcelain output, not a library.
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
   `Lock`/volume buttons (private backend only); iOS `AppSwitch`/`Back`; text beyond printable ASCII +
   `\n`/`\t` on the private backend.
+- `agents::ollama`: `https://` Ollama hosts (`OllamaError::Unsupported`); the app shows the error.
 
 ## Device logs pane (app)
 - `crates/app/src/device_panel/logs/`: collapsible pane under the device screen (virtualized 16 px rows, 20k-line
@@ -292,6 +293,20 @@ Git access is the `git` CLI with porcelain output, not a library.
   store in the temp dir; plain `mv` shows as a rename; nothing is written in the git directory (watchers).
 - Pane layout saves are debounced (flushed on quit); Settings › Agents shows "Default" on the default row;
   clicking an archived workspace restores and opens it; the overview's last line skips a waiting prompt.
+
+## Ollama local models (2026-10-05, unit-tested, not checked on screen)
+- Settings › Agents › "Ollama (local models)": On/Off, host (plain HTTP, default `127.0.0.1:11434`), default
+  model, status + Refresh. Saved under the `ollama` setting.
+- `hangar_agents::ollama` lists models with a hand-written HTTP/1.0 `GET /api/tags` (no new dependency), off
+  the UI thread, 2 s timeout; refreshed at startup when on, on opening Settings › Agents, on host change.
+- OpenCode only (`opencode`, `opencode-acp`): Hangar adds an OpenAI-compatible `ollama` provider (`<host>/v1`,
+  every installed model, `model` = the default) to `OPENCODE_CONFIG_CONTENT`, merged with the MCP config.
+  In ACP chat the models show in OpenCode's model chip. Hangar never calls the models.
+- Ollama on but unreachable or empty: the agent starts on its usual provider with a warning toast.
+- Not done (owner decision for now): Codex (`--oss` / `model_provider`), Claude Code (`ANTHROPIC_BASE_URL`
+  on Ollama's Anthropic-compatible API), filtering models without tool calling (`/api/show` capabilities).
+- Dev: `HANGAR_DEV_OLLAMA=<host>` turns it on for the run (not saved) and waits for the model list before
+  `HANGAR_DEV_OPEN` spawns the agent.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a

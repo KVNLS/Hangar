@@ -36,6 +36,17 @@ pub const CHANGES_SETTING: &str = "changes_panel";
 pub const DEVICE_SETTING: &str = "device_panel";
 /// Setting key of the saved [`Appearance`].
 pub const APPEARANCE_SETTING: &str = "appearance";
+/// Setting key of the saved [`OllamaSettings`].
+pub const OLLAMA_SETTING: &str = "ollama";
+
+/// Local models served by Ollama, offered to OpenCode as an extra provider.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OllamaSettings {
+    pub enabled: bool,
+    /// As typed; empty means `hangar_agents::ollama::DEFAULT_HOST`.
+    pub host: String,
+    pub default_model: Option<String>,
+}
 
 /// Everything the window needs at startup.
 pub struct Loaded {
@@ -47,6 +58,7 @@ pub struct Loaded {
     pub changes: Option<ChangesLayout>,
     pub device: Option<DeviceLayout>,
     pub appearance: Option<Appearance>,
+    pub ollama: Option<OllamaSettings>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -158,6 +170,16 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let ollama = match store
+        .get_setting::<OllamaSettings>(OLLAMA_SETTING)
+        .context("failed to read the Ollama settings")
+    {
+        Ok(ollama) => ollama,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
+    };
     Ok(Loaded {
         entries,
         chats,
@@ -166,6 +188,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         changes,
         device,
         appearance,
+        ollama,
         settings_error,
     })
 }
@@ -192,6 +215,12 @@ pub fn save_appearance(store: &Store, appearance: Appearance) -> anyhow::Result<
     store
         .set_setting(APPEARANCE_SETTING, &appearance)
         .context("failed to save the appearance")
+}
+
+pub fn save_ollama(store: &Store, ollama: &OllamaSettings) -> anyhow::Result<()> {
+    store
+        .set_setting(OLLAMA_SETTING, ollama)
+        .context("failed to save the Ollama settings")
 }
 
 pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {

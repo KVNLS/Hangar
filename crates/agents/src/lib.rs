@@ -3,6 +3,7 @@
 pub mod acp;
 mod adapter;
 mod error;
+pub mod ollama;
 mod path;
 
 pub use adapter::{AgentAdapter, AgentHandle, PtyAdapter, SpawnContext, UpdateHook, presets};

@@ -7,7 +7,7 @@ use anyhow::Context as _;
 use hangar_agents::acp::{AcpAdapter, McpServer, acp_presets};
 use hangar_agents::{PtyAdapter, find_program, presets};
 use hangar_core::{AgentKind, WorkspaceId};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 pub const DEFAULT_AGENT: &str = "claude";
 pub const FALLBACK_AGENT: &str = "shell";
@@ -131,6 +131,48 @@ pub struct BridgeLaunch {
     pub workspace: WorkspaceId,
 }
 
+const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// Whether `agent_id` can run on Ollama models through [`apply_ollama`].
+pub fn supports_ollama(agent_id: &str) -> bool {
+    matches!(agent_id, "opencode" | "opencode-acp")
+}
+
+/// Adds `provider` (from `hangar_agents::ollama::opencode_provider`) to an OpenCode agent's
+/// inline config, merged into the MCP config `mcp_launch` may already have put there. Other
+/// agents are left alone.
+pub fn apply_ollama(
+    extras: &mut AgentExtras,
+    agent_id: &str,
+    provider: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if !supports_ollama(agent_id) {
+        return Ok(());
+    }
+    let existing = extras
+        .env
+        .iter()
+        .position(|(name, _)| name == OPENCODE_CONFIG_ENV);
+    let mut config = match existing {
+        Some(i) => match serde_json::from_str(&extras.env.remove(i).1)
+            .context("cannot read the OpenCode config")?
+        {
+            Value::Object(config) => config,
+            _ => anyhow::bail!("the OpenCode config is not a JSON object"),
+        },
+        None => Map::from_iter([(
+            "$schema".to_owned(),
+            Value::from("https://opencode.ai/config.json"),
+        )]),
+    };
+    config.extend(provider.clone());
+    extras.env.push((
+        OPENCODE_CONFIG_ENV.to_owned(),
+        Value::Object(config).to_string(),
+    ));
+    Ok(())
+}
+
 const BRIDGE_ARG: &str = "mcp-bridge";
 const SERVER_NAME: &str = "hangar";
 
@@ -180,7 +222,7 @@ pub fn mcp_launch(
             });
             extras
                 .env
-                .push(("OPENCODE_CONFIG_CONTENT".to_owned(), config.to_string()));
+                .push((OPENCODE_CONFIG_ENV.to_owned(), config.to_string()));
         }
         "codex" => {
             extras.args.push("-c".to_owned());
@@ -237,8 +279,8 @@ fn toml_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentChoice, AgentPreset, BridgeLaunch, choices, default_agent, is_installed, kind,
-        mcp_launch, preset, toml_string,
+        AgentChoice, AgentExtras, AgentPreset, BridgeLaunch, apply_ollama, choices, default_agent,
+        is_installed, kind, mcp_launch, preset, toml_string,
     };
     use hangar_core::AgentKind;
     use serde_json::{Value, json};
@@ -363,6 +405,66 @@ mod tests {
             Some("/tmp/hangar-501/hangar.sock")
         );
         assert_bridge_env(&x.env);
+    }
+
+    fn ollama_provider() -> serde_json::Map<String, Value> {
+        let models = [hangar_agents::ollama::OllamaModel {
+            name: "qwen3-coder".into(),
+            parameter_size: None,
+        }];
+        let host = hangar_agents::ollama::OllamaHost::parse("").unwrap();
+        hangar_agents::ollama::opencode_provider(&host, &models, Some("qwen3-coder"))
+    }
+
+    #[test]
+    fn ollama_merges_into_opencode_mcp_config() {
+        let mut x = mcp_launch("opencode", &bridge(EXE), &device_env()).unwrap();
+        apply_ollama(&mut x, "opencode", &ollama_provider()).unwrap();
+        let configs: Vec<_> = x
+            .env
+            .iter()
+            .filter(|(name, _)| name == "OPENCODE_CONFIG_CONTENT")
+            .collect();
+        assert_eq!(configs.len(), 1);
+        let config: Value = serde_json::from_str(&configs[0].1).unwrap();
+        assert_eq!(
+            config["mcp"]["hangar"]["command"],
+            json!([EXE, "mcp-bridge"])
+        );
+        assert_eq!(
+            config["provider"]["ollama"]["options"]["baseURL"],
+            "http://127.0.0.1:11434/v1"
+        );
+        assert_eq!(config["model"], "ollama/qwen3-coder");
+        assert_bridge_env(&x.env);
+    }
+
+    #[test]
+    fn ollama_gives_opencode_acp_its_own_config() {
+        let mut x = mcp_launch("opencode-acp", &bridge(EXE), &device_env()).unwrap();
+        apply_ollama(&mut x, "opencode-acp", &ollama_provider()).unwrap();
+        let config: Value =
+            serde_json::from_str(env_of(&x.env, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
+        assert_eq!(config["$schema"], "https://opencode.ai/config.json");
+        assert_eq!(config["model"], "ollama/qwen3-coder");
+        assert!(config.get("mcp").is_none());
+        assert_eq!(x.mcp_servers.len(), 1);
+    }
+
+    #[test]
+    fn ollama_leaves_other_agents_alone() {
+        for id in [
+            "claude",
+            "claude-acp",
+            "codex",
+            "codex-acp",
+            "gemini",
+            "shell",
+        ] {
+            let mut x = AgentExtras::default();
+            apply_ollama(&mut x, id, &ollama_provider()).unwrap();
+            assert_eq!(x, AgentExtras::default(), "{id}");
+        }
     }
 
     #[test]
