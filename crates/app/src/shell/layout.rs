@@ -122,9 +122,13 @@ impl HangarApp {
             self.device_panel
                 .update(cx, |panel, cx| panel.set_visible(shown, window, cx));
         }
-        if !wide {
-            window.focus(&self.focus, cx);
-            self.focus_terminal(window, cx);
+        match screen {
+            Screen::Review => {}
+            Screen::Overview | Screen::Settings => window.focus(&self.layout.screen_focus, cx),
+            Screen::Workspace => {
+                window.focus(&self.focus, cx);
+                self.focus_terminal(window, cx);
+            }
         }
         cx.notify();
     }

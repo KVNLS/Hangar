@@ -16,11 +16,15 @@ impl Render for HangarApp {
         let main = match self.layout.screen {
             Screen::Review => div().flex_1().min_h_0().child(self.changes_panel.clone()),
             Screen::Settings => div()
+                .key_context("SettingsScreen")
+                .track_focus(&self.layout.screen_focus)
                 .flex()
                 .flex_1()
                 .min_h_0()
                 .child(self.render_settings(cx)),
             Screen::Overview => div()
+                .key_context("OverviewScreen")
+                .track_focus(&self.layout.screen_focus)
                 .flex()
                 .flex_1()
                 .min_h_0()
@@ -113,6 +117,9 @@ impl Render for HangarApp {
                     Screen::Settings
                 };
                 this.set_screen(screen, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseScreen, window, cx| {
+                this.set_screen(Screen::Workspace, window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &ToggleOverview, window, cx| {

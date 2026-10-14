@@ -97,6 +97,7 @@ actions!(
         ToggleTheme,
         ToggleOverview,
         OpenSettings,
+        CloseScreen,
         NextNeedingYou,
         Run,
         StopRun,
@@ -131,6 +132,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-d", SplitPane, None),
         KeyBinding::new("cmd-w", ClosePane, None),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
+        KeyBinding::new("escape", CloseScreen, Some("OverviewScreen")),
+        KeyBinding::new("escape", CloseScreen, Some("SettingsScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
     ]);
@@ -307,6 +310,8 @@ struct Layout {
     save_panes: Option<Task<()>>,
     sidebar_open: bool,
     screen: Screen,
+    /// Focused while the overview or settings fill the window, so esc returns to the workspace.
+    screen_focus: FocusHandle,
     sidebar_filter: Entity<InputState>,
     collapsed_projects: HashSet<ProjectId>,
     /// Projects whose archived group is expanded.
@@ -519,6 +524,7 @@ impl HangarApp {
                 save_panes: None,
                 sidebar_open: true,
                 screen: Screen::Workspace,
+                screen_focus: cx.focus_handle(),
                 sidebar_filter,
                 collapsed_projects: HashSet::new(),
                 show_archived: HashSet::new(),
