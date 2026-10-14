@@ -28,8 +28,12 @@ keeps the product roadmap.
 - Enforced by `crates/app/tests/architecture.rs` (`cargo metadata`, no extra tool). A new crate must
   be given a layer there.
 - Ports (`core::ports`): `Store` (with raw JSON settings, typed by `usecases::settings`),
-  `VersionControl`, `Changes`, `ReviewOps`, `CodeHost`. `app::adapters` is the one place that picks
-  their adapters (`store-sqlite`, `worktree::GitCli`, `worktree::Gh`).
+  `VersionControl`, `Changes`, `ReviewOps`, `CodeHost`, `ToolProbe`, `DeviceCatalog` (one per
+  platform: list, boot, open, probe/create/boot pool targets, shutdown, running set, clones, cost,
+  bases; `type Device` is the adapter's open device) and `HostMonitor` (host resources, memory
+  pressure with the `HANGAR_PRESSURE` override). `app::adapters` is the one place that picks
+  their adapters (`store-sqlite`, `worktree::GitCli`, `worktree::Gh`,
+  `devices::catalog::{Simulators, Emulators, SystemHost}`).
 
 ## Decisions
 
@@ -64,16 +68,21 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
    - `Store` in `crates/store-sqlite`; device vocabulary in `core::device`; naming rules in
      `core`; changes and diffs in `core::changes`; review data and `ReviewError` in
      `core::review`. `runner`, `mcp` and `files` depend on `core` only.
-   - The allocation policy (`device_pool::policy`) was already pure. The rest of `DevicePool`'s
-     orchestration is step 7.
-4. **Ports** — done for git and storage
+   - The allocation policy (`usecases::device_pool::policy`) was already pure. The rest of
+     `DevicePool`'s orchestration is step 7.
+   - Host capacity (`HostResources`, `Pressure`, `DeviceCost`, `BootRefusal`, slot arithmetic) is
+     in `core::device::capacity`; `devices::capacity` only reads the host and re-exports it.
+4. **Ports** — done
    - `Store`, `VersionControl`, `Changes`, `ReviewOps`, `CodeHost`; `PortError` keeps adapter
      error types out of `core`; review refusals keep their shape (`ReviewError`). `GitCli` is
      tested through the ports against a temp repository.
    - `agents → terminal` removed without a port (see Decisions).
-   - Not done: `DeviceCatalog` per platform (list, boot, clone, delete) and `HostResources`,
-     replacing the `PlatformDevices` extension trait and `device_pool::backend`. It belongs with
-     the `DevicePool` state machine (step 7): both need checking with real simulators.
+   - `DeviceCatalog` and `HostMonitor` (M10), speaking `core::device::catalog` (`Target`,
+     `Running`, `Conflict`, `RunningSet`, `DeviceKey`, clone naming). `devices::catalog`
+     implements them (`Simulators`, `Emulators`, `SystemHost`), tested through the ports on the
+     paths that boot nothing. They replace the `PlatformDevices` extension trait and the free
+     functions of `device_pool::backend`; only what needs `runner` (`stack_platforms`) or the
+     app's `DeviceSession` stays in `app`.
    - `runner` stays as is: detection reads a few files and is tested on temp dirs.
 5. **`usecases` crate** — done except `DeviceTools`
    - `workspaces` (lifecycle with rollback), `sessions` (start outcome, finish, stop; generic over
@@ -93,10 +102,17 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
    - Done (M9): `usecases::batch`, `usecases::orchestration` and `usecases::history` are pure
      policies tested on plain data. The approved `AgentRuntime` port was not added: dispatch to live
      agents stays in `app` like the device tools, and a port would only wrap GPUI calls.
+   - Done (M10, device side): `usecases::device_pool::PoolMachine` is the pool as a sans-IO
+     state machine: calls and I/O results with the current `Instant` in, `Command`s out
+     (bring-up steps, shutdowns, waiter replies by token, lease grants, notices, settings to
+     save, host and running scans). Results of an abandoned bring-up are ignored by attempt. It
+     is tested on plain data (boot, join, guard, cap and eviction, full cap timeout, leases,
+     archive, pressure, simulators gone, conflict, reassignment, launch scan, limit change). The
+     `DevicePool` entity keeps its API and only feeds it and runs its commands through
+     `DeviceCatalog` and `HostMonitor` on the background executor. To check on macOS with the dev
+     hooks and real simulators/emulators before merging.
    - Next (M10 in PLAN.md): make those groups entities (controllers) with services passed in, so
-     views do no I/O; turn `DevicePool`'s orchestration into a state machine (events and `Instant`
-     in, commands out) behind `DeviceCatalog`. Check on macOS with the dev hooks and real
-     simulators/emulators before merging.
+     views do no I/O.
 8. **Docs and cleanup** — done for this round: PLAN.md crate table, CLAUDE.md rules, large test
    modules moved to sibling files.
    - File layout (2026-10-08): `foo.rs` next to `foo/` everywhere (no `mod.rs`), large unit-test

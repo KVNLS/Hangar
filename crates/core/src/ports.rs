@@ -5,6 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::changes::{Cost, DiffOptions, DiffStat, FileDiff, GitDirs, Status, UsageEntry};
+use crate::device::catalog::{Conflict, Opened, Running, RunningInstance, Target};
+use crate::device::{DeviceCost, DeviceInfo, HostResources, Platform, Pressure};
 use crate::review::{
     CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
     Upstream,
@@ -275,4 +277,57 @@ pub trait CodeHost: Send + Sync {
 /// Looks at the tools Hangar relies on outside itself. Runs several short processes.
 pub trait ToolProbe: Send + Sync {
     fn probe(&self) -> ToolFacts;
+}
+
+/// One platform's simulators or emulators: listing, booting, opening and shutting them down, and
+/// the copies the device pool makes of them. Calls block on processes (`simctl`, `emulator`,
+/// `adb`); boots take seconds to minutes. A call that does not apply to the platform (an iOS
+/// target on the Android catalog, clones on Android) fails with an unsupported error.
+pub trait DeviceCatalog: Send + Sync {
+    /// An open device, as the adapter hands it out.
+    type Device;
+
+    fn platform(&self) -> Platform;
+    /// This platform's devices, in picker order.
+    fn list(&self) -> PortResult<Vec<DeviceInfo>>;
+    /// Boots a listed, shut-down device and returns it as listed once it is up, reporting each
+    /// stage to `progress`.
+    fn boot_listed(&self, info: &DeviceInfo, progress: &dyn Fn(String)) -> PortResult<DeviceInfo>;
+    /// Opens a running device. `forced` names a backend (`HANGAR_DEVICE_BACKEND`); without it the
+    /// preferred backend falls back to the other one.
+    fn open(&self, info: DeviceInfo, forced: Option<&str>) -> PortResult<Opened<Self::Device>>;
+
+    /// The target's device if it already runs (nothing is booted).
+    fn probe(&self, target: &Target) -> PortResult<Option<Running>>;
+    /// Creates the workspace's simulator when it does not exist (yet, or any more); returns the
+    /// new UDID. `None` for targets that need no copy.
+    fn create_if_missing(&self, target: &Target) -> PortResult<Option<String>>;
+    /// Boots the target, creating its simulator first when needed. A [`Conflict`] (inside the
+    /// [`PortError`]) means an instance outside the pool is in the way.
+    fn boot(&self, target: &Target, progress: &dyn Fn(String)) -> PortResult<Running>;
+    /// Shuts a device down that is not open (simulator UDID or adb serial).
+    fn shutdown(&self, id: &str) -> PortResult<()>;
+    /// Shuts the target down if it runs; whether it did.
+    fn shutdown_if_running(&self, target: &Target) -> PortResult<bool>;
+    /// What runs now that the pool may have booted.
+    fn running(&self) -> PortResult<Vec<RunningInstance>>;
+    /// Shuts down the instance in the way of the pool and waits until it is gone.
+    fn clear_conflict(&self, conflict: &Conflict) -> PortResult<()>;
+
+    /// Deletes a simulator the pool created (shutting it down first).
+    fn delete_clone(&self, udid: &str) -> PortResult<()>;
+    /// Simulators the pool created ([`crate::device::CLONE_PREFIX`]), with their state.
+    fn list_clones(&self) -> PortResult<Vec<DeviceInfo>>;
+    /// What a device made from `base` costs the host.
+    fn cost(&self, base: Option<&str>) -> DeviceCost;
+    /// Devices a workspace's device can be made from, running ones first: `(id, title)`.
+    fn bases(&self) -> PortResult<Vec<(String, String)>>;
+}
+
+/// The host's memory and cores, for the device pool's cap and boot guard.
+pub trait HostMonitor: Send + Sync {
+    /// Memory, cores and the real memory pressure. Cheap.
+    fn detect(&self) -> PortResult<HostResources>;
+    /// The memory pressure now; `HANGAR_PRESSURE=normal|warn|critical` overrides the reading.
+    fn pressure(&self) -> PortResult<Pressure>;
 }

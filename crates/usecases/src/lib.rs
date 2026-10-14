@@ -4,6 +4,7 @@
 
 pub mod agents;
 pub mod batch;
+pub mod device_pool;
 #[cfg(test)]
 mod fakes;
 pub mod history;

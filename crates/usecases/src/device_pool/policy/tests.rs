@@ -1,5 +1,5 @@
 use super::*;
-use hangar_devices::capacity::Pressure;
+use hangar_core::device::Pressure;
 
 fn slot(key: u32, booted: bool, busy: bool, focused: bool, last_used: u64) -> Slot<u32> {
     Slot {

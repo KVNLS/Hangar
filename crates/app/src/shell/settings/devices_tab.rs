@@ -270,11 +270,7 @@ impl HangarApp {
                     .entries()
                     .iter()
                     .filter(|e| e.key.platform == platform)
-                    .filter(|e| {
-                        !e.info
-                            .name
-                            .starts_with(crate::device_pool::backend::CLONE_PREFIX)
-                    })
+                    .filter(|e| !e.info.name.starts_with(hangar_core::device::CLONE_PREFIX))
                     .filter(|e| seen.insert(e.key.clone()))
                     .map(|entry| {
                         let base_key = entry.key.clone();

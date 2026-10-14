@@ -411,10 +411,7 @@ impl DevicePanel {
                     e.key.platform == platform
                         && e.ready
                         && e.key.id != assignment.base
-                        && !e
-                            .info
-                            .name
-                            .starts_with(crate::device_pool::backend::CLONE_PREFIX)
+                        && !e.info.name.starts_with(hangar_core::device::CLONE_PREFIX)
                         && !pool.base_held_by_other(&e.key, ws)
                 })
             })
