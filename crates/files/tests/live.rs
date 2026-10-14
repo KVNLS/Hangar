@@ -338,16 +338,23 @@ async fn live_diff_directory_rename() {
     let (live, mut rx) = LiveDiff::start(&repo.path, "main", live_config()).unwrap();
     next_update(&mut rx).await;
 
+    // Moved without `git mv`: each file pairs with its deleted original as a rename.
     fs::rename(repo.path.join("old dir"), repo.path.join("new dir")).unwrap();
-    update_where(&mut rx, |_| live.snapshot().len() == 4).await;
+    update_where(&mut rx, |_| {
+        let snapshot = live.snapshot();
+        snapshot.len() == 2 && snapshot.contains_key(Path::new("new dir/sub/b.rs"))
+    })
+    .await;
     let snapshot = live.snapshot();
+    let moved = &snapshot[Path::new("new dir/sub/b.rs")];
+    assert_eq!(moved.status, FileStatus::Renamed);
     assert_eq!(
-        snapshot[Path::new("old dir/sub/b.rs")].status,
-        FileStatus::Deleted
+        moved.old_path.as_deref(),
+        Some(Path::new("old dir/sub/b.rs"))
     );
     assert_eq!(
-        snapshot[Path::new("new dir/sub/b.rs")].status,
-        FileStatus::Untracked
+        snapshot[Path::new("new dir/a.rs")].status,
+        FileStatus::Renamed
     );
 
     fs::rename(repo.path.join("new dir"), repo.path.join("old dir")).unwrap();

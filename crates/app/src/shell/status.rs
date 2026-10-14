@@ -31,6 +31,25 @@ fn is_decoration(c: char) -> bool {
 
 /// The last screen row (bottom-up) that says something: decoration trimmed, at least two
 /// alphanumeric characters.
+/// [`summary_line`] of a terminal screen, leaving out the cursor's row when it is a bare shell
+/// prompt (`kevin@mac ~/app %`): the shell is waiting, and the line above says what happened.
+pub(super) fn screen_summary(rows: Vec<String>, cursor_row: Option<usize>) -> Option<String> {
+    let waiting = cursor_row.filter(|&r| {
+        rows.get(r).is_some_and(|row| {
+            row.trim_end()
+                .ends_with(['$', '%', '#', '>', '❯', '»', '➜'])
+        })
+    });
+    summary_line(
+        rows.into_iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != waiting)
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>()
+            .into_iter(),
+    )
+}
+
 pub(super) fn summary_line<I: DoubleEndedIterator<Item = String>>(rows: I) -> Option<String> {
     rows.rev().find_map(|row| {
         let text = row.trim_matches(is_decoration).trim();
@@ -113,8 +132,11 @@ impl HangarApp {
                 activity.bytes = bytes;
                 activity.last_output = Some(now);
                 let snapshot = view.read(cx).session().terminal().snapshot();
-                activity.last_line = summary_line((0..snapshot.rows).map(|r| snapshot.row_text(r)))
-                    .map(SharedString::from);
+                activity.last_line = screen_summary(
+                    (0..snapshot.rows).map(|r| snapshot.row_text(r)).collect(),
+                    snapshot.cursor.map(|c| c.row),
+                )
+                .map(SharedString::from);
                 changed = true;
             }
             let active = activity
@@ -191,7 +213,7 @@ impl HangarApp {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the shell glob-imports gpui, whose `test` macro would shadow `#[test]`.
-    use super::{age_label, next_needing_you, summary_line};
+    use super::{age_label, next_needing_you, screen_summary, summary_line};
     use hangar_core::AgentState::*;
 
     fn rows(lines: &[&str]) -> std::vec::IntoIter<String> {
@@ -221,6 +243,24 @@ mod tests {
             summary_line(rows(&["❯ npm test"])).as_deref(),
             Some("npm test")
         );
+    }
+
+    #[test]
+    fn screen_summary_skips_a_waiting_prompt() {
+        let screen = |lines: &[&str]| lines.iter().map(|l| (*l).to_owned()).collect::<Vec<_>>();
+        let done = screen(&["✓ 12 tests passed", "kevin@mac ~/app % ", ""]);
+        assert_eq!(
+            screen_summary(done.clone(), Some(1)).as_deref(),
+            Some("✓ 12 tests passed")
+        );
+        // Without a cursor on it the prompt row is just the last line.
+        assert_eq!(
+            screen_summary(done, None).as_deref(),
+            Some("kevin@mac ~/app")
+        );
+        // A typed command is what the user is doing, not a bare prompt.
+        let typing = screen(&["build ok", "❯ npm test"]);
+        assert_eq!(screen_summary(typing, Some(1)).as_deref(), Some("npm test"));
     }
 
     #[test]

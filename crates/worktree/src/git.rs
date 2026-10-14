@@ -1,8 +1,10 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, ErrorKind, Read, Write};
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
 
@@ -65,11 +67,21 @@ pub fn git_version() -> Result<GitVersion> {
 #[derive(Clone, Debug)]
 pub struct Git {
     dir: PathBuf,
+    env: Vec<(OsString, OsString)>,
 }
 
 impl Git {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            env: Vec::new(),
+        }
+    }
+
+    /// The same runner with `key=value` added to git's environment.
+    pub(crate) fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
     }
 
     pub fn dir(&self) -> &Path {
@@ -146,6 +158,77 @@ impl Git {
         self.exec_with(args, input)
     }
 
+    /// As [`Self::output`], for commands that reach the network (push): git and what it started
+    /// (ssh) are killed after `timeout` and [`Error::Timeout`] is returned.
+    pub(crate) fn output_timeout<I, S>(&self, args: I, timeout: Duration) -> Result<RawOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args: Vec<OsString> = args.into_iter().map(|a| a.as_ref().to_owned()).collect();
+        let mut child = self.command(&args, false).spawn().map_err(not_found)?;
+        let stdout = read_in_background(child.stdout.take());
+        let stderr = read_in_background(child.stderr.take());
+        let status = match wait_until(&mut child, Instant::now() + timeout)? {
+            Some(status) => status,
+            None => {
+                kill_group(&mut child);
+                return Err(Error::Timeout {
+                    args: args
+                        .iter()
+                        .map(|a| a.to_string_lossy().into_owned())
+                        .collect(),
+                    secs: timeout.as_secs(),
+                });
+            }
+        };
+        let joined = |reader: std::thread::JoinHandle<io::Result<Vec<u8>>>| {
+            reader
+                .join()
+                .map_err(|_| Error::Io(io::Error::other("output reader panicked")))?
+                .map_err(Error::Io)
+        };
+        let (stdout, stderr) = (joined(stdout)?, joined(stderr)?);
+        tracing::trace!(dir = %self.dir.display(), ?args, %status, "git");
+        Ok(RawOutput {
+            args,
+            status,
+            stdout,
+            stderr,
+        })
+    }
+
+    fn command(&self, args: &[OsString], piped_stdin: bool) -> Command {
+        let mut command = Command::new("git");
+        command
+            .arg("-C")
+            .arg(&self.dir)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("LC_ALL", "C")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .stdin(if piped_stdin {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: setsid is async-signal-safe and touches no memory of the parent.
+        unsafe {
+            command.pre_exec(|| {
+                // A new session has no controlling terminal: ssh cannot ask for a passphrase or
+                // a host key on /dev/tty (and hang) but fails, and git is its group's leader.
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command
+    }
+
     fn exec<I, S>(&self, args: I) -> Result<RawOutput>
     where
         I: IntoIterator<Item = S>,
@@ -160,25 +243,7 @@ impl Git {
         S: AsRef<OsStr>,
     {
         let args: Vec<OsString> = args.into_iter().map(|a| a.as_ref().to_owned()).collect();
-        let mut command = Command::new("git");
-        command
-            .arg("-C")
-            .arg(&self.dir)
-            .args(&args)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("LC_ALL", "C")
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let not_found = |e: io::Error| match e.kind() {
-            ErrorKind::NotFound => Error::GitMissing,
-            _ => Error::Io(e),
-        };
+        let mut command = self.command(&args, input.is_some());
         let mut child = command.spawn().map_err(not_found)?;
         // Write stdin from another thread so a full stdout pipe cannot deadlock us.
         let writer = match (input, child.stdin.take()) {
@@ -222,6 +287,47 @@ impl Git {
             stderr,
         }
     }
+}
+
+fn not_found(e: io::Error) -> Error {
+    match e.kind() {
+        ErrorKind::NotFound => Error::GitMissing,
+        _ => Error::Io(e),
+    }
+}
+
+fn read_in_background(
+    pipe: Option<impl Read + Send + 'static>,
+) -> std::thread::JoinHandle<io::Result<Vec<u8>>> {
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        if let Some(mut pipe) = pipe {
+            pipe.read_to_end(&mut out)?;
+        }
+        Ok(out)
+    })
+}
+
+/// The exit status, or `None` once `deadline` passes.
+fn wait_until(child: &mut Child, deadline: Instant) -> Result<Option<ExitStatus>> {
+    loop {
+        if let Some(status) = child.try_wait().map_err(Error::Io)? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Kills git and everything in its process group (it leads one, see [`Git::command`]).
+fn kill_group(child: &mut Child) {
+    if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: plain syscall on a group this process created and has not reaped.
+        unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    }
+    let _ = child.wait();
 }
 
 pub(crate) struct RawOutput {
