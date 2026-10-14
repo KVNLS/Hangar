@@ -8,6 +8,7 @@ use std::sync::mpsc;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::Input;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Icon, Sizable as _};
 
 use hangar_devices::capacity::Pressure;
@@ -376,6 +377,47 @@ impl HangarApp {
             ))
             .child(card(cx).children(rows))
             .child(self.render_ollama_card(cx))
+            .child(self.render_permissions_card(cx))
+    }
+
+    /// "Permissions": what agents may do and when Hangar calls the user back. Each row is its
+    /// own card, as in the design.
+    fn render_permissions_card(&self, cx: &mut Context<Self>) -> Div {
+        let t = cx.tokens();
+        let row = |title: &'static str, hint: &'static str| {
+            card(cx)
+                .flex_row()
+                .px(px(14.))
+                .py_3()
+                .gap_3()
+                .items_center()
+                .justify_between()
+                .child(
+                    v_flex()
+                        .gap_0p5()
+                        .min_w_0()
+                        .child(div().type_body_strong().child(title))
+                        .child(div().type_secondary().text_color(t.tx3).child(hint)),
+                )
+        };
+        v_flex()
+            .gap(px(10.))
+            .child(div().type_body_strong().child("Permissions"))
+            .child(
+                row(
+                    "Notify when an agent needs me",
+                    "Approval, input and failure. Dock badge shows count.",
+                )
+                .child(
+                    Switch::new("notify-attention")
+                        .small()
+                        .color(t.acc)
+                        .checked(self.attention.enabled)
+                        .on_click(cx.listener(|this, on: &bool, window, cx| {
+                            this.set_notify_attention(*on, window, cx)
+                        })),
+                ),
+            )
     }
 
     /// "Devices at once", the detected capacity and memory pressure.

@@ -580,6 +580,16 @@ fn settings_are_loaded_and_bad_ones_reported() {
 }
 
 #[test]
+fn notify_attention_round_trips() {
+    let f = fixture();
+    assert_eq!(load(&f.store).unwrap().notify_attention, None);
+    save_notify_attention(&f.store, false).unwrap();
+    assert_eq!(load(&f.store).unwrap().notify_attention, Some(false));
+    save_notify_attention(&f.store, true).unwrap();
+    assert_eq!(load(&f.store).unwrap().notify_attention, Some(true));
+}
+
+#[test]
 fn device_settings_round_trip() {
     use crate::device_panel::{DeviceKey, Platform};
 

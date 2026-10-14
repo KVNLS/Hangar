@@ -19,6 +19,8 @@ pub const APPEARANCE: Setting<Appearance> = Setting::new("appearance");
 pub const OLLAMA: Setting<OllamaSettings> = Setting::new("ollama");
 /// Whether commits from the review box credit the workspace's agent with a trailer.
 pub const COAUTHOR_TRAILER: Setting<bool> = Setting::new("review:coauthor_trailer");
+/// Dock badge and bounce when an agent waits on approval, input or a failure (default on).
+pub const NOTIFY_ATTENTION: Setting<bool> = Setting::new("permissions:notify_attention");
 
 pub const DEVICE_LIMIT: Setting<Limit> = Setting::new("device_pool:limit");
 pub const SINGLE_DEVICE_ALERT_SHOWN: Setting<bool> = Setting::new("device_pool:single_alert_shown");
@@ -66,6 +68,7 @@ mod tests {
         assert_eq!(APPEARANCE.key(), "appearance");
         assert_eq!(OLLAMA.key(), "ollama");
         assert_eq!(COAUTHOR_TRAILER.key(), "review:coauthor_trailer");
+        assert_eq!(NOTIFY_ATTENTION.key(), "permissions:notify_attention");
         assert_eq!(DEVICE_LIMIT.key(), "device_pool:limit");
         assert_eq!(
             SINGLE_DEVICE_ALERT_SHOWN.key(),
