@@ -88,6 +88,12 @@ impl ChatView {
 
     /// What the subagent returned to the agent, once it ended.
     pub(super) fn render_subagent_result(&self, sub: &Subagent, cx: &App) -> Option<AnyElement> {
+        let (label, text) = self.subagent_result(sub)?;
+        Some(bubble(label, text, cx).into_any_element())
+    }
+
+    /// The label and text of the subagent's result, once it ended with one.
+    pub(super) fn subagent_result(&self, sub: &Subagent) -> Option<(&'static str, String)> {
         let label = match sub.status {
             SubagentStatus::Done => "Returned",
             SubagentStatus::Failed => "Failed",
@@ -104,7 +110,7 @@ impl ChatView {
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        (!text.is_empty()).then(|| bubble(label, text, cx).into_any_element())
+        (!text.is_empty()).then_some((label, text))
     }
 
     pub(super) fn render_subagent_footer(&self, cx: &mut Context<Self>) -> Div {

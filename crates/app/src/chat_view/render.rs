@@ -13,6 +13,7 @@ use hangar_agents::acp::protocol::{ConfigOption, PlanStatus, ToolContent, ToolSt
 use hangar_agents::acp::subagents::SubagentStatus;
 use hangar_core::AgentState;
 
+use super::rows::Row;
 use super::{ChatView, Item, Outcome, usage_label};
 use crate::ui::components::{StateGlyph, UiButton};
 use crate::ui::{ActiveTokens as _, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TypeScale as _};
@@ -25,26 +26,32 @@ const MAX_CARD_LINES: usize = 40;
 impl Render for ChatView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
-        if self.follow {
-            self.scroll.scroll_to_bottom();
-        }
         let subagent = self.focus.as_deref().and_then(|id| self.subagent(id));
-        let mut items: Vec<AnyElement> = (0..self.items.len())
-            .filter(|&i| self.visible(i))
-            .filter_map(|i| self.render_item(i, cx))
-            .collect();
         let working = match &subagent {
             Some(sub) => sub.status == SubagentStatus::Running,
             None => self.running && self.pending_permission().is_none(),
         };
-        if let Some(sub) = &subagent {
-            if let Some(task) = self.render_subagent_task(&sub.id, cx) {
-                items.insert(0, task);
+        let mut lead = Vec::new();
+        let mut trail = Vec::new();
+        match &subagent {
+            Some(sub) => {
+                if self.launch(&sub.id).is_some_and(|c| c.prompt.is_some()) {
+                    lead.push(Row::Task);
+                }
+                if self.subagent_result(sub).is_some() {
+                    trail.push(Row::Result);
+                }
             }
-            if let Some(result) = self.render_subagent_result(sub, cx) {
-                items.push(result);
+            None => {
+                if self.done_text(cx).is_some() {
+                    trail.push(Row::Done);
+                }
             }
         }
+        if working {
+            trail.push(Row::Working);
+        }
+        self.sync_rows(lead, trail);
 
         div()
             .key_context(super::CONTEXT)
@@ -59,52 +66,13 @@ impl Render for ChatView {
                 d.child(self.render_subagent_header(sub, cx))
             })
             .child(
-                div()
-                    .id("chat-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, _| {
-                        let dy = event.delta.pixel_delta(window.line_height()).y;
-                        if dy > px(0.) {
-                            this.follow = false;
-                        } else {
-                            let offset = this.scroll.offset().y;
-                            let max = this.scroll.max_offset().y;
-                            this.follow = -offset + px(24.) >= max;
-                        }
-                    }))
-                    .child(centered(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(SPACE_3)
-                            .px(SPACE_6)
-                            .py(SPACE_4)
-                            .children(items)
-                            .when(subagent.is_none(), |this| {
-                                this.children(self.render_done_card(cx))
-                            })
-                            .when(working, |this| {
-                                this.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(SPACE_2)
-                                        .h(px(24.))
-                                        .type_mono()
-                                        .text_color(t.tx3)
-                                        .child(Spinner::new().with_size(px(10.)).color(t.acc))
-                                        // In a subagent's view esc goes back instead.
-                                        .child(if subagent.is_some() {
-                                            "Working…"
-                                        } else {
-                                            "Working · esc to interrupt"
-                                        }),
-                                )
-                            }),
-                    )),
+                list(
+                    self.list.clone(),
+                    cx.processor(|this, ix, _, cx| this.render_row(ix, cx)),
+                )
+                .flex_1()
+                .min_h_0()
+                .py(SPACE_4),
             )
             .map(|d| match &subagent {
                 Some(_) => d.child(self.render_subagent_footer(cx)),
@@ -114,8 +82,54 @@ impl Render for ChatView {
 }
 
 impl ChatView {
-    /// "Ready for review" after a turn that ended normally, while the workspace has changes.
-    fn render_done_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// Row `ix` of the transcript list, laid out alone: only rows in or near the viewport are
+    /// rendered.
+    fn render_row(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let element = match self.rows.get(ix) {
+            Some(Row::Item(i)) => self.render_item(i, cx),
+            Some(Row::Task) => {
+                let focus = self.focus.clone();
+                focus.and_then(|id| self.render_subagent_task(&id, cx))
+            }
+            Some(Row::Result) => {
+                let sub = self.focus.as_deref().and_then(|id| self.subagent(id));
+                sub.and_then(|sub| self.render_subagent_result(&sub, cx))
+            }
+            Some(Row::Done) => self.render_done_card(cx),
+            Some(Row::Working) => Some(self.render_working(cx)),
+            None => None,
+        };
+        // The rows' top padding is the gap between them.
+        centered(
+            div()
+                .px(SPACE_6)
+                .when(ix > 0, |d| d.pt(SPACE_3))
+                .children(element),
+        )
+        .into_any_element()
+    }
+
+    fn render_working(&self, cx: &App) -> AnyElement {
+        let t = cx.tokens();
+        div()
+            .flex()
+            .items_center()
+            .gap(SPACE_2)
+            .h(px(24.))
+            .type_mono()
+            .text_color(t.tx3)
+            .child(Spinner::new().with_size(px(10.)).color(t.acc))
+            // In a subagent's view esc goes back instead.
+            .child(if self.focus.is_some() {
+                "Working…"
+            } else {
+                "Working · esc to interrupt"
+            })
+            .into_any_element()
+    }
+
+    /// The summary for the "Ready for review" card, when it shows.
+    fn done_text(&self, cx: &App) -> Option<String> {
         if !self.turn_done || self.running || self.exited {
             return None;
         }
@@ -123,7 +137,18 @@ impl ChatView {
         if summary.files == 0 {
             return None;
         }
-        let text = done_summary(summary.files, summary.insertions, summary.deletions);
+        Some(done_summary(
+            summary.files,
+            summary.insertions,
+            summary.deletions,
+        ))
+    }
+}
+
+impl ChatView {
+    /// "Ready for review" after a turn that ended normally, while the workspace has changes.
+    fn render_done_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = self.done_text(cx)?;
         let t = cx.tokens();
         Some(
             div()
@@ -244,6 +269,7 @@ impl ChatView {
                                 if let Some(Item::Thought { open, .. }) = this.items.get_mut(index)
                                 {
                                     *open = !*open;
+                                    super::rows::touch(&mut this.dirty, index);
                                     cx.notify();
                                 }
                             })),
