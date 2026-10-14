@@ -113,6 +113,13 @@ impl HangarApp {
             }
         };
         let path = self.path.as_ref().map(|p| p.value.clone());
+        // Without the device tools the agent still runs: say why, don't block it.
+        let extras = self
+            .agent_extras(&adapter.id, &workspace, cx)
+            .unwrap_or_else(|err| {
+                tracing::warn!("agent starts without device tools: {err:#}");
+                Default::default()
+            });
         let waker = TerminalWaker::new();
         let hook = waker.hook();
         let agent_name: SharedString = adapter.display_name.clone().into();
@@ -121,7 +128,14 @@ impl HangarApp {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    ops::start_session(&store, &adapter, &workspace, path.as_deref(), hook)
+                    ops::start_session_with(
+                        &store,
+                        &adapter,
+                        &workspace,
+                        path.as_deref(),
+                        hook,
+                        &extras,
+                    )
                 })
                 .await;
             this.update_in(cx, |this, window, cx| match result {
@@ -257,6 +271,7 @@ impl HangarApp {
         };
         let (session, _) = self.close_session(workspace_id);
         self.close_run(workspace_id);
+        self.close_mcp(workspace_id);
         self.projects
             .set_status(workspace_id, WorkspaceStatus::Archived);
         if self.panes.clear(workspace_id) {
@@ -409,6 +424,7 @@ impl HangarApp {
         }
         let (session, terminal) = self.close_session(workspace_id);
         self.close_run(workspace_id);
+        self.close_mcp(workspace_id);
         // Stop watching before the worktree disappears.
         self.sync_diffs(cx);
         cx.notify();

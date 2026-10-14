@@ -215,6 +215,26 @@ impl HangarApp {
         process: Option<String>,
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<String>> {
+        let entries = self.recent_log_entries(ws, lines, min_level, process, cx);
+        cx.background_executor().spawn(async move {
+            Ok(entries
+                .await?
+                .iter()
+                .map(format_log)
+                .collect::<Vec<_>>()
+                .join("\n"))
+        })
+    }
+
+    /// [`Self::recent_logs`] as entries, oldest first.
+    pub fn recent_log_entries(
+        &mut self,
+        ws: WorkspaceId,
+        lines: usize,
+        min_level: Option<LogLevel>,
+        process: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Task<anyhow::Result<Vec<LogEntry>>> {
         let acquire = self.acquire_device(ws, cx);
         cx.spawn(async move |_, cx| {
             let acquired = acquire.await?;
@@ -225,7 +245,7 @@ impl HangarApp {
                 capacity: lines.max(1) * 4,
             };
             let handle = acquired.session.handle();
-            let entries = cx
+            let mut entries = cx
                 .background_executor()
                 .spawn(async move {
                     let stream = handle.logs(&filter)?;
@@ -251,11 +271,7 @@ impl HangarApp {
                 .await?;
             drop(acquired);
             let start = entries.len().saturating_sub(lines);
-            Ok(entries[start..]
-                .iter()
-                .map(format_log)
-                .collect::<Vec<_>>()
-                .join("\n"))
+            Ok(entries.split_off(start))
         })
     }
 

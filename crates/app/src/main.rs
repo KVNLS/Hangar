@@ -38,10 +38,22 @@
 //!
 //! `HANGAR_DEV_SHOW=<screen>` runs last and leaves the window on `workspace`, `review` (split),
 //! `review-inline`, `overview`, `settings-{agents,devices,appearance,keybindings}`, `palette` or
-//! `sheet` (New workspace), for screenshots.
+//! `sheet` (New workspace) or `device` (device panel), for screenshots.
 //!
-//! `HANGAR_DEV_RUN=1` waits for the device panel to show a device (see `HANGAR_DEV_DEVICE`), then
-//! builds and runs the dev workspace on it (⌘R) and logs each step.
+//! Device pool (one device per workspace):
+//! - `HANGAR_DEV_WORKSPACES=a,b` — `HANGAR_DEV_OPEN` creates these workspaces instead of
+//!   `HANGAR_DEV_WORKSPACE`.
+//! - `HANGAR_DEV_TARGET=ios:<UDID>|android:<AVD id>` — base device of the created workspaces.
+//! - `HANGAR_DEV_DEVICE_LIMIT=auto|1..8` — "Devices at once" for this launch only (not saved).
+//! - `HANGAR_DEV_RUN=1` — builds and runs every created workspace (else the focused one) on its
+//!   own device at the same time (⌘R), logs `HANGAR_DEV_RUN done/failed`; `=<slug,slug>` runs
+//!   those workspaces.
+//! - `HANGAR_DEV_POOL_FRAMES=<dir>` — per created workspace, through the device API: status, a
+//!   frame saved as `<slug>.png`, a tap at the screen centre, the next frame as `<slug>-tap.png`,
+//!   then 5 log lines.
+//! - `HANGAR_DEV_SELECT=<slug>` — shows that workspace after the runs.
+//! - `HANGAR_PRESSURE=normal|warn|critical` — overrides the memory pressure reading for the boot
+//!   guard and the 10 s monitor (testing only; the real reading is used otherwise).
 //!
 //! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run; a
 //! worktree-relative path instead of `1` also selects that file once it shows up.

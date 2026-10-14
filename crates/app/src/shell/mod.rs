@@ -6,6 +6,7 @@ mod device_api;
 mod dialogs;
 mod layout;
 mod lifecycle;
+mod mcp;
 mod new_workspace;
 mod overview;
 mod palette;
@@ -240,6 +241,8 @@ pub struct HangarApp {
     device: DeviceLayout,
     /// Every workspace's device.
     device_pool: Entity<DevicePool>,
+    /// Serves the MCP device tools of `hangar mcp-bridge`; `None` if the socket could not be bound.
+    mcp: Option<crate::mcp_host::McpHandle>,
     /// `HANGAR_DEV_DEVICE_LIMIT`, applied when the pool loads.
     device_limit_override: Option<crate::device_pool::policy::Limit>,
     device_panel: Entity<DevicePanel>,
@@ -422,6 +425,7 @@ impl HangarApp {
             save_changes: None,
             device: DeviceLayout::default(),
             device_pool,
+            mcp: mcp::start(window, cx),
             device_limit_override,
             device_panel,
             save_device: None,
