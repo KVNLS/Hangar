@@ -129,6 +129,9 @@ impl HangarApp {
             }
         };
         let path = self.path.as_ref().map(|p| p.value.clone());
+        if let Some(message) = self.ollama_unavailable(&agent_id) {
+            window.push_notification(Notification::warning(message), cx);
+        }
         // Without the device tools the agent still runs: say why, don't block it.
         let extras = self
             .agent_extras(adapter.id(), &workspace, cx)
@@ -566,6 +569,7 @@ impl HangarApp {
                     };
                     let _ = app.update(cx, |this, cx| {
                         this.delete_workspace(workspace_id, options, window, cx)
+                            .detach()
                     });
                     true
                 })

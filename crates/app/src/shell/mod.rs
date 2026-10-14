@@ -8,6 +8,7 @@ mod layout;
 mod lifecycle;
 mod mcp;
 mod new_workspace;
+mod ollama;
 mod overview;
 mod palette;
 mod run;
@@ -308,6 +309,7 @@ pub struct HangarApp {
     palette: Option<palette::Palette>,
     overview_by_project: bool,
     settings_tab: settings::SettingsTab,
+    ollama: ollama::OllamaState,
     appearance: crate::ui::theme::Appearance,
     _appearance_observer: Subscription,
     creating: HashSet<ProjectId>,
@@ -435,6 +437,7 @@ impl HangarApp {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
+        let (ollama, ollama_subs) = ollama::OllamaState::new(window, cx);
         let device_limit_override = dev.device_limit;
         let db = paths::db_path();
         cx.spawn_in(window, async move |this, cx| {
@@ -488,6 +491,7 @@ impl HangarApp {
             palette: None,
             overview_by_project: false,
             settings_tab: Default::default(),
+            ollama,
             appearance: Default::default(),
             _appearance_observer: appearance_observer,
             creating: HashSet::new(),
@@ -528,7 +532,10 @@ impl HangarApp {
                 filter_sub,
                 pool_sub,
                 pool_observer,
-            ],
+            ]
+            .into_iter()
+            .chain(ollama_subs)
+            .collect(),
         }
     }
 
@@ -611,6 +618,9 @@ impl HangarApp {
                 if let Some(appearance) = loaded.appearance {
                     self.appearance = appearance;
                     appearance.apply(window, cx);
+                }
+                if let Some(ollama) = loaded.ollama {
+                    self.restore_ollama(ollama, window, cx);
                 }
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.device.open {

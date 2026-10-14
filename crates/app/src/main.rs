@@ -13,6 +13,8 @@
 //!   workspace (`HANGAR_DEV_WORKSPACE`, default `dev`) running `HANGAR_DEV_AGENT` (default
 //!   `shell`), then type `HANGAR_DEV_INPUT` followed by Enter into it. Exercises the full
 //!   add-project → worktree → store → agent flow without clicking.
+//! - `HANGAR_DEV_OLLAMA=<host>` — before `HANGAR_DEV_OPEN`, turn Ollama on at that host for this run (not
+//!   saved) and wait for its model list, so an OpenCode agent starts with the local models.
 //!
 //! After `HANGAR_DEV_OPEN` (if set), these run in order against workspaces found by slug,
 //! bypassing the confirmation dialogs:
