@@ -11,6 +11,7 @@ use hangar_runner::{RunPlan, Stack, Step};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
+use super::toast::ToastKind;
 use super::*;
 use crate::device_pool::Lease;
 use crate::device_view::DeviceHandle;
@@ -248,7 +249,7 @@ impl HangarApp {
     /// ⌘R: build and run the focused workspace on its device.
     pub(super) fn run_focused(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((_, workspace)) = self.focused_workspace() else {
-            window.push_notification("Focus a workspace to run it.", cx);
+            self.show_toast(ToastKind::Info, "Focus a workspace to run it.", cx);
             return;
         };
         let id = workspace.id;
@@ -335,8 +336,8 @@ impl HangarApp {
             tracing::info!(workspace = %id, device = %info.udid, name = %info.name, borrowed = acquired.borrowed, "run");
             if acquired.borrowed {
                 let message = format!("Running on {name}, shared with another workspace.");
-                let _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(Notification::info(message), cx);
+                let _ = this.update(cx, |this, cx| {
+                    this.show_toast(ToastKind::Info, message, cx);
                 });
             }
             let completion = Completion {
@@ -743,7 +744,7 @@ impl HangarApp {
                     Ok(apps) => {
                         tracing::info!(?apps, %device, "run: launched");
                         let summary = format!("Launched {} on {device}", apps.join(", "));
-                        window.push_notification(Notification::success(summary.clone()), cx);
+                        this.show_toast(ToastKind::Success, summary.clone(), cx);
                         this.finish_run(id, Ok(summary));
                     }
                     Err(err) => {

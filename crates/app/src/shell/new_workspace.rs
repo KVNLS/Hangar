@@ -50,7 +50,7 @@ pub(super) struct NewWorkspaceSheet {
 }
 
 /// `~/…` for paths under the home directory.
-fn tilde(path: &std::path::Path) -> String {
+pub(super) fn tilde(path: &std::path::Path) -> String {
     match std::env::var_os("HOME").map(PathBuf::from) {
         Some(home) if path.starts_with(&home) => {
             format!("~/{}", path.strip_prefix(&home).unwrap_or(path).display())
@@ -167,7 +167,7 @@ impl HangarApp {
                         .unwrap_or_default();
                     let branches = repo
                         .as_ref()
-                        .map(|r| crate::adapters::version_control().local_branches(r))
+                        .map(|r| crate::adapters::version_control().branch_tips(r))
                         .transpose()
                         .unwrap_or_else(|err| {
                             tracing::warn!("cannot list branches: {err:#}");
@@ -201,11 +201,28 @@ impl HangarApp {
                     return;
                 }
                 // The default base first (it may be a remote branch such as `origin/main`).
+                let now = hangar_core::Timestamp::now().as_millis();
+                let title = |name: &str| -> SharedString {
+                    match branches.iter().find(|tip| tip.name == name) {
+                        Some(tip) => format!(
+                            "{name} · {} · {}",
+                            tip.short_sha,
+                            super::status::age_label(tip.committed_at.saturating_mul(1000), now)
+                        )
+                        .into(),
+                        None => name.to_owned().into(),
+                    }
+                };
                 let options: Vec<TargetOption> = std::iter::once(default_base.clone())
-                    .chain(branches.into_iter().filter(|b| *b != default_base))
+                    .chain(
+                        branches
+                            .iter()
+                            .map(|tip| tip.name.clone())
+                            .filter(|b| *b != default_base),
+                    )
                     .map(|b| TargetOption {
-                        id: b.clone().into(),
-                        title: b.into(),
+                        title: title(&b),
+                        id: b.into(),
                     })
                     .collect();
                 sheet.base_branch.update(cx, |select, cx| {
@@ -364,6 +381,17 @@ impl HangarApp {
             let selected = sheet.agent.as_ref() == choice.id;
             let id = SharedString::from(choice.id.clone());
             let installed = choice.installed;
+            let structured = matches!(
+                agents::preset(&choice.id),
+                Some(agents::AgentPreset::Acp(_))
+            );
+            let ollama = agents::agent_profile(&choice.id).is_some_and(|p| p.ollama);
+            let subtitle = match (structured, ollama) {
+                (true, true) => "Structured · Ollama",
+                (true, false) => "Structured (ACP)",
+                (false, true) => "Terminal · Ollama",
+                (false, false) => "Terminal",
+            };
             div()
                 .id(SharedString::from(format!("sheet-agent-{}", choice.id)))
                 .flex()
@@ -398,6 +426,13 @@ impl HangarApp {
                                 .truncate()
                                 .child(choice.name.clone()),
                         ),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(t.tx2)
+                        .truncate()
+                        .child(subtitle),
                 )
                 .child(
                     div()

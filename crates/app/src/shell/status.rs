@@ -191,7 +191,11 @@ impl HangarApp {
                 self.select_workspace(id, window, cx);
             }
             None => {
-                window.push_notification("No workspace is waiting on you.", cx);
+                self.show_toast(
+                    super::toast::ToastKind::Info,
+                    "No workspace is waiting on you.",
+                    cx,
+                );
             }
         }
     }

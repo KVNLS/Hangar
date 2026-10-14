@@ -15,6 +15,7 @@ mod run;
 mod settings;
 mod sidebar;
 mod status;
+mod toast;
 mod view;
 mod welcome;
 
@@ -387,6 +388,8 @@ pub struct HangarApp {
     agent_setup: AgentSetup,
     live: LiveState,
     work: WorkState,
+    toast: Option<toast::Toast>,
+    settings_ui: settings::SettingsUi,
 }
 
 impl HangarApp {
@@ -398,6 +401,7 @@ impl HangarApp {
                 id: a.id().to_owned(),
                 name: a.display_name().to_owned(),
                 installed: true,
+                path: None,
             })
             .collect();
         let options = agent_options(&initial_choices);
@@ -448,10 +452,13 @@ impl HangarApp {
         let pool_sub = cx.subscribe_in(
             &device_pool,
             window,
-            |_, _, event: &PoolEvent, window, cx| match event {
+            |this, _, event: &PoolEvent, window, cx| match event {
                 PoolEvent::Notice(level, message) => {
                     let notification = match level {
-                        NoticeLevel::Info => Notification::info(message.clone()),
+                        NoticeLevel::Info => {
+                            this.show_toast(toast::ToastKind::Info, message.clone(), cx);
+                            return;
+                        }
                         NoticeLevel::Warning => Notification::warning(message.clone()),
                         NoticeLevel::Error => Notification::error(message.clone()),
                     };
@@ -484,6 +491,7 @@ impl HangarApp {
         let sidebar_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter workspaces"));
         let filter_sub = cx.subscribe(&sidebar_filter, |_, _, _: &InputEvent, cx| cx.notify());
+        let (settings_ui, settings_sub) = settings::SettingsUi::new(window, cx);
         let appearance_observer = cx.observe_window_appearance(window, |this, window, cx| {
             if this.layout.appearance == crate::ui::theme::Appearance::System {
                 this.layout.appearance.apply(window, cx);
@@ -578,6 +586,8 @@ impl HangarApp {
                 creating: HashSet::new(),
                 busy: HashSet::new(),
             },
+            toast: None,
+            settings_ui,
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
                 // ACP agents run in their own process group and some (codex-acp) outlive a
@@ -590,6 +600,7 @@ impl HangarApp {
                     async {}
                 }),
                 select_sub,
+                settings_sub,
                 changes_sub,
                 device_sub,
                 filter_sub,

@@ -1,4 +1,4 @@
-//! Sidebar: workspace filter, one section per project (header, workspace rows, archived group,
+//! Sidebar: workspace filter, state-count strip, one section per project (header, workspace rows, archived group,
 //! inline "new workspace" input), and the add-project footer.
 
 use gpui_kit::assets::IconName as Lucide;
@@ -6,11 +6,12 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::select::Select;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _};
 
 use super::status::DiffCounts;
 use super::*;
-use crate::ui::components::{AgentMark, Delta, StateGlyph, UiButton};
+use crate::ui::components::{AgentMark, Delta, StateGlyph, UiButton, section_label, state_colors};
 use crate::ui::{
     ActiveTokens as _, RADIUS_CONTROL, ROW_HEIGHT, ROW_HEIGHT_DENSE, SIDEBAR_WIDTH, TypeScale as _,
 };
@@ -338,6 +339,42 @@ impl HangarApp {
         )
     }
 
+    /// One chip per state with its workspace count; states that need the user are tinted.
+    fn render_state_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = cx.tokens();
+        let counts = self.state_counts(cx);
+        h_flex()
+            .gap(px(2.))
+            .children(AgentState::ORDER.into_iter().map(|state| {
+                let n = counts
+                    .iter()
+                    .find(|(s, _)| *s == state)
+                    .map_or(0, |(_, n)| *n);
+                let tinted = n > 0 && !matches!(state, AgentState::Idle | AgentState::Working);
+                let (_, bg) = state_colors(state, t);
+                div()
+                    .id(SharedString::from(format!(
+                        "state-count-{}",
+                        state.short_label()
+                    )))
+                    .flex()
+                    .flex_1()
+                    .h(px(24.))
+                    .items_center()
+                    .justify_center()
+                    .gap(px(5.))
+                    .rounded(px(4.))
+                    .when(tinted, |this| this.bg(bg))
+                    .font_mono()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if n > 0 { t.tx } else { t.tx3 })
+                    .tooltip(move |window, cx| Tooltip::new(state.label()).build(window, cx))
+                    .child(StateGlyph::new(state).size(px(8.)))
+                    .child(n.to_string())
+            }))
+    }
+
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
         let query = self
@@ -379,18 +416,23 @@ impl HangarApp {
             .border_r_1()
             .border_color(t.line)
             .child(
-                div().p_2().pb_1p5().child(
-                    Input::new(&self.layout.sidebar_filter)
-                        .small()
-                        .prefix(Icon::new(IconName::Search).size(px(12.)).text_color(t.tx3))
-                        .suffix(
-                            div()
-                                .font_mono()
-                                .text_size(px(10.))
-                                .text_color(t.tx3)
-                                .child("⌘P"),
-                        ),
-                ),
+                v_flex()
+                    .p_2()
+                    .pb_1p5()
+                    .gap_2()
+                    .child(
+                        Input::new(&self.layout.sidebar_filter)
+                            .small()
+                            .prefix(Icon::new(IconName::Search).size(px(12.)).text_color(t.tx3))
+                            .suffix(
+                                div()
+                                    .font_mono()
+                                    .text_size(px(10.))
+                                    .text_color(t.tx3)
+                                    .child("⌘P"),
+                            ),
+                    )
+                    .child(self.render_state_strip(cx)),
             )
             .child(
                 div()
@@ -400,6 +442,9 @@ impl HangarApp {
                     .overflow_y_scroll()
                     .px_1p5()
                     .pb_2()
+                    .when(!self.work.projects.is_empty(), |this| {
+                        this.child(section_label("Projects", cx).pt_1().px_1())
+                    })
                     .children(sections)
                     .when_some(notice, |this, notice| {
                         this.child(

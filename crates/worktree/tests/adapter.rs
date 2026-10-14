@@ -60,6 +60,11 @@ fn worktree_lifecycle_through_the_port() {
     assert_eq!(created, path);
     assert!(vc.branch_exists(&repo, "hangar/x").unwrap());
     assert_eq!(vc.local_branches(&repo).unwrap(), ["hangar/x", "main"]);
+    let tips = vc.branch_tips(&repo).unwrap();
+    let names: Vec<&str> = tips.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["hangar/x", "main"]);
+    assert_eq!(tips[0].short_sha, tips[1].short_sha);
+    assert!(tips[0].short_sha.len() >= 7 && tips[0].committed_at > 0);
     let listed = vc.worktrees(&repo).unwrap();
     assert_eq!(listed.len(), 2);
     assert!(listed[0].is_main && !listed[1].is_main);

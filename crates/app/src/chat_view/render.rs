@@ -77,7 +77,7 @@ impl Render for ChatView {
                                         .type_mono()
                                         .text_color(t.tx3)
                                         .child(Spinner::new().with_size(px(10.)).color(t.acc))
-                                        .child("Working…"),
+                                        .child("Working · esc to interrupt"),
                                 )
                             }),
                     )),
@@ -442,7 +442,11 @@ impl ChatView {
                     .type_body_strong()
                     .text_size(px(12.))
                     .child(StateGlyph::new(AgentState::Approval).size(px(9.)))
-                    .child(format!("{} asks for permission", self.agent_name)),
+                    .child(if request.tool_call.kind.as_deref() == Some("execute") {
+                        format!("{} wants to run a command", self.agent_name)
+                    } else {
+                        format!("{} asks for permission", self.agent_name)
+                    }),
             )
             .child(
                 div()

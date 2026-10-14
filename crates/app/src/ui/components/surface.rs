@@ -95,7 +95,7 @@ impl RenderOnce for EmptyState {
     }
 }
 
-/// Bottom-right notification body (the caller positions and dismisses it).
+/// Toast body (the caller positions and dismisses it).
 pub fn toast(
     icon: impl Into<Icon>,
     icon_color: Hsla,

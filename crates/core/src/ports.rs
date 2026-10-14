@@ -121,6 +121,15 @@ pub struct ListedWorktree {
     pub bare: bool,
 }
 
+/// A local branch and the commit it points at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchTip {
+    pub name: String,
+    pub short_sha: String,
+    /// Committer date of the tip, Unix seconds.
+    pub committed_at: i64,
+}
+
 /// What removing a worktree would throw away.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChangeCounts {
@@ -139,6 +148,8 @@ pub trait VersionControl: Send + Sync {
     fn branch_exists(&self, repo: &Path, name: &str) -> PortResult<bool>;
     /// Local branch names, for picking a workspace's base.
     fn local_branches(&self, repo: &Path) -> PortResult<Vec<String>>;
+    /// Local branches with their tip commit, sorted by name.
+    fn branch_tips(&self, repo: &Path) -> PortResult<Vec<BranchTip>>;
     /// Creates the branch and its worktree; returns the worktree path as created.
     fn add_worktree(&self, repo: &Path, worktree: &NewWorktree) -> PortResult<PathBuf>;
     fn worktrees(&self, repo: &Path) -> PortResult<Vec<ListedWorktree>>;

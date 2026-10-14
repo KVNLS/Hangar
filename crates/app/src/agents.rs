@@ -17,6 +17,8 @@ pub struct AgentChoice {
     pub id: String,
     pub name: String,
     pub installed: bool,
+    /// The program as found on `PATH`.
+    pub path: Option<PathBuf>,
 }
 
 /// A built-in agent: an interactive CLI in a terminal, or a structured agent over ACP.
@@ -70,10 +72,14 @@ pub fn all_presets() -> Vec<AgentPreset> {
 pub fn choices(path: Option<&str>) -> Vec<AgentChoice> {
     all_presets()
         .into_iter()
-        .map(|preset| AgentChoice {
-            installed: is_installed(preset.program(), path),
-            id: preset.id().to_owned(),
-            name: preset.display_name().to_owned(),
+        .map(|preset| {
+            let found = find_program(preset.program(), path.map(OsStr::new));
+            AgentChoice {
+                installed: found.is_some(),
+                path: found,
+                id: preset.id().to_owned(),
+                name: preset.display_name().to_owned(),
+            }
         })
         .collect()
 }
@@ -362,6 +368,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             installed,
+            path: None,
         }
     }
 
