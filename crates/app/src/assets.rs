@@ -31,6 +31,7 @@ gpui_kit::assets::icon_assets!(
         RotateCwSquare,
         Rows2,
         Smartphone,
+        Square,
         SunMoon,
         Terminal,
         Volume1,

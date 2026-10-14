@@ -203,6 +203,11 @@ impl HangarApp {
             .picker()
             .selected_entry()
             .map(|entry| format!("{} · {}", entry.info.name, entry.info.state.to_lowercase()));
+        let run = self
+            .panes
+            .slot(self.panes.focused())
+            .and_then(|id| self.runs.get(&id))
+            .map(|run| run.summary());
         h_flex()
             .flex_none()
             .h(STATUS_BAR_HEIGHT)
@@ -235,6 +240,21 @@ impl HangarApp {
                         .items_center()
                         .child(gpui_kit::component::Icon::new(Lucide::Smartphone).size(px(11.)))
                         .child(device),
+                )
+            })
+            .when_some(run, |this, (text, state)| {
+                let color = match state {
+                    AgentState::Failed => t.red,
+                    AgentState::Working => t.acc,
+                    _ => t.tx2,
+                };
+                this.child(div().w(px(1.)).h(px(12.)).bg(t.line2)).child(
+                    h_flex()
+                        .gap(px(5.))
+                        .items_center()
+                        .text_color(color)
+                        .child(gpui_kit::component::Icon::new(Lucide::Hammer).size(px(11.)))
+                        .child(text),
                 )
             })
             .child(div().flex_1())

@@ -88,6 +88,13 @@ impl HangarApp {
         let commands = CommandGroup::new().label("Commands").items([
             command("New workspace…", Lucide::Plus, Box::new(NewWorkspace)),
             command("Review changes", Lucide::FileDiff, Box::new(OpenReview)),
+            command("Build and run", Lucide::Hammer, Box::new(Run)),
+            command("Stop the run", Lucide::Square, Box::new(StopRun)),
+            command(
+                "Restart dev server",
+                Lucide::RotateCw,
+                Box::new(RestartServer),
+            ),
             command("Overview", Lucide::LayoutGrid, Box::new(ToggleOverview)),
             command("Settings", Lucide::Settings, Box::new(OpenSettings)),
             command("Show device", Lucide::Smartphone, Box::new(ShowDeviceTab)),

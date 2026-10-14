@@ -2992,6 +2992,7 @@ dependencies = [
  "hangar-core",
  "hangar-devices",
  "hangar-files",
+ "hangar-runner",
  "hangar-terminal",
  "hangar-worktree",
  "image",

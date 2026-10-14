@@ -66,6 +66,8 @@ pub struct DevOptions {
     pub appearance: Option<String>,
     /// Screen to leave the window on once every other hook has run (for screenshots).
     pub show: Option<String>,
+    /// Build and run the dev workspace once the device panel has a device open.
+    pub run: bool,
     pub merge: Option<MergeStrategy>,
     /// Device id (simulator UDID) to open in the device panel.
     pub device: Option<String>,
@@ -163,6 +165,7 @@ impl DevOptions {
             files: var("HANGAR_DEV_FILES"),
             appearance: var("HANGAR_DEV_APPEARANCE"),
             show: var("HANGAR_DEV_SHOW"),
+            run: flag("HANGAR_DEV_RUN"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
                 "squash" => Some(MergeStrategy::Squash),
@@ -251,6 +254,10 @@ pub(super) async fn run_dev_hooks(
         {
             task.await;
         }
+    }
+    if dev.run {
+        let this = this.clone();
+        cx.spawn(async move |cx| dev_run(this, cx).await).detach();
     }
     run_review_hooks(&this, &dev, cx).await;
     if dev.review {
@@ -362,6 +369,30 @@ pub(super) async fn run_dev_hooks(
     if let Some(name) = dev.show.clone() {
         dev_show(&this, &name, cx).await;
     }
+}
+
+/// `HANGAR_DEV_RUN`: waits for an open device, then runs the focused workspace (⌘R). Outcomes
+/// are logged by the run itself (`run command ended`, `run: launched`).
+async fn dev_run(this: WeakEntity<HangarApp>, cx: &mut AsyncWindowContext) {
+    let deadline = std::time::Instant::now() + DEV_BOOT_TIMEOUT;
+    loop {
+        let ready = this
+            .update(cx, |this, cx| {
+                this.focused_workspace().is_some()
+                    && this.device_panel.read(cx).run_target(cx).is_some()
+            })
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            tracing::error!("HANGAR_DEV_RUN: no open device and focused workspace in time");
+            return;
+        }
+        cx.background_executor().timer(DEV_POLL).await;
+    }
+    tracing::info!("HANGAR_DEV_RUN");
+    let _ = this.update_in(cx, |this, window, cx| this.run_focused(window, cx));
 }
 
 /// `HANGAR_DEV_SHOW`: leaves the window on one screen or overlay.

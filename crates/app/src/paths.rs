@@ -41,6 +41,12 @@ fn worktrees_root_for(
     })
 }
 
+/// Per-workspace build output (Xcode derived data), next to the worktrees and outside them so
+/// builds never show up as changes.
+pub fn builds_root() -> Option<PathBuf> {
+    Some(worktrees_root()?.parent()?.join("builds"))
+}
+
 pub fn worktree_path(root: &Path, project_slug: &str, slug: &str) -> PathBuf {
     root.join(project_slug).join(slug)
 }

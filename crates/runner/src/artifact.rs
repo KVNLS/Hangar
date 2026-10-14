@@ -24,10 +24,17 @@ pub fn xcode_schemes(root: &Path, container: &Path) -> Result<Vec<String>> {
     parse_schemes(&out)
 }
 
-/// The scheme to build: the saved choice if it still exists, else the only scheme.
+/// The scheme to build: the saved choice if it still exists, else the only scheme, else the
+/// scheme Xcode creates for the project (named after the container).
 pub fn pick_scheme(container: &Path, schemes: &[String], saved: Option<&str>) -> Result<String> {
     if let Some(saved) = saved.filter(|s| schemes.iter().any(|x| x == s)) {
         return Ok(saved.to_owned());
+    }
+    let stem = container.file_stem().and_then(|s| s.to_str());
+    if schemes.len() > 1
+        && let Some(named) = schemes.iter().find(|s| Some(s.as_str()) == stem)
+    {
+        return Ok(named.clone());
     }
     match schemes {
         [] => Err(Error::NoScheme(container.display().to_string())),
@@ -199,6 +206,8 @@ mod tests {
             Err(Error::SchemeRequired(_))
         ));
         assert_eq!(pick_scheme(c, &two[..1], None).unwrap(), "A");
+        let named = vec!["DemoTests".to_owned(), "Demo".to_owned()];
+        assert_eq!(pick_scheme(c, &named, None).unwrap(), "Demo");
         assert!(matches!(pick_scheme(c, &[], None), Err(Error::NoScheme(_))));
     }
 

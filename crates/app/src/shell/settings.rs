@@ -57,6 +57,8 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Add project", "cmd-o", "Global"),
     ("Toggle sidebar", "cmd-b", "Global"),
     ("Review changes", "cmd-shift-r", "Workspace"),
+    ("Build and run on the device", "cmd-r", "Workspace"),
+    ("Stop the run", "cmd-.", "Workspace"),
     ("Right panel: Device", "cmd-1", "Workspace"),
     ("Right panel: Changes", "cmd-2", "Workspace"),
     ("Right panel: Files", "cmd-3", "Workspace"),

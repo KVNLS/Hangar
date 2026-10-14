@@ -35,6 +35,7 @@ hangar-agents.workspace = true
 hangar-terminal.workspace = true
 hangar-files.workspace = true
 hangar-devices.workspace = true
+hangar-runner.workspace = true
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true

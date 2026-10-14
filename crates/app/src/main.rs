@@ -35,6 +35,9 @@
 //! `review-inline`, `overview`, `settings-{agents,devices,appearance,keybindings}`, `palette` or
 //! `sheet` (New workspace), for screenshots.
 //!
+//! `HANGAR_DEV_RUN=1` waits for the device panel to show a device (see `HANGAR_DEV_DEVICE`), then
+//! builds and runs the dev workspace on it (⌘R) and logs each step.
+//!
 //! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run; a
 //! worktree-relative path instead of `1` also selects that file once it shows up.
 //!

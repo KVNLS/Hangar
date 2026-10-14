@@ -248,6 +248,7 @@ impl HangarApp {
             return Task::ready(());
         };
         let (session, _) = self.close_session(workspace_id);
+        self.close_run(workspace_id);
         self.projects
             .set_status(workspace_id, WorkspaceStatus::Archived);
         if self.panes.clear(workspace_id) {
@@ -389,6 +390,7 @@ impl HangarApp {
             return Task::ready(false);
         }
         let (session, terminal) = self.close_session(workspace_id);
+        self.close_run(workspace_id);
         // Stop watching before the worktree disappears.
         self.sync_diffs(cx);
         cx.notify();
@@ -419,6 +421,7 @@ impl HangarApp {
                             "workspace deleted"
                         );
                         this.projects.remove_workspace(workspace_id);
+                        this.forget_run_config(workspace_id);
                         if this.panes.clear(workspace_id) {
                             this.panes_changed(window, cx);
                         }
@@ -558,14 +561,32 @@ impl HangarApp {
     }
 
     pub(super) fn focus_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let live = self
-            .panes
-            .slot(self.panes.focused())
-            .and_then(|id| self.sessions.get(&id));
-        if let Some(live) = live {
-            let handle = live.view.focus_handle(cx);
+        let Some(id) = self.panes.slot(self.panes.focused()) else {
+            return;
+        };
+        let view = self
+            .run_view(id, self.pane_tab(id))
+            .or_else(|| self.sessions.get(&id).map(|live| live.view.clone()));
+        if let Some(view) = view {
+            let handle = view.focus_handle(cx);
             window.focus(&handle, cx);
         }
+    }
+
+    /// Switches the workspace's pane between its agent and run terminals.
+    pub(super) fn show_pane_tab(
+        &mut self,
+        id: WorkspaceId,
+        tab: run::PaneTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pane_tabs.insert(id, tab);
+        if let Some(pane) = (0..PANE_COUNT).find(|p| self.panes.slot(*p) == Some(id)) {
+            self.focus_pane(pane, window, cx);
+        }
+        self.focus_terminal(window, cx);
+        cx.notify();
     }
 
     /// The first active workspace with this slug, for dev hooks.

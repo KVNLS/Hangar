@@ -57,6 +57,13 @@ impl SelectItem for DeviceOption {
 
 type DeviceSelect = SelectState<Vec<DeviceOption>>;
 
+/// Where ⌘R builds and runs: the device open in the panel.
+pub struct RunTarget {
+    pub target: hangar_runner::Target,
+    pub name: SharedString,
+    pub handle: crate::device_view::DeviceHandle,
+}
+
 enum Connection {
     None,
     Opening {
@@ -179,6 +186,28 @@ impl DevicePanel {
             Connection::Open { view, .. } => Some(view),
             _ => None,
         }
+    }
+
+    /// The open device as a run target, once frames flow.
+    pub fn run_target(&self, cx: &App) -> Option<RunTarget> {
+        let Connection::Open { key, view, .. } = &self.connection else {
+            return None;
+        };
+        let view = view.read(cx);
+        let info = view.info();
+        let (platform, avd) = match key.platform {
+            Platform::Ios => (hangar_devices::Platform::Ios, None),
+            Platform::Android => (hangar_devices::Platform::Android, Some(key.id.clone())),
+        };
+        Some(RunTarget {
+            target: hangar_runner::Target {
+                platform,
+                id: info.udid.clone(),
+                avd,
+            },
+            name: info.name.clone().into(),
+            handle: view.handle(),
+        })
     }
 
     /// Shown → list devices and open the selected one; hidden → close it (stops capture).

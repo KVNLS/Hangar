@@ -385,3 +385,12 @@ fn settings_round_trip_and_overwrite() {
         Err(StoreError::Serde(_))
     ));
 }
+
+#[test]
+fn delete_setting_removes_the_key() {
+    let store = Store::open_in_memory().unwrap();
+    store.set_setting("run:x", &8100u16).unwrap();
+    store.delete_setting("run:x").unwrap();
+    assert_eq!(store.get_setting::<u16>("run:x").unwrap(), None);
+    store.delete_setting("missing").unwrap();
+}

@@ -29,6 +29,24 @@ impl Stack {
     }
 }
 
+impl Stack {
+    /// Whether this stack builds for `platform` (React Native, Expo and Flutter build for both).
+    pub fn targets(&self, platform: hangar_devices::Platform) -> bool {
+        use hangar_devices::Platform;
+        match self {
+            Self::Xcode { .. } => platform == Platform::Ios,
+            Self::Gradle { .. } => platform == Platform::Android,
+            Self::Expo { .. } | Self::ReactNative { .. } | Self::Flutter { .. } => true,
+        }
+    }
+}
+
+/// The first detected stack that builds for `platform`: a repository with native `ios/` and
+/// `android/` apps runs the one matching the open device.
+pub fn pick_stack(stacks: &[Stack], platform: hangar_devices::Platform) -> Option<&Stack> {
+    stacks.iter().find(|stack| stack.targets(platform))
+}
+
 /// Native subprojects that cross-platform stacks keep next to their sources.
 const NATIVE_DIRS: [&str; 2] = ["ios", "android"];
 
@@ -290,6 +308,27 @@ mod tests {
             "plugins { id 'com.android.library' }",
         );
         assert!(detect(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn picks_the_stack_for_the_device_platform() {
+        use hangar_devices::Platform;
+        let native = vec![
+            Stack::Xcode {
+                container: PathBuf::from("ios/Demo.xcodeproj"),
+            },
+            Stack::Gradle {
+                dir: PathBuf::from("android"),
+                module: "app".into(),
+            },
+        ];
+        assert_eq!(pick_stack(&native, Platform::Android), native.get(1));
+        assert_eq!(pick_stack(&native, Platform::Ios), native.first());
+        let flutter = vec![Stack::Flutter {
+            dir: PathBuf::new(),
+        }];
+        assert_eq!(pick_stack(&flutter, Platform::Ios), flutter.first());
+        assert_eq!(pick_stack(&native[..1], Platform::Android), None);
     }
 
     #[test]
