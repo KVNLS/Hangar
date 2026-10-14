@@ -186,3 +186,33 @@ fn a_child_starts_from_the_parents_base_named_after_its_task() {
     .unwrap();
     assert_eq!(long.name, "Rewrite the onboarding flow so new users…");
 }
+
+#[test]
+fn a_child_waiting_for_the_user_cannot_be_prompted() {
+    assert_eq!(
+        check_prompt("Child", AgentState::Approval),
+        Err(Refusal::WaitingForUser {
+            name: "Child".into(),
+            what: "a permission request",
+        })
+    );
+    assert!(matches!(
+        check_prompt("Child", AgentState::Input),
+        Err(Refusal::WaitingForUser { .. })
+    ));
+    for state in [
+        AgentState::Idle,
+        AgentState::Working,
+        AgentState::Review,
+        AgentState::Failed,
+    ] {
+        assert_eq!(check_prompt("Child", state), Ok(()));
+    }
+}
+
+#[test]
+fn prompt_text_keeps_only_printable_text_and_line_breaks() {
+    assert_eq!(prompt_text("fix it\n\tnow"), "fix it\n\tnow");
+    assert_eq!(prompt_text("1\r"), "1");
+    assert_eq!(prompt_text("a\x03b\x1b[Ac\u{9b}d"), "ab[Acd");
+}

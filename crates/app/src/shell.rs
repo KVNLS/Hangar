@@ -249,11 +249,19 @@ impl LiveSession {
         }
     }
 
-    /// Types `text` and Return into a terminal agent, or sends it as a chat agent's prompt.
+    /// Types `text` and Return into a terminal agent (as a paste when it takes bracketed pastes,
+    /// so a multi-line text stays one message), or sends it as a chat agent's prompt.
     fn send_text(&self, text: &str, cx: &mut App) -> anyhow::Result<()> {
         match &self.surface {
             AgentSurface::Terminal { handle, .. } => {
-                handle.session().write(format!("{text}\r"))?;
+                let bracketed = handle.session().terminal().modes().bracketed_paste;
+                let mut bytes = if bracketed {
+                    hangar_terminal::encode_paste(text, true)
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                bytes.push(b'\r');
+                handle.session().write(bytes)?;
                 Ok(())
             }
             AgentSurface::Chat { view, .. } => view.update(cx, |chat, cx| chat.send(text, cx)),
