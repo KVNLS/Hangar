@@ -330,8 +330,19 @@ pub fn boot(
         std::thread::sleep(Duration::from_millis(250));
     }
     tracing::info!(serial, elapsed = ?started.elapsed(), "emulator booted");
+    disable_stylus_handwriting(&adb, &serial);
     let adb_devices = adb.devices().unwrap_or_default();
     Ok(describe(&adb, found, &adb_devices))
+}
+
+/// The emulator's touchscreen reports stylus support, so with handwriting on, Gboard opens its
+/// "Try out your stylus" sheet on every text field and typed text lands there. Persists in the
+/// AVD's data; a failure is only logged.
+fn disable_stylus_handwriting(adb: &Adb, serial: &str) {
+    match adb.shell(serial, "settings put secure stylus_handwriting_enabled 0") {
+        Ok(_) => tracing::info!(serial, "stylus handwriting disabled"),
+        Err(e) => tracing::warn!(serial, "could not disable stylus handwriting: {e}"),
+    }
 }
 
 /// Waits for an emulator process to exit (discovery file pid gone).

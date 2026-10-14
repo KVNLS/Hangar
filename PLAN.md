@@ -121,9 +121,10 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Devices: device panel controls, logs pane, Rotate and the boot stage text never checked visually (no
   screen capture in agent sessions); logs pane fixed height, no horizontal scroll. Android run live through
   the dev hooks (2026-10-05, Pixel_10_Pro, gRPC): boot from the panel then auto-open, saved AVD selection
-  reopened on relaunch, tap, text, Lock (screen asleep), shutdown. Volume Up twice raised music volume by one
-  step only. A gRPC tap into a text field opened Gboard's "Try out your stylus" sheet, which got the typed text
-  (gRPC touches may be seen as a stylus).
+  reopened on relaunch, tap, text, Lock (screen asleep), shutdown. Volume: the first press only shows the
+  volume panel (same with `adb input keyevent`). The emulator touchscreen reports stylus support, so Gboard's
+  "Try out your stylus" sheet took every text field; Hangar boots now set `stylus_handwriting_enabled 0`
+  (emulators started elsewhere keep the sheet until it is turned off).
 
 ## Next
 - Manual pass over the device panel (both platforms), then M6 mobile run loop.
