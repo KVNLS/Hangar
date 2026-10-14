@@ -63,6 +63,35 @@ pub fn chat_key(id: WorkspaceId) -> String {
     format!("chat:{id}")
 }
 
+/// Model, effort and other non-mode choices made in an agent's chat, re-applied to its next
+/// sessions. The mode is left out: it decides what the agent may do without asking.
+pub fn agent_config_key(agent: &str) -> String {
+    format!("agent_config:{agent}")
+}
+
+/// `(config id, value)` pairs in the order they were chosen.
+pub fn saved_agent_config(store: &Store, agent: &str) -> Vec<(String, String)> {
+    store
+        .get_setting(&agent_config_key(agent))
+        .unwrap_or_else(|err| {
+            tracing::warn!(agent, "cannot read saved agent settings: {err}");
+            None
+        })
+        .unwrap_or_default()
+}
+
+pub fn remember_agent_config(
+    store: &Store,
+    agent: &str,
+    config_id: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    let mut saved = saved_agent_config(store, agent);
+    saved.retain(|(id, _)| id != config_id);
+    saved.push((config_id.to_owned(), value.to_owned()));
+    Ok(store.set_setting(&agent_config_key(agent), &saved)?)
+}
+
 /// Loads every project with its workspaces (active and archived) and the saved settings.
 /// Sessions left `Starting`/`Running` by a previous run are marked failed: their processes
 /// ended with that run.
@@ -361,13 +390,17 @@ pub fn start_acp_session(
 
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
     session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
+    let wanted = saved_agent_config(store, &adapter.id);
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
         .and_then(|()| {
             adapter
                 .start(&ctx, &extra.mcp_servers, resume)
                 .map_err(anyhow::Error::new)
         })
-        .map(|(acp, events)| {
+        .map(|(mut acp, events)| {
+            for refused in acp.apply_config(&wanted) {
+                tracing::warn!(agent = %adapter.id, "saved setting not applied: {refused}");
+            }
             let command = acp.program().display().to_string();
             ((acp, events), command)
         });
@@ -813,6 +846,25 @@ mod tests {
         store.set_setting(&chat_key(ws.id), &chat).unwrap();
         let loaded = load(&store).unwrap();
         assert_eq!(loaded.chats.get(&ws.id), Some(&chat));
+    }
+
+    #[test]
+    fn agent_config_choices_replace_and_keep_order() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(saved_agent_config(&store, "codex-acp").is_empty());
+        remember_agent_config(&store, "codex-acp", "model", "gpt-5.4").unwrap();
+        remember_agent_config(&store, "codex-acp", "reasoning_effort", "high").unwrap();
+        remember_agent_config(&store, "codex-acp", "model", "gpt-5.5").unwrap();
+        remember_agent_config(&store, "claude-acp", "model", "opus").unwrap();
+        let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+        assert_eq!(
+            saved_agent_config(&store, "codex-acp"),
+            [pair("reasoning_effort", "high"), pair("model", "gpt-5.5")]
+        );
+        assert_eq!(
+            saved_agent_config(&store, "claude-acp"),
+            [pair("model", "opus")]
+        );
     }
 
     #[test]

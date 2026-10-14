@@ -270,6 +270,7 @@ impl HangarApp {
                 format!("Could not resume the previous conversation ({reason}); this is a new one");
             view.update(cx, |chat, _| chat.add_notice(true, text));
         }
+        let agent_id = acp.agent_id().to_owned();
         let exit = cx.subscribe_in(
             &view,
             window,
@@ -282,6 +283,12 @@ impl HangarApp {
                     this.on_session_exit(workspace_id, ops::acp_exit_status(*code), window, cx);
                 }
                 ChatEvent::OpenFile(path) => this.open_in_files(workspace_id, path, window, cx),
+                ChatEvent::ConfigChosen { config_id, value } => {
+                    let (agent, id, value) = (agent_id.clone(), config_id.clone(), value.clone());
+                    this.persist(window, cx, move |store| {
+                        ops::remember_agent_config(store, &agent, &id, &value)
+                    });
+                }
             },
         );
         let live = LiveSession {

@@ -214,6 +214,12 @@ Git access is the `git` CLI with porcelain output, not a library.
   used (MCP tool calls ask for approval). Its turn fails while `~/.codex/config.toml` picks a model the
   ChatGPT login refuses (owner's config, left alone). Gemini is not signed in here: `session/new` answers
   -32000, which Hangar now reports as `NotSignedIn` with each preset's login hint. Gemini turns unchecked.
+- Model and effort: the composer shows a chip per non-mode `configOptions` select the agent offers (Claude
+  Code: model, effort, fast mode; Codex: model, then reasoning effort once a model with efforts is picked;
+  OpenCode: model). `session/set_config_option` answers with the full new list, which replaces the chips;
+  `config_option_update` does the same. Choices are saved per agent (`agent_config:<agent id>`, mode left
+  out: it decides permissions) and re-applied right after each new session starts, model first. Checked on
+  screen with Codex (GPT-5.5 → effort chip, Low; next session starts on GPT-5.5 / Low) and Claude Code.
 - Quit (⌘Q, new) and window close stop every live agent (`on_app_quit`): codex-acp ignores a closed stdin
   and would outlive Hangar. A crash or SIGKILL of Hangar still leaves such agents running.
 - Mono text (`TypeScale::font_mono`, terminal) turns Geist Mono's `liga`/`calt` off: its ligatures drew `--`
@@ -267,4 +273,3 @@ Git access is the `git` CLI with porcelain output, not a library.
   the display slept during the check).
 - Branch `opencode-acp` (OpenCode, Codex, Gemini over ACP; mono ligature fix; ⌘Q) awaits review.
 - Gemini over ACP: sign in (`gemini`, Log in with Google), then check a turn, modes and MCP live.
-- Codex config/model selection per agent is not exposed (agents' `configOptions` model select ignored).
