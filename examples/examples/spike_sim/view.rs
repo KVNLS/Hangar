@@ -67,7 +67,9 @@ impl SimView {
         );
         let screen = cx.new(|cx| DeviceView::new(session, stats, cx));
         let events = cx.subscribe(&screen, |this, _, event: &DeviceViewEvent, cx| {
-            let DeviceViewEvent::Input(result) = event;
+            let DeviceViewEvent::Input(result) = event else {
+                return;
+            };
             this.status = match &result.result {
                 Ok(()) => format!(
                     "{:?} sent in {} ms",

@@ -18,11 +18,16 @@ use gpui_kit::*;
 use hangar_devices::{DeviceInfo, Frame, Input};
 
 use geometry::{Gesture, Rect};
-pub use session::{DeviceSession, InputResult, coalesce};
+use session::Outcome;
+pub use session::{DeviceSession, InputResult, TextResult};
 
 pub enum DeviceViewEvent {
     /// An input was delivered (or failed). Successful `TouchMove`s are not reported.
     Input(InputResult),
+    /// Typed text could not be delivered.
+    Text(TextResult),
+    /// The device was asked to shut down (see [`DeviceView::shutdown`]).
+    Shutdown(Result<(), String>),
 }
 
 struct Shown {
@@ -43,6 +48,7 @@ pub struct DeviceView {
     press: u64,
     hold: Option<Task<()>>,
     stats: Rc<RefCell<Stats>>,
+    focus_handle: FocusHandle,
     _frames: Task<()>,
     _results: Task<()>,
 }
@@ -78,11 +84,13 @@ impl DeviceView {
         });
         let results = match session.take_results() {
             Some(mut rx) => cx.spawn(async move |this, cx| {
-                while let Some(result) = rx.recv().await {
-                    if this
-                        .update(cx, |_, cx| cx.emit(DeviceViewEvent::Input(result)))
-                        .is_err()
-                    {
+                while let Some(outcome) = rx.recv().await {
+                    let event = match outcome {
+                        Outcome::Input(result) => DeviceViewEvent::Input(result),
+                        Outcome::Text(result) => DeviceViewEvent::Text(result),
+                        Outcome::Shutdown(result) => DeviceViewEvent::Shutdown(result),
+                    };
+                    if this.update(cx, |_, cx| cx.emit(event)).is_err() {
                         break;
                     }
                 }
@@ -98,6 +106,7 @@ impl DeviceView {
             press: 0,
             hold: None,
             stats: Rc::new(RefCell::new(Stats::new(stats))),
+            focus_handle: cx.focus_handle(),
             _frames: frames,
             _results: results,
         }
@@ -115,6 +124,27 @@ impl DeviceView {
     pub fn send(&self, input: Input) {
         if !self.session.send(input) {
             tracing::warn!(?input, "device input thread has stopped");
+        }
+    }
+
+    /// Asks the device to shut down (in the background); the result arrives as an event.
+    pub fn shutdown(&self) {
+        if !self.session.shutdown() {
+            tracing::warn!("device input thread has stopped");
+        }
+    }
+
+    /// Queues typed text for the focused field of the device.
+    pub fn send_text(&self, text: String) {
+        if !self.session.send_text(text) {
+            tracing::warn!("device input thread has stopped");
+        }
+    }
+
+    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = key_text(&event.keystroke) {
+            self.send_text(text);
+            cx.stop_propagation();
         }
     }
 
@@ -232,6 +262,29 @@ impl Drop for DeviceView {
     }
 }
 
+/// The text a key press types on the device. Shortcuts (Cmd, Ctrl) and keys without text
+/// (arrows, Escape) are not typed.
+fn key_text(keystroke: &Keystroke) -> Option<String> {
+    let m = keystroke.modifiers;
+    if m.platform || m.control || m.function {
+        return None;
+    }
+    match keystroke.key.as_str() {
+        "enter" => Some("\n".to_owned()),
+        "backspace" => Some("\u{8}".to_owned()),
+        _ => keystroke
+            .key_char
+            .clone()
+            .filter(|text| !text.is_empty() && !text.chars().any(char::is_control)),
+    }
+}
+
+impl Focusable for DeviceView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 /// Copies a BGRA frame into a GPUI image (which keeps BGRA bytes in an `RgbaImage` container).
 fn to_render_image(frame: &Frame) -> Option<Arc<RenderImage>> {
     let row = frame.width as usize * 4;
@@ -305,8 +358,17 @@ impl Render for DeviceView {
         let overlay = self.stats.borrow().overlay();
         let theme = cx.theme();
         div()
+            .id("device-screen")
             .relative()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, window, cx| {
+                    window.focus(&view.focus_handle, cx);
+                }),
+            )
             .child(screen)
             .when(!has_frame, |this| {
                 this.child(
@@ -466,5 +528,50 @@ impl Stats {
                 .clone()
                 .unwrap_or_else(|| "measuring… (stats update on new frames)".to_owned())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::key_text;
+    use gpui_kit::{Keystroke, Modifiers};
+
+    fn key(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
+        Keystroke {
+            modifiers,
+            key: key.to_owned(),
+            key_char: key_char.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn typed_keys_become_text() {
+        let none = Modifiers::default();
+        let shift = Modifiers::shift();
+        assert_eq!(key_text(&key("a", Some("a"), none)).as_deref(), Some("a"));
+        assert_eq!(key_text(&key("a", Some("A"), shift)).as_deref(), Some("A"));
+        assert_eq!(
+            key_text(&key("space", Some(" "), none)).as_deref(),
+            Some(" ")
+        );
+        assert_eq!(
+            key_text(&key("enter", Some("\n"), none)).as_deref(),
+            Some("\n")
+        );
+        assert_eq!(
+            key_text(&key("backspace", None, none)).as_deref(),
+            Some("\u{8}")
+        );
+    }
+
+    #[test]
+    fn shortcuts_and_textless_keys_are_not_typed() {
+        assert_eq!(key_text(&key("v", Some("v"), Modifiers::command())), None);
+        assert_eq!(key_text(&key("c", Some("c"), Modifiers::control())), None);
+        assert_eq!(key_text(&key("left", None, Modifiers::default())), None);
+        assert_eq!(
+            key_text(&key("escape", Some("\u{1b}"), Modifiers::default())),
+            None
+        );
     }
 }

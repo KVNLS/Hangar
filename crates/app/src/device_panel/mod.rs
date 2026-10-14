@@ -7,6 +7,7 @@ mod platform;
 
 use std::sync::Arc;
 
+use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::{
@@ -70,6 +71,14 @@ enum Connection {
     },
 }
 
+/// An AVD being booted from the panel. Kept apart from [`Connection`]: the boot continues
+/// when the user looks at another device.
+struct Booting {
+    key: DeviceKey,
+    name: SharedString,
+    _task: Task<()>,
+}
+
 /// Last input outcome shown under the controls.
 struct InputStatus {
     text: SharedString,
@@ -82,8 +91,13 @@ pub struct DevicePanel {
     connection: Connection,
     listing: Option<Task<()>>,
     input_status: Option<InputStatus>,
+    booting: Option<Booting>,
+    boot_error: Option<(DeviceKey, SharedString)>,
+    /// A device booted from the panel, to select once the next listing shows it.
+    select_after_list: Option<DeviceKey>,
+    shutting_down: bool,
     stats: bool,
-    /// `HANGAR_DEVICE_BACKEND` (`private` or `simctl`): no automatic fallback.
+    /// `HANGAR_DEVICE_BACKEND` (`private`, `simctl`, `grpc` or `adb`): no automatic fallback.
     forced_backend: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
@@ -115,6 +129,10 @@ impl DevicePanel {
             connection: Connection::None,
             listing: None,
             input_status: None,
+            booting: None,
+            boot_error: None,
+            select_after_list: None,
+            shutting_down: false,
             stats: stats_forced(),
             forced_backend,
             _subscriptions: vec![select_sub],
@@ -176,6 +194,11 @@ impl DevicePanel {
             cx.emit(DevicePanelEvent::Selected(self.picker.selected().cloned()));
         }
         self.apply(effect, window, cx);
+        if let Some(key) = self.select_after_list.take()
+            && self.picker.entry_by_value(&key.value()).is_some()
+        {
+            self.select_device(key, window, cx);
+        }
         cx.notify();
     }
 
@@ -211,6 +234,104 @@ impl DevicePanel {
         cx.notify();
     }
 
+    /// Boots the shut-down device `key` in the background, then lists devices and opens it.
+    pub fn boot_device(&mut self, key: DeviceKey, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.picker.entry_by_value(&key.value()).cloned() else {
+            return;
+        };
+        if self.booting.is_some() || !key.platform.can_boot(&entry.info) {
+            return;
+        }
+        tracing::info!(device = %key.id, name = %entry.info.name, "booting device");
+        self.boot_error = None;
+        let name: SharedString = entry.info.name.clone().into();
+        let platform = key.platform;
+        let task = cx
+            .background_executor()
+            .spawn(async move { platform.boot(&entry.info) });
+        let task_key = key.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.on_booted(task_key, result, window, cx)
+            });
+        });
+        self.booting = Some(Booting {
+            key,
+            name,
+            _task: task,
+        });
+        cx.notify();
+    }
+
+    fn on_booted(
+        &mut self,
+        key: DeviceKey,
+        result: anyhow::Result<hangar_devices::DeviceInfo>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.booting = None;
+        match result {
+            Ok(info) => {
+                tracing::info!(device = %info.udid, name = %info.name, "device booted");
+                if self.picker.selected() == Some(&key) {
+                    self.select_after_list = Some(DeviceKey {
+                        platform: key.platform,
+                        id: info.udid,
+                    });
+                }
+            }
+            Err(err) => {
+                tracing::error!(device = %key.id, "failed to boot device: {err:#}");
+                self.boot_error = Some((key, format!("{err:#}").into()));
+            }
+        }
+        self.refresh(window, cx);
+    }
+
+    /// Shuts the open emulator down in the background; the panel closes it once it is off.
+    pub fn shutdown_device(&mut self, cx: &mut Context<Self>) {
+        let Connection::Open { key, view, .. } = &self.connection else {
+            return;
+        };
+        if self.shutting_down || !key.platform.can_shutdown(view.read(cx).info()) {
+            return;
+        }
+        tracing::info!(device = %key.id, "shutting device down");
+        self.shutting_down = true;
+        self.input_status = None;
+        view.read(cx).shutdown();
+        cx.notify();
+    }
+
+    fn on_shutdown(
+        &mut self,
+        result: &Result<(), String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.shutting_down = false;
+        match result {
+            Ok(()) => {
+                if let Connection::Open { key, .. } = &self.connection {
+                    let key = key.clone();
+                    self.picker.closed(&key);
+                }
+                self.connection = Connection::None;
+                self.input_status = None;
+                self.refresh(window, cx);
+            }
+            Err(err) => {
+                self.input_status = Some(InputStatus {
+                    text: format!("Shutdown failed: {err}").into(),
+                    error: true,
+                });
+            }
+        }
+        cx.notify();
+    }
+
     fn apply(&mut self, effect: Effect, window: &mut Window, cx: &mut Context<Self>) {
         if effect.close {
             if let Connection::Open { key, .. } | Connection::Opening { key, .. } = &self.connection
@@ -221,6 +342,7 @@ impl DevicePanel {
             // own input thread.
             self.connection = Connection::None;
             self.input_status = None;
+            self.shutting_down = false;
         }
         if let Some(entry) = effect.open {
             self.open(entry, window, cx);
@@ -258,7 +380,7 @@ impl DevicePanel {
         &mut self,
         key: DeviceKey,
         result: anyhow::Result<(DeviceSession, Option<BackendReason>)>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let name = match &self.connection {
@@ -276,11 +398,32 @@ impl DevicePanel {
                 );
                 let stats = self.stats;
                 let view = cx.new(|cx| DeviceView::new(session, stats, cx));
-                let events = cx.subscribe(&view, |this, _, event: &DeviceViewEvent, cx| {
-                    let DeviceViewEvent::Input(result) = event;
-                    this.input_status = Some(input_status(result));
-                    cx.notify();
-                });
+                let events = cx.subscribe_in(
+                    &view,
+                    window,
+                    |this, _, event: &DeviceViewEvent, window, cx| {
+                        match event {
+                            DeviceViewEvent::Input(result) => {
+                                this.input_status = Some(input_status(result));
+                            }
+                            DeviceViewEvent::Text(result) => {
+                                this.input_status = Some(InputStatus {
+                                    text: format!(
+                                        "Typing {} failed: {}",
+                                        plural_chars(result.chars),
+                                        result.error
+                                    )
+                                    .into(),
+                                    error: true,
+                                });
+                            }
+                            DeviceViewEvent::Shutdown(result) => {
+                                this.on_shutdown(result, window, cx);
+                            }
+                        }
+                        cx.notify();
+                    },
+                );
                 self.connection = Connection::Open {
                     key,
                     view,
@@ -465,7 +608,71 @@ impl DevicePanel {
         )
     }
 
+    fn render_boot_body(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let entry = self.picker.selected_entry()?;
+        let theme = cx.theme();
+        let centered = || {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .p_4()
+                .gap_2()
+                .items_center()
+                .justify_center()
+                .text_xs()
+        };
+        if let Some(booting) = self.booting.as_ref().filter(|b| b.key == entry.key) {
+            return Some(
+                centered()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("Booting {}… this can take a minute.", booting.name))
+                    .into_any_element(),
+            );
+        }
+        if !entry.key.platform.can_boot(&entry.info) {
+            return None;
+        }
+        let key = entry.key.clone();
+        let error = self
+            .boot_error
+            .as_ref()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, e)| e.clone());
+        Some(
+            centered()
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("{} is not running.", entry.info.name)),
+                )
+                .child(
+                    Button::new("device-boot")
+                        .small()
+                        .primary()
+                        .label("Boot")
+                        .disabled(self.booting.is_some())
+                        .tooltip("Start this virtual device")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.boot_device(key.clone(), window, cx);
+                        })),
+                )
+                .when_some(error, |this, error| {
+                    this.child(
+                        div()
+                            .text_color(theme.danger)
+                            .child(format!("Boot failed: {error}")),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        if matches!(self.connection, Connection::None)
+            && let Some(body) = self.render_boot_body(cx)
+        {
+            return body;
+        }
         let theme = cx.theme();
         let message = |text: SharedString, color: Hsla| {
             div()
@@ -518,9 +725,10 @@ impl DevicePanel {
     }
 
     fn render_controls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let Connection::Open { key, .. } = &self.connection else {
+        let Connection::Open { key, view, .. } = &self.connection else {
             return None;
         };
+        let can_shutdown = key.platform.can_shutdown(view.read(cx).info());
         let theme = cx.theme();
         let buttons = key.platform.controls().iter().map(|control| {
             let input = control.input;
@@ -554,6 +762,16 @@ impl DevicePanel {
                 .border_t_1()
                 .border_color(theme.border)
                 .children(buttons)
+                .when(can_shutdown, |this| {
+                    this.child(
+                        Button::new("device-shutdown")
+                            .small()
+                            .label("Shutdown")
+                            .loading(self.shutting_down)
+                            .tooltip("Shut the emulator down")
+                            .on_click(cx.listener(|this, _, _, cx| this.shutdown_device(cx))),
+                    )
+                })
                 .children(status)
                 .into_any_element(),
         )
@@ -591,6 +809,10 @@ fn entry_title(e: &DeviceEntry) -> String {
     title
 }
 
+fn plural_chars(n: usize) -> String {
+    format!("{n} character{}", if n == 1 { "" } else { "s" })
+}
+
 fn input_status(result: &InputResult) -> InputStatus {
     let what = match result.input {
         Input::Tap { x, y } => format!("Tap ({x:.0}, {y:.0})"),
@@ -598,6 +820,7 @@ fn input_status(result: &InputResult) -> InputStatus {
         Input::TouchMove { x, y } => format!("Touch move ({x:.0}, {y:.0})"),
         Input::TouchUp { x, y } => format!("Touch up ({x:.0}, {y:.0})"),
         Input::Home => "Home".to_owned(),
+        Input::Back => "Back".to_owned(),
         #[allow(unreachable_patterns)]
         other => format!("{other:?}"),
     };
