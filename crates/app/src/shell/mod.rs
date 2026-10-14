@@ -5,6 +5,7 @@ mod dev;
 mod dialogs;
 mod layout;
 mod lifecycle;
+mod new_workspace;
 mod sidebar;
 mod status;
 mod view;
@@ -72,7 +73,9 @@ actions!(
         AddProject,
         ShowDeviceTab,
         ShowChangesTab,
-        OpenReview
+        OpenReview,
+        SubmitSheet,
+        CloseSheet
     ]
 );
 
@@ -89,6 +92,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-2", ShowChangesTab, None),
         KeyBinding::new("cmd-shift-r", OpenReview, None),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
+        KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
+        KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
     ]);
 }
 
@@ -158,12 +163,6 @@ impl Render for DeviceResize {
     }
 }
 
-struct NewWorkspaceInput {
-    project_id: ProjectId,
-    input: Entity<InputState>,
-    _submit: Subscription,
-}
-
 /// What fills the window between the title bar and the status bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
@@ -187,7 +186,9 @@ pub struct HangarApp {
     pane_sizes: Entity<ResizableState>,
     /// First pane's share of the width, once the user has resized (or it was restored).
     split: Option<f32>,
-    new_workspace: Option<NewWorkspaceInput>,
+    new_workspace: Option<new_workspace::NewWorkspaceSheet>,
+    /// Agent presets with their install state (all assumed installed until the PATH is known).
+    agent_choices: Vec<AgentChoice>,
     creating: HashSet<ProjectId>,
     /// Workspaces with an archive, restore or delete in flight.
     busy: HashSet<WorkspaceId>,
@@ -214,16 +215,15 @@ pub struct HangarApp {
 impl HangarApp {
     pub fn new(dev: DevOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Install state is unknown until the login PATH arrives; list names only for now.
-        let options = agent_options(
-            &hangar_agents::presets()
-                .into_iter()
-                .map(|a| AgentChoice {
-                    id: a.id,
-                    name: a.display_name,
-                    installed: true,
-                })
-                .collect::<Vec<_>>(),
-        );
+        let initial_choices: Vec<AgentChoice> = hangar_agents::presets()
+            .into_iter()
+            .map(|a| AgentChoice {
+                id: a.id,
+                name: a.display_name,
+                installed: true,
+            })
+            .collect();
+        let options = agent_options(&initial_choices);
         let agent: SharedString = agents::FALLBACK_AGENT.into();
         let selected = options.iter().position(|o| o.id == agent);
         let agent_select = cx.new(|cx| {
@@ -338,6 +338,7 @@ impl HangarApp {
             pane_sizes,
             split: None,
             new_workspace: None,
+            agent_choices: initial_choices,
             creating: HashSet::new(),
             busy: HashSet::new(),
             diffs: HashMap::new(),
@@ -491,8 +492,10 @@ impl HangarApp {
             .collect();
         tracing::info!(?installed, agent = %self.agent, "detected agents");
         let agent = self.agent.clone();
+        let options = agent_options(&choices);
+        self.agent_choices = choices;
         self.agent_select.update(cx, |select, cx| {
-            select.set_items(agent_options(&choices), window, cx);
+            select.set_items(options, window, cx);
             select.set_selected_value(&agent, window, cx);
         });
         cx.notify();

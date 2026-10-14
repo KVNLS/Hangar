@@ -3,7 +3,7 @@
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Escape, Input};
+use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::select::Select;
 use gpui_kit::component::{Icon, Sizable as _};
@@ -206,11 +206,7 @@ impl HangarApp {
             .map(|ws| self.workspace_row(ws, focused, cx))
             .filter(|row| row.matches(query))
             .collect();
-        let input = self
-            .new_workspace
-            .as_ref()
-            .filter(|n| n.project_id == project_id)
-            .map(|n| n.input.clone());
+
         if !query.is_empty() && rows.is_empty() && archived.is_empty() {
             return None;
         }
@@ -283,34 +279,6 @@ impl HangarApp {
             )
             .child(project_menu);
 
-        let input_row = input.map(|input| {
-            let cancel = cx.entity().downgrade();
-            let escape = cancel.clone();
-            h_flex()
-                .px_1()
-                .py_0p5()
-                .gap_1()
-                // The input lets Escape propagate when it has nothing of its own to dismiss.
-                .on_action(move |_: &Escape, window, cx| {
-                    with_app(&escape, window, cx, |this, _, cx| {
-                        this.close_new_workspace(cx)
-                    })
-                })
-                .child(div().flex_1().child(Input::new(&input).small()))
-                .child(
-                    UiButton::new(SharedString::from(format!("cancel-ws-{project_id}")))
-                        .icon(Lucide::X)
-                        .ghost()
-                        .small()
-                        .tooltip("Cancel")
-                        .on_click(move |_, window, cx| {
-                            with_app(&cancel, window, cx, |this, _, cx| {
-                                this.close_new_workspace(cx)
-                            })
-                        }),
-                )
-        });
-
         let archived_count = archived.len();
         let archived_group = (archived_count > 0).then(|| {
             div()
@@ -358,8 +326,7 @@ impl HangarApp {
                 .flex_col()
                 .child(header)
                 .when(!collapsed, |this| {
-                    this.children(input_row)
-                        .children(rows.into_iter().map(|row| self.render_row(row, false, cx)))
+                    this.children(rows.into_iter().map(|row| self.render_row(row, false, cx)))
                         .children(archived_group)
                 }),
         )

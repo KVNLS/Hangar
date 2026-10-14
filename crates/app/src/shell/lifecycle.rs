@@ -3,45 +3,6 @@
 use super::*;
 
 impl HangarApp {
-    pub(super) fn open_new_workspace(
-        &mut self,
-        project_id: ProjectId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
-        let submit = cx.subscribe_in(
-            &input,
-            window,
-            move |this, input, event: &InputEvent, window, cx| {
-                if !matches!(event, InputEvent::PressEnter { .. }) {
-                    return;
-                }
-                let name = input.read(cx).value().trim().to_owned();
-                if name.is_empty() {
-                    return;
-                }
-                this.new_workspace = None;
-                let agent = this.agent.to_string();
-                this.create_workspace(project_id, name, agent, window, cx)
-                    .detach();
-                cx.notify();
-            },
-        );
-        input.update(cx, |state, cx| state.focus(window, cx));
-        self.new_workspace = Some(NewWorkspaceInput {
-            project_id,
-            input,
-            _submit: submit,
-        });
-        cx.notify();
-    }
-
-    pub(super) fn close_new_workspace(&mut self, cx: &mut Context<Self>) {
-        self.new_workspace = None;
-        cx.notify();
-    }
-
     /// Creates the worktree and workspace off the main thread, shows it in the focused pane and
     /// starts `agent_id` in it. Resolves once the agent has started (or failed).
     pub(super) fn create_workspace(

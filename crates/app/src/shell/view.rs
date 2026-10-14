@@ -71,9 +71,11 @@ impl Render for HangarApp {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .font_family(crate::ui::FONT_UI)
+            .relative()
             .child(self.render_titlebar(cx))
             .child(main)
             .child(self.render_status_bar(cx))
+            .children(self.render_new_workspace_sheet(cx))
     }
 }
 
