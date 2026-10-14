@@ -10,6 +10,9 @@ shipped, SPIKES.md for spike results.
 - Test: `cargo test --workspace`
 - Spike A: `cargo run -p hangar-examples --example spike_terminal -- [command]` (examples live in `examples/examples/`) (default `$SHELL`, try `claude`)
 - Spike B: `cargo run -p hangar-examples --example spike_sim -- [--backend private|simctl] [--udid <UDID>]`
+- Release: `scripts/release.sh all` builds `target/release/bundle/Hangar.app` and a signed DMG (no tag);
+  after a smoke test, `scripts/release.sh publish` (on a clean main) tags `v<version>` and creates the GitHub
+  release. Version comes from `[workspace.package]`; `HANGAR_SIGN_IDENTITY` overrides the codesign identity.
 - App: `cargo run -p hangar-app`. Dev env: `HANGAR_DB`, `HANGAR_WORKTREES` override storage paths;
   `HANGAR_DEV_OPEN=<repo>` (+ `HANGAR_DEV_AGENT`, `HANGAR_DEV_INPUT`) drives the add-project → workspace →
   agent flow without clicks (see `crates/app/src/main.rs`). Never point these at real data in tests.
