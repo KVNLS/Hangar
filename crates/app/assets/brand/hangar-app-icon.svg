@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- macOS app icon: logo 8e on the 1024 icon grid (824 px tile, drop shadow). Mirrors hangar-mark.svg. -->
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14"/>
+      <feOffset dy="10"/>
+      <feComponentTransfer><feFuncA type="linear" slope=".35"/></feComponentTransfer>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186.7" filter="url(#shadow)"/>
+  <g transform="translate(100 100) scale(3.21875)">
+  <defs>
+    <radialGradient id="m-tile" gradientUnits="userSpaceOnUse" cx="128" cy="115.2" r="192">
+      <stop offset="0" stop-color="#1F2128"/>
+      <stop offset="1" stop-color="#121318"/>
+    </radialGradient>
+    <clipPath id="m-clip">
+      <rect width="256" height="256" rx="58"/>
+    </clipPath>
+    <filter id="m-halo" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="9" result="b3"/>
+      <feFlood flood-color="#E5584F" flood-opacity=".35"/>
+      <feComposite in2="b3" operator="in" result="h3"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3.5" result="b2"/>
+      <feFlood flood-color="#E5584F" flood-opacity=".75"/>
+      <feComposite in2="b2" operator="in" result="h2"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="1" result="b1"/>
+      <feFlood flood-color="#E5584F"/>
+      <feComposite in2="b1" operator="in" result="h1"/>
+      <feMerge>
+        <feMergeNode in="h3"/>
+        <feMergeNode in="h2"/>
+        <feMergeNode in="h1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <g id="m-glyph">
+      <polygon points="60,74 100,54 100,121 148,97 148,115 100,139 100,182 60,202"/>
+      <polygon points="156,74 196,54 196,182 156,202 156,135 108,159 108,141 156,117"/>
+    </g>
+  </defs>
+  <g clip-path="url(#m-clip)">
+    <rect width="256" height="256" fill="url(#m-tile)"/>
+    <rect x=".5" y=".5" width="255" height="255" rx="57.5" fill="none" stroke="#FFFFFF" stroke-opacity=".05"/>
+    <rect y="1" width="256" height="256" rx="58" fill="none" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="2"/>
+    <g filter="url(#m-halo)" fill="none" stroke-linejoin="round">
+      <use href="#m-glyph" stroke="#E5584F" stroke-width="5"/>
+      <use href="#m-glyph" stroke="#F7B4AE" stroke-width="1.6"/>
+    </g>
+  </g>
+  </g>
+</svg>

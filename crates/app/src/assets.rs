@@ -1,5 +1,6 @@
 //! The app's asset source: gpui-kit's default component icons plus the extra Lucide icons Hangar
-//! uses (device controls and the design system's chrome) that the default bundle lacks.
+//! uses (device controls and the design system's chrome) that the default bundle lacks, plus the
+//! Hangar brand marks.
 
 use std::borrow::Cow;
 
@@ -47,11 +48,25 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
+/// The logo (8e) on its full-bleed tile, for in-app use through `img()`.
+pub const MARK_PATH: &str = "brand/hangar-mark.svg";
+/// The logo on the macOS icon grid (1024 canvas, transparent margin), for the Dock.
+pub const APP_ICON_PATH: &str = "brand/hangar-app-icon.svg";
+pub const APP_ICON_SVG: &[u8] = include_bytes!("../assets/brand/hangar-app-icon.svg");
+
+const BRAND: [(&str, &[u8]); 2] = [
+    (MARK_PATH, include_bytes!("../assets/brand/hangar-mark.svg")),
+    (APP_ICON_PATH, APP_ICON_SVG),
+];
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some((_, bytes)) = BRAND.iter().find(|(p, _)| *p == path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
         match ExtraIcons.load(path)? {
             Some(bytes) => Ok(Some(bytes)),
             None => gpui_kit::assets::Assets.load(path),
@@ -61,6 +76,12 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(ExtraIcons.list(path)?);
+        paths.extend(
+            BRAND
+                .iter()
+                .filter(|(p, _)| p.starts_with(path))
+                .map(|(p, _)| SharedString::from(*p)),
+        );
         Ok(paths)
     }
 }
@@ -86,6 +107,21 @@ mod tests {
             Assets.load("icons/no-such-icon.svg"),
             Ok(Some(_))
         ));
+    }
+
+    #[test]
+    fn brand_marks_load_and_rasterize() {
+        let renderer = gpui_kit::SvgRenderer::new(std::sync::Arc::new(Assets));
+        for path in [MARK_PATH, APP_ICON_PATH] {
+            let bytes = Assets.load(path).unwrap().expect(path);
+            let image = renderer.render_single_frame(&bytes, 1.0).unwrap();
+            let pixels = image.as_bytes(0).unwrap();
+            assert!(
+                pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 255),
+                "{path}"
+            );
+        }
+        assert!(Assets.list("brand/").unwrap().len() >= 2);
     }
 
     /// `IconName` covers the whole Lucide catalog, but an icon missing from the asset source

@@ -126,6 +126,9 @@ fn run_app() {
         .with_assets(hangar_app::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            if let Err(err) = hangar_app::app_icon::set_dock_icon(cx) {
+                tracing::warn!("could not set the Dock icon: {err:#}");
+            }
             if let Err(err) = hangar_app::ui::init(component::ThemeMode::Dark, cx) {
                 tracing::error!("design system init failed, using the default theme: {err:#}");
             }

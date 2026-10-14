@@ -224,6 +224,10 @@ Git access is the `git` CLI with porcelain output, not a library.
   Fixed: title bar ⌘K search field and button order, changes/review footer (commit box and actions under the
   diff, design-system buttons, Create PR primary), no-remote repos no longer show gh's error, empty states and
   file tree rows in narrow panes, overview header order.
+- Brand (design/Hangar Logo.dc.html, logo 8e): `crates/app/assets/brand/` holds the mark (256 tile, titlebar
+  16px via `img()`) and the macOS app icon SVG (1024 icon grid). The Dock icon is rasterized and set at launch
+  (`app_icon::set_dock_icon`), so `cargo run` shows it. `export_icon` example writes the 1024px PNG. No .app
+  bundle / .icns yet; light (9b–9g) and tinted variants not shipped.
 
 ## Remaining gaps
 - UI vs mockup: New workspace sheet has no base-branch / new-branch fields (branch shown in the footer only);

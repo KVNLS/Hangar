@@ -44,6 +44,7 @@ impl HangarApp {
             .gap_1p5()
             .items_center()
             .text_size(px(13.))
+            .child(img(crate::assets::MARK_PATH).flex_none().size(px(16.)))
             .map(|this| match crumb {
                 None => this.child(div().text_color(t.tx2).child("Hangar")),
                 Some((project, ws)) => this

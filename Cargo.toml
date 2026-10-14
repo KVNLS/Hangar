@@ -39,6 +39,12 @@ tree-sitter = "0.27.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 objc2 = "0.6.4"
 objc2-foundation = "0.3.2"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSImage",
+    "NSResponder",
+] }
 objc2-io-surface = "0.3.2"
 objc2-core-graphics = "0.3.2"
 objc2-core-foundation = "0.3.2"
