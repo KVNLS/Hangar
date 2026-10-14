@@ -1,5 +1,5 @@
-//! The "New workspace" sheet (⌘N): name, an optional task typed into the agent once it starts,
-//! the agent and the target device. Enter in the name field or ⌘⏎ creates it; Escape or the
+//! The "New workspace" sheet (⌘N): name, the base branch and the new branch's name, an optional
+//! task typed into the agent once it starts, the agent and the target device. Enter in the name field or ⌘⏎ creates it; Escape or the
 //! scrim cancels.
 
 use gpui_kit::component::Sizable as _;
@@ -35,6 +35,10 @@ impl SelectItem for TargetOption {
 pub(super) struct NewWorkspaceSheet {
     pub project_id: ProjectId,
     name: Entity<InputState>,
+    /// The branch to start from; the project's default base until the user picks another.
+    base_branch: Entity<SelectState<Vec<TargetOption>>>,
+    /// The new branch's name; empty means `hangar/<slug>`.
+    branch: Entity<InputState>,
     task: Entity<TextareaState>,
     agent: SharedString,
     platform: Platform,
@@ -69,14 +73,56 @@ impl HangarApp {
                 .auto_grow(3, 8)
         });
         let device = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
+        let default_base = self
+            .projects
+            .project(project_id)
+            .map(|p| p.default_base.clone())
+            .unwrap_or_default();
+        let base_branch = cx.new(|cx| {
+            let only = vec![TargetOption {
+                id: default_base.clone().into(),
+                title: default_base.clone().into(),
+            }];
+            SelectState::new(only, None, window, cx).searchable(true)
+        });
+        base_branch.update(cx, |select, cx| {
+            select.set_selected_value(&SharedString::from(default_base.clone()), window, cx)
+        });
+        let branch = cx.new(|cx| InputState::new(window, cx).placeholder("hangar/<name>"));
         let subscriptions = vec![
             cx.subscribe_in(&name, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     this.submit_new_workspace(window, cx);
                 } else {
+                    if let Some(sheet) = &this.new_workspace {
+                        let slug = slugify(sheet.name.read(cx).value().trim());
+                        let auto = if slug.is_empty() {
+                            "hangar/<name>".to_owned()
+                        } else {
+                            paths::branch_name(&slug)
+                        };
+                        sheet
+                            .branch
+                            .update(cx, |input, cx| input.set_placeholder(auto, window, cx));
+                    }
                     cx.notify();
                 }
             }),
+            cx.subscribe_in(
+                &branch,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.submit_new_workspace(window, cx);
+                    } else {
+                        cx.notify();
+                    }
+                },
+            ),
+            cx.subscribe(
+                &base_branch,
+                |_, _, _: &SelectEvent<Vec<TargetOption>>, cx| cx.notify(),
+            ),
             cx.subscribe(&task, |_, _, _: &InputEvent, cx| cx.notify()),
             cx.subscribe(
                 &device,
@@ -95,6 +141,8 @@ impl HangarApp {
         self.new_workspace = Some(NewWorkspaceSheet {
             project_id,
             name,
+            base_branch,
+            branch,
             task,
             agent: self.agent.clone(),
             platform: last.as_ref().map_or(Platform::Ios, |k| k.platform),
@@ -112,7 +160,17 @@ impl HangarApp {
                 .background_executor()
                 .spawn(async move {
                     let builds_for = repo
-                        .map(|r| backend::stack_platforms(&r))
+                        .as_ref()
+                        .map(|r| backend::stack_platforms(r))
+                        .unwrap_or_default();
+                    let branches = repo
+                        .as_ref()
+                        .map(|r| hangar_worktree::local_branches(r))
+                        .transpose()
+                        .unwrap_or_else(|err| {
+                            tracing::warn!("cannot list branches: {err:#}");
+                            None
+                        })
                         .unwrap_or_default();
                     let mut bases = HashMap::new();
                     for platform in Platform::ALL {
@@ -129,17 +187,31 @@ impl HangarApp {
                             }
                         }
                     }
-                    (builds_for, bases)
+                    (builds_for, bases, branches)
                 })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                let (builds_for, bases) = listed;
+                let (builds_for, bases, branches) = listed;
                 let Some(sheet) = &mut this.new_workspace else {
                     return;
                 };
                 if sheet.project_id != project_id {
                     return;
                 }
+                // The default base first (it may be a remote branch such as `origin/main`).
+                let options: Vec<TargetOption> = std::iter::once(default_base.clone())
+                    .chain(branches.into_iter().filter(|b| *b != default_base))
+                    .map(|b| TargetOption {
+                        id: b.clone().into(),
+                        title: b.into(),
+                    })
+                    .collect();
+                sheet.base_branch.update(cx, |select, cx| {
+                    let keep = select.selected_value().cloned();
+                    select.set_items(options, window, cx);
+                    let value = keep.unwrap_or_else(|| default_base.clone().into());
+                    select.set_selected_value(&value, window, cx);
+                });
                 let platform = crate::device_pool::choose_platform(
                     last.as_ref().map(|k| k.platform),
                     &builds_for,
@@ -213,13 +285,21 @@ impl HangarApp {
             return;
         }
         let task = sheet.task.read(cx).value().trim().to_owned();
+        let base = sheet
+            .base_branch
+            .read(cx)
+            .selected_value()
+            .map(|b| b.to_string());
+        let branch =
+            Some(sheet.branch.read(cx).value().trim().to_owned()).filter(|b| !b.is_empty());
         let (project_id, agent) = (sheet.project_id, sheet.agent.to_string());
         let target = sheet.base.clone().map(|id| DeviceKey {
             platform: sheet.platform,
             id,
         });
         self.close_new_workspace(window, cx);
-        let create = self.create_workspace(project_id, name, agent, target, window, cx);
+        let create =
+            self.create_workspace(project_id, name, agent, target, (base, branch), window, cx);
         cx.spawn(async move |this, cx| {
             let id = create.await?;
             if task.is_empty() {
@@ -250,7 +330,18 @@ impl HangarApp {
             let path = paths::worktrees_root()
                 .map(|root| tilde(&paths::worktree_path(&root, &slugify(&project.name), &slug)))
                 .unwrap_or_default();
-            format!("{} · {path}", paths::branch_name(&slug))
+            let typed = sheet.branch.read(cx).value().trim().to_owned();
+            let branch = if typed.is_empty() {
+                paths::branch_name(&slug)
+            } else {
+                typed
+            };
+            let base = sheet
+                .base_branch
+                .read(cx)
+                .selected_value()
+                .map_or_else(|| project.default_base.clone(), |b| b.to_string());
+            format!("{branch} from {base} · {path}")
         };
         let creating = self.creating.contains(&sheet.project_id);
         let can_create = !slug.is_empty() && !creating;
@@ -361,6 +452,24 @@ impl HangarApp {
                             .gap_1p5()
                             .child(label("Name"))
                             .child(Input::new(&sheet.name)),
+                    )
+                    .child(
+                        div()
+                            .grid()
+                            .grid_cols(2)
+                            .gap_3()
+                            .child(
+                                v_flex()
+                                    .gap_1p5()
+                                    .child(label("Base branch"))
+                                    .child(Select::new(&sheet.base_branch).small()),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1p5()
+                                    .child(label("New branch"))
+                                    .child(Input::new(&sheet.branch).small()),
+                            ),
                     )
                     .child(
                         v_flex()

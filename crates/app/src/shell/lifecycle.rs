@@ -6,12 +6,16 @@ impl HangarApp {
     /// Creates the worktree and workspace off the main thread, assigns it `target` as its base
     /// device (else the default on first use), shows it in the focused pane and starts
     /// `agent_id` in it. Resolves once the agent has started (or failed).
+    /// `branches`: the base to start from and the new branch's name, each `None` for the
+    /// default (see [`ops::create_workspace_from`]).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn create_workspace(
         &mut self,
         project_id: ProjectId,
         name: String,
         agent_id: String,
         target: Option<crate::device_panel::DeviceKey>,
+        branches: (Option<String>, Option<String>),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Option<WorkspaceId>> {
@@ -42,7 +46,17 @@ impl HangarApp {
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { ops::create_workspace(&store, &project, &name, &root) })
+                .spawn(async move {
+                    let (base, branch) = branches;
+                    ops::create_workspace_from(
+                        &store,
+                        &project,
+                        &name,
+                        &root,
+                        base.as_deref(),
+                        branch.as_deref(),
+                    )
+                })
                 .await;
             let started = this
                 .update_in(cx, |this, window, cx| {

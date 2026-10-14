@@ -25,6 +25,29 @@ pub fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
     Ok(out.is_some())
 }
 
+/// Local branch names, sorted.
+pub fn local_branches(repo: &Path) -> Result<Vec<String>> {
+    let out = Git::new(repo).run(["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
+    let mut branches: Vec<String> = out
+        .lines()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .map(str::to_owned)
+        .collect();
+    branches.sort();
+    Ok(branches)
+}
+
+/// Whether `name` can be a new branch's name (`git check-ref-format --branch`).
+pub fn is_valid_branch_name(repo: &Path, name: &str) -> Result<bool> {
+    if name.is_empty() || name.starts_with('-') {
+        return Ok(false);
+    }
+    // Exits 128 for an invalid name.
+    let out = Git::new(repo).output(["check-ref-format", "--branch", name], None)?;
+    Ok(out.status.success())
+}
+
 /// Best guess at the branch new work should start from, as a revision usable as a base:
 /// `origin/HEAD`'s target (e.g. `origin/main`), else local `main`, else `master`, else the
 /// current branch. `None` if HEAD is detached and none of those exist.

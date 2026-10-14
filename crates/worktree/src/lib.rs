@@ -21,7 +21,9 @@ pub use gh::{CreatePr, Gh, GhStatus, PrInfo, gh_available};
 pub use git::{Git, GitVersion, MIN_GIT_VERSION, git_version};
 pub use ignore::{GitDirs, check_ignored, git_dirs};
 pub use patch::{DiffLine, DiffOptions, FileDiff, FileStatus, Hunk, LineKind, parse_patch};
-pub use repo::{branch_exists, current_branch, default_branch, repo_root};
+pub use repo::{
+    branch_exists, current_branch, default_branch, is_valid_branch_name, local_branches, repo_root,
+};
 pub use review::{
     BaseCheckout, CommitOptions, MergeOutcome, MergeStrategy, PushOutcome, Upstream, base_checkout,
     commit, merge_conflicts, merge_into_base, push, remotes, stage, stage_all, unstage, upstream,

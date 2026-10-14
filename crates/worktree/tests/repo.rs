@@ -8,7 +8,7 @@ use std::process::Command;
 
 use hangar_worktree::{
     ChangeKind, CreateOptions, Error, create, current_branch, default_branch, delete_branch,
-    diff_stat, list, prune, remove, repo_root, status,
+    diff_stat, is_valid_branch_name, list, local_branches, prune, remove, repo_root, status,
 };
 use tempfile::TempDir;
 
@@ -106,6 +106,15 @@ fn repo_queries() {
         default_branch(&fx.repo).unwrap().as_deref(),
         Some("origin/trunk")
     );
+
+    git(&fx.repo, &["branch", "feature/x"]);
+    let branches = local_branches(&fx.repo).unwrap();
+    assert!(branches.contains(&"main".to_owned()) && branches.contains(&"feature/x".to_owned()));
+    assert!(!branches.iter().any(|b| b.starts_with("origin/")));
+    assert!(is_valid_branch_name(&fx.repo, "fix/login-2").unwrap());
+    for bad in ["", "-x", "a..b", "has space", "end.lock", "a~b"] {
+        assert!(!is_valid_branch_name(&fx.repo, bad).unwrap(), "{bad}");
+    }
 }
 
 #[test]
