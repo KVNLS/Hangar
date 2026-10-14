@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::changes::DiffStat;
+use crate::changes::{Cost, DiffStat};
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -227,6 +227,9 @@ pub struct Session {
     /// The workspace's diff when the session ended; `None` while running or when unknown.
     #[serde(default)]
     pub changes: Option<DiffStat>,
+    /// What the session cost so far, when its agent reports it.
+    #[serde(default)]
+    pub cost: Option<Cost>,
 }
 
 impl Session {
@@ -243,6 +246,7 @@ impl Session {
             ended_at: None,
             prompt: None,
             changes: None,
+            cost: None,
         }
     }
 }

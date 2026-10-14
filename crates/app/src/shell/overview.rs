@@ -72,7 +72,7 @@ fn subagent_summary(list: &[Subagent]) -> String {
 /// Sessions that ended today, listed at the bottom of the overview.
 #[derive(Default)]
 pub(super) struct DoneToday {
-    sessions: Vec<Session>,
+    pub(super) sessions: Vec<Session>,
     /// Seconds local time was ahead of UTC when `sessions` were loaded.
     utc_offset: i32,
     collapsed: bool,
@@ -229,6 +229,20 @@ impl HangarApp {
                         f.changes
                             .filter(|c| c.files > 0)
                             .map(|c| Delta::new(c.insertions as usize, c.deletions as usize)),
+                    )
+                    .children(
+                        f.cost
+                            .as_ref()
+                            .and_then(|c| {
+                                crate::chat_view::stored_costs_label(std::slice::from_ref(c))
+                            })
+                            .map(|label| {
+                                div()
+                                    .flex_none()
+                                    .type_mono_small()
+                                    .text_color(t.tx3)
+                                    .child(label)
+                            }),
                     )
                     .child(
                         div()

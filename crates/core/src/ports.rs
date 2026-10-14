@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::changes::{DiffOptions, DiffStat, FileDiff, GitDirs, Status};
+use crate::changes::{Cost, DiffOptions, DiffStat, FileDiff, GitDirs, Status};
 use crate::review::{
     CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
     Upstream,
@@ -56,6 +56,8 @@ pub trait Store: Send + Sync {
     ) -> PortResult<Session>;
     /// Sessions of every workspace that ended at or after `since`, the latest ended first.
     fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>>;
+    /// Records what a session has cost so far.
+    fn record_session_cost(&self, id: SessionId, cost: &Cost) -> PortResult<()>;
 
     /// The JSON stored under `key`; `None` when it was never set.
     fn read_setting(&self, key: &str) -> PortResult<Option<String>>;
@@ -113,6 +115,9 @@ impl<S: Store + ?Sized> Store for std::sync::Arc<S> {
     }
     fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>> {
         (**self).list_sessions_since(since)
+    }
+    fn record_session_cost(&self, id: SessionId, cost: &Cost) -> PortResult<()> {
+        (**self).record_session_cost(id, cost)
     }
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
         (**self).read_setting(key)

@@ -371,6 +371,8 @@ impl HangarApp {
                         let diff = entry.diff.clone();
                         view.update(cx, |chat, cx| chat.set_diff(diff, cx));
                     }
+                    let cost = view.read(cx).usage().cost();
+                    this.save_session_cost(workspace_id, cost, window, cx);
                     cx.notify()
                 }
                 ChatEvent::Exited { code, stderr_tail } => {
@@ -401,6 +403,7 @@ impl HangarApp {
             activity: Default::default(),
             signal: None,
             transcript_path: None,
+            saved_cost: None,
             _exit: exit,
         };
         self.insert_live_session(workspace_id, live, window, cx);
@@ -430,6 +433,33 @@ impl HangarApp {
                 tracing::warn!(%err, "failed to forget the workspace's agent");
             }
         }
+    }
+
+    /// Saves what the workspace's session has cost when the agent reported a new total, so the
+    /// day's total survives a relaunch.
+    fn save_session_cost(
+        &mut self,
+        workspace_id: WorkspaceId,
+        cost: Option<hangar_agents::acp::protocol::Cost>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cost) = cost.as_ref().map(crate::chat_view::stored_cost) else {
+            return;
+        };
+        let Some(live) = self.live.sessions.get_mut(&workspace_id) else {
+            return;
+        };
+        if live.saved_cost.as_ref() == Some(&cost) {
+            return;
+        }
+        live.saved_cost = Some(cost.clone());
+        let session = live.session.id;
+        self.persist(window, cx, move |store| {
+            store
+                .record_session_cost(session, &cost)
+                .map_err(|err| anyhow!("failed to save the session's cost: {err}"))
+        });
     }
 
     /// The agent to start in `workspace_id`: the one it last ran, else the picker's.
@@ -540,6 +570,7 @@ impl HangarApp {
             activity: Default::default(),
             signal: None,
             transcript_path: None,
+            saved_cost: None,
             _exit: exit,
         };
         self.insert_live_session(workspace_id, live, window, cx);

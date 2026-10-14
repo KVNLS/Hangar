@@ -209,6 +209,8 @@ struct LiveSession {
     signal: Option<hangar_core::AgentSignal>,
     /// A terminal Claude Code's session transcript, as its hooks reported it (checked).
     transcript_path: Option<PathBuf>,
+    /// The session's cost as last saved (structured agents that report one).
+    saved_cost: Option<hangar_core::changes::Cost>,
     _exit: Subscription,
 }
 
@@ -823,6 +825,8 @@ impl HangarApp {
                     self.sync_max_agents_input(window, cx);
                 }
                 self.restore_agent_queue(loaded.agent_queue, window, cx);
+                // Today's finished sessions, for "Done today" and the day's cost.
+                self.refresh_done_today(cx);
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
                     self.layout.changes.open = false;

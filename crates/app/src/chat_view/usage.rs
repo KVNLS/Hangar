@@ -3,6 +3,26 @@
 use hangar_agents::acp::protocol::Cost;
 use hangar_agents::acp::usage::SessionUsage;
 
+/// The agent's cost as Hangar stores it.
+pub fn stored_cost(cost: &Cost) -> hangar_core::changes::Cost {
+    hangar_core::changes::Cost {
+        amount: cost.amount,
+        currency: cost.currency.clone(),
+    }
+}
+
+/// [`costs_label`] of stored costs.
+pub fn stored_costs_label(costs: &[hangar_core::changes::Cost]) -> Option<String> {
+    let costs: Vec<Cost> = costs
+        .iter()
+        .map(|c| Cost {
+            amount: c.amount,
+            currency: c.currency.clone(),
+        })
+        .collect();
+    costs_label(&costs)
+}
+
 /// `ctx 42% · $0.31`, with whichever half is known; `None` when neither is.
 pub fn usage_label(usage: &SessionUsage) -> Option<String> {
     let parts: Vec<String> = usage

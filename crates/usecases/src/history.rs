@@ -1,7 +1,7 @@
 //! What agents finished: the sessions that ended on the local day, for the overview's
 //! "Done today". Pure: the caller passes the clock and the local UTC offset.
 
-use hangar_core::changes::DiffStat;
+use hangar_core::changes::{Cost, DiffStat};
 use hangar_core::{
     AgentKind, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
     WorkspaceStatus,
@@ -53,6 +53,7 @@ pub struct Finished {
     pub archived: bool,
     pub outcome: Outcome,
     pub changes: Option<DiffStat>,
+    pub cost: Option<Cost>,
     pub ended_at: Timestamp,
 }
 
@@ -94,12 +95,35 @@ pub fn done_today<'a>(
                 archived: ws.status == WorkspaceStatus::Archived,
                 outcome,
                 changes: session.changes,
+                cost: session.cost.clone(),
                 ended_at,
             })
         })
         .collect();
     done.sort_by_key(|f| std::cmp::Reverse(f.ended_at));
     done
+}
+
+/// What today cost, per currency in first-seen order: the sessions that ended today as stored,
+/// and the `live` ones with their latest cost (which wins when a session is in both).
+pub fn cost_today(ended_today: &[Session], live: &[(SessionId, Cost)]) -> Vec<Cost> {
+    let stored = ended_today
+        .iter()
+        .filter(|s| !live.iter().any(|(id, _)| *id == s.id))
+        .filter_map(|s| s.cost.as_ref());
+    sum_costs(stored.chain(live.iter().map(|(_, cost)| cost)))
+}
+
+/// Costs summed per currency, in first-seen order.
+pub fn sum_costs<'a>(costs: impl IntoIterator<Item = &'a Cost>) -> Vec<Cost> {
+    let mut totals: Vec<Cost> = Vec::new();
+    for cost in costs {
+        match totals.iter_mut().find(|t| t.currency == cost.currency) {
+            Some(total) => total.amount += cost.amount,
+            None => totals.push(cost.clone()),
+        }
+    }
+    totals
 }
 
 #[cfg(test)]
@@ -225,8 +249,31 @@ mod tests {
                 archived: false,
                 outcome: Outcome::Done,
                 changes: with_diff.changes,
+                cost: None,
                 ended_at: Timestamp(today + HOUR),
             }
         );
+    }
+
+    #[test]
+    fn cost_today_counts_each_session_once() {
+        let ws = workspace("w", None);
+        let usd = |amount| Cost {
+            amount,
+            currency: "USD".into(),
+        };
+        let mut first = ended(&ws, SessionStatus::Exited { code: 0 }, MIDNIGHT_UTC + 1);
+        first.cost = Some(usd(1.0));
+        let mut still_live = ended(&ws, SessionStatus::Exited { code: 0 }, MIDNIGHT_UTC + 2);
+        still_live.cost = Some(usd(0.5));
+        let no_cost = ended(&ws, SessionStatus::Exited { code: 0 }, MIDNIGHT_UTC + 3);
+        let eur = Cost {
+            amount: 2.0,
+            currency: "EUR".into(),
+        };
+        let live = [(still_live.id, usd(0.75)), (SessionId::new(), eur.clone())];
+        let total = cost_today(&[first, still_live, no_cost], &live);
+        assert_eq!(total, [usd(1.75), eur]);
+        assert!(cost_today(&[], &[]).is_empty());
     }
 }

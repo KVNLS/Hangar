@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use hangar_core::changes::DiffStat;
+use hangar_core::changes::{Cost, DiffStat};
 use hangar_core::ports::{
     BranchTip, ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, Store,
     VersionControl,
@@ -142,6 +142,15 @@ impl Store for FakeStore {
             .collect();
         ended.sort_by_key(|s| std::cmp::Reverse(s.ended_at));
         Ok(ended)
+    }
+    fn record_session_cost(&self, id: SessionId, cost: &Cost) -> PortResult<()> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or_else(|| missing("session"))?;
+        session.cost = Some(cost.clone());
+        Ok(())
     }
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
         Ok(self.settings.lock().unwrap().get(key).cloned())

@@ -160,6 +160,14 @@ impl FileDiff {
     }
 }
 
+/// What a session cost, as its agent reports it (a running total in one currency).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Cost {
+    pub amount: f64,
+    /// ISO 4217 code, e.g. `USD`.
+    pub currency: String,
+}
+
 /// Size of a workspace's diff: changed files, inserted and deleted lines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffStat {
