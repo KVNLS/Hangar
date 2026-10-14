@@ -27,10 +27,19 @@ const IOS_CONTROLS: &[Control] = &[Control {
     input: Input::Home,
 }];
 
-/// A device opened by [`Platform::open`], with the reason when a fallback backend was used.
+/// A device opened by [`Platform::open`].
 pub struct Opened {
     pub device: Box<dyn Device>,
-    pub fallback: Option<String>,
+    /// Why the default backend is not the one in use.
+    pub reason: Option<BackendReason>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum BackendReason {
+    /// The preferred backend failed to start.
+    Fallback(String),
+    /// Chosen explicitly (`HANGAR_DEVICE_BACKEND`).
+    Forced(String),
 }
 
 /// What [`list_all`] found, per platform.
@@ -153,7 +162,9 @@ fn open_ios(info: DeviceInfo, forced: Option<&str>) -> anyhow::Result<Opened> {
         let backend: Backend = name.parse().map_err(anyhow::Error::msg)?;
         return Ok(Opened {
             device: open(backend)?,
-            fallback: Some(format!("{name} backend forced by HANGAR_DEVICE_BACKEND")),
+            reason: Some(BackendReason::Forced(format!(
+                "{name} backend forced by HANGAR_DEVICE_BACKEND"
+            ))),
         });
     }
     let (device, fallback) = open_with_fallback(
@@ -162,7 +173,10 @@ fn open_ios(info: DeviceInfo, forced: Option<&str>) -> anyhow::Result<Opened> {
         "simctl",
         || open(Backend::Simctl),
     )?;
-    Ok(Opened { device, fallback })
+    Ok(Opened {
+        device,
+        reason: fallback.map(BackendReason::Fallback),
+    })
 }
 
 #[cfg(not(target_os = "macos"))]

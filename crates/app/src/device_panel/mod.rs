@@ -18,7 +18,9 @@ use hangar_devices::Input;
 
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent, InputResult};
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
-pub use platform::{Control, Listing, Opened, Platform, list_all, open_with_fallback};
+pub use platform::{
+    BackendReason, Control, Listing, Opened, Platform, list_all, open_with_fallback,
+};
 
 pub enum DevicePanelEvent {
     Close,
@@ -58,8 +60,8 @@ enum Connection {
     Open {
         key: DeviceKey,
         view: Entity<DeviceView>,
-        /// Why a fallback backend is in use.
-        fallback: Option<SharedString>,
+        /// Why the default backend is not in use.
+        reason: Option<BackendReason>,
         _events: Subscription,
     },
     Failed {
@@ -113,7 +115,7 @@ impl DevicePanel {
             connection: Connection::None,
             listing: None,
             input_status: None,
-            stats: false,
+            stats: stats_forced(),
             forced_backend,
             _subscriptions: vec![select_sub],
         }
@@ -122,7 +124,7 @@ impl DevicePanel {
     /// Applies saved settings; call before the panel is first shown.
     pub fn restore(&mut self, selected: Option<DeviceKey>, stats: bool, cx: &mut Context<Self>) {
         self.picker.restore(selected);
-        self.set_stats_inner(stats, cx);
+        self.set_stats_inner(stats || stats_forced(), cx);
     }
 
     pub fn picker(&self) -> &Picker {
@@ -235,7 +237,7 @@ impl DevicePanel {
         let task = cx.background_executor().spawn(async move {
             let opened = platform.open(info, forced.as_deref())?;
             let session = DeviceSession::start(Arc::from(opened.device))?;
-            anyhow::Ok((session, opened.fallback))
+            anyhow::Ok((session, opened.reason))
         });
         let task_key = key.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
@@ -255,7 +257,7 @@ impl DevicePanel {
     fn on_opened(
         &mut self,
         key: DeviceKey,
-        result: anyhow::Result<(DeviceSession, Option<String>)>,
+        result: anyhow::Result<(DeviceSession, Option<BackendReason>)>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -265,11 +267,11 @@ impl DevicePanel {
             _ => return,
         };
         match result {
-            Ok((session, fallback)) => {
+            Ok((session, reason)) => {
                 tracing::info!(
                     device = %key.id,
                     backend = session.backend(),
-                    fallback = fallback.as_deref().unwrap_or("none"),
+                    reason = ?reason,
                     "device opened"
                 );
                 let stats = self.stats;
@@ -282,7 +284,7 @@ impl DevicePanel {
                 self.connection = Connection::Open {
                     key,
                     view,
-                    fallback: fallback.map(SharedString::from),
+                    reason,
                     _events: events,
                 };
             }
@@ -317,10 +319,23 @@ impl DevicePanel {
         cx.notify();
     }
 
-    fn send(&mut self, input: Input, cx: &mut Context<Self>) {
-        if let Some(view) = self.view() {
-            view.read(cx).send(input);
-        }
+    /// Sends input to the open device. Returns `false` when no device is open.
+    pub fn send(&mut self, input: Input, cx: &mut Context<Self>) -> bool {
+        let Some(view) = self.view() else {
+            return false;
+        };
+        view.read(cx).send(input);
+        self.input_status = None;
+        cx.notify();
+        true
+    }
+
+    /// The error of the last input, if it failed.
+    pub fn input_error(&self) -> Option<SharedString> {
+        self.input_status
+            .as_ref()
+            .filter(|s| s.error)
+            .map(|s| s.text.clone())
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -408,18 +423,25 @@ impl DevicePanel {
 
     fn render_backend(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = cx.theme();
-        let Connection::Open { view, fallback, .. } = &self.connection else {
+        let Connection::Open { view, reason, .. } = &self.connection else {
             return None;
         };
         let backend = view.read(cx).backend();
-        let (label, color) = match fallback {
-            None => (format!("backend: {backend}"), theme.success),
-            Some(_) => (format!("backend: {backend} (fallback)"), theme.warning),
+        let (label, color, why) = match reason {
+            None => (format!("backend: {backend}"), theme.success, None),
+            Some(BackendReason::Fallback(why)) => (
+                format!("backend: {backend} (fallback)"),
+                theme.warning,
+                Some(why.clone()),
+            ),
+            Some(BackendReason::Forced(why)) => (
+                format!("backend: {backend} (forced)"),
+                theme.muted_foreground,
+                Some(why.clone()),
+            ),
         };
-        let note = match (backend, fallback) {
-            ("simctl", _) => Some("simctl captures ~2 fps screenshots; input may be unavailable."),
-            _ => None,
-        };
+        let note = (backend == "simctl")
+            .then_some("simctl captures ~2 fps screenshots; input may be unavailable.");
         Some(
             v_flex()
                 .px_2()
@@ -433,7 +455,7 @@ impl DevicePanel {
                         .child(div().size_2().rounded_full().bg(color))
                         .child(div().text_color(color).child(label)),
                 )
-                .when_some(fallback.clone(), |this, why| {
+                .when_some(why, |this, why| {
                     this.child(div().text_color(theme.muted_foreground).child(why))
                 })
                 .when_some(note, |this, note| {
@@ -506,7 +528,9 @@ impl DevicePanel {
                 .small()
                 .label(control.label)
                 .tooltip(control.tooltip)
-                .on_click(cx.listener(move |this, _, _, cx| this.send(input, cx)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.send(input, cx);
+                }))
         });
         let status = self.input_status.as_ref().map(|s| {
             div()
@@ -552,6 +576,11 @@ impl Render for DevicePanel {
             .child(body)
             .children(controls)
     }
+}
+
+/// `HANGAR_DEVICE_STATS=1` turns the stats overlay on regardless of the saved setting.
+fn stats_forced() -> bool {
+    std::env::var_os("HANGAR_DEVICE_STATS").is_some_and(|v| v == "1")
 }
 
 fn entry_title(e: &DeviceEntry) -> String {
