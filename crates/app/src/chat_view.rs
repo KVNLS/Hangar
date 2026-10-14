@@ -718,7 +718,7 @@ impl ChatView {
                     }
                 }
             }
-            AcpEvent::TurnEnded(reason) => {
+            AcpEvent::TurnEnded { reason, .. } => {
                 self.running = false;
                 self.turn_done = reason == StopReason::EndTurn;
                 let note = match reason {

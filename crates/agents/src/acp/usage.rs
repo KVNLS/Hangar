@@ -13,6 +13,8 @@ pub struct SessionUsage {
     reported: Option<Cost>,
     /// Totals from before the agent restarted its count, in `reported`'s currency.
     banked: f64,
+    /// What [`Self::take_cost_delta`] has handed out so far, in `reported`'s currency.
+    booked: f64,
 }
 
 impl SessionUsage {
@@ -34,7 +36,10 @@ impl SessionUsage {
                     self.banked += prev.amount;
                 }
             }
-            _ => self.banked = 0.0,
+            _ => {
+                self.banked = 0.0;
+                self.booked = 0.0;
+            }
         }
         self.reported = Some(cost.clone());
     }
@@ -50,6 +55,22 @@ impl SessionUsage {
         self.reported.as_ref().map(|c| Cost {
             amount: self.banked + c.amount,
             currency: c.currency.clone(),
+        })
+    }
+
+    /// The cost added since the previous call, so each amount is booked once; `None` when
+    /// nothing was added.
+    pub fn take_cost_delta(&mut self) -> Option<Cost> {
+        let total = self.cost()?;
+        let delta = total.amount - self.booked;
+        // Sub-cent float noise from re-adding the same total is not spend.
+        if delta < 1e-9 {
+            return None;
+        }
+        self.booked = total.amount;
+        Some(Cost {
+            amount: delta,
+            currency: total.currency,
         })
     }
 }
@@ -116,6 +137,26 @@ mod tests {
         };
         usage.apply(&update(None, None, Some(eur.clone())));
         assert_eq!(usage.cost(), Some(eur));
+    }
+
+    #[test]
+    fn deltas_book_each_amount_once() {
+        let mut usage = SessionUsage::default();
+        assert_eq!(usage.take_cost_delta(), None);
+        usage.apply(&update(None, None, usd(0.5)));
+        assert_eq!(usage.take_cost_delta(), usd(0.5));
+        assert_eq!(usage.take_cost_delta(), None);
+        usage.apply(&update(None, None, usd(0.75)));
+        // The agent restarts its count: what it reports now is new spend.
+        usage.apply(&update(None, None, usd(0.25)));
+        let delta = usage.take_cost_delta().unwrap();
+        assert!((delta.amount - 0.5).abs() < 1e-9);
+        let eur = Cost {
+            amount: 0.1,
+            currency: "EUR".into(),
+        };
+        usage.apply(&update(None, None, Some(eur.clone())));
+        assert_eq!(usage.take_cost_delta(), Some(eur));
     }
 
     #[test]

@@ -533,6 +533,51 @@ fn parse_usage(update: &Value) -> Usage {
     }
 }
 
+/// Tokens of one turn, from the prompt response's `usage`. `input` excludes the cache counters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TurnTokens {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+/// What a turn spent, as the prompt response reports it (claude-agent-acp, codex-acp).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TurnUsage {
+    /// The main loop's tokens (`usage`); `None` when the agent leaves it out.
+    pub tokens: Option<TurnTokens>,
+    /// Total tokens per model (`_meta.quota.model_usage`), subagents and compaction included.
+    /// Only their proportions are used: agents disagree on what `input` counts.
+    pub models: Vec<(String, u64)>,
+}
+
+/// The `usage` and `_meta.quota.model_usage` of a `session/prompt` result; `None` when it has
+/// neither.
+pub fn parse_turn_usage(result: &Value) -> Option<TurnUsage> {
+    let usage = &result["usage"];
+    let tokens = usage["inputTokens"]
+        .as_u64()
+        .zip(usage["outputTokens"].as_u64())
+        .map(|(input, output)| TurnTokens {
+            input,
+            output,
+            cache_read: usage["cachedReadTokens"].as_u64().unwrap_or_default(),
+            cache_write: usage["cachedWriteTokens"].as_u64().unwrap_or_default(),
+        });
+    let models: Vec<(String, u64)> = result["_meta"]["quota"]["model_usage"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let model = row["model"].as_str().filter(|m| !m.is_empty())?;
+            let total = row["token_count"]["totalTokens"].as_u64()?;
+            Some((model.to_owned(), total))
+        })
+        .collect();
+    (tokens.is_some() || !models.is_empty()).then_some(TurnUsage { tokens, models })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionUpdate {
     /// `parent`: the subagent launch it came from; `None` for the agent itself.
