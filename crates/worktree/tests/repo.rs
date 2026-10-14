@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use hangar_worktree::{
-    ChangeKind, CreateOptions, Error, create, current_branch, default_branch, delete_branch,
-    diff_stat, is_valid_branch_name, list, local_branches, prune, remove, repo_root, status,
+    ChangeKind, CreateOptions, Error, base_branch_name, create, current_branch, default_branch,
+    delete_branch, diff_stat, is_valid_branch_name, list, local_branches, prune, remove, repo_root,
+    status,
 };
 use tempfile::TempDir;
 
@@ -115,6 +116,29 @@ fn repo_queries() {
     for bad in ["", "-x", "a..b", "has space", "end.lock", "a~b"] {
         assert!(!is_valid_branch_name(&fx.repo, bad).unwrap(), "{bad}");
     }
+}
+
+#[test]
+fn base_branch_names() {
+    let fx = Fixture::new();
+    let wt = fx.worktree("hangar/x", "x");
+    let head = git(&fx.repo, &["rev-parse", "HEAD"]);
+    let head = head.trim();
+    git(
+        &fx.repo,
+        &["update-ref", "refs/remotes/origin/feature/y", head],
+    );
+    git(&fx.repo, &["tag", "v1"]);
+    let name = |base: &str| base_branch_name(&wt, base).unwrap();
+    assert_eq!(name("main").as_deref(), Some("main"));
+    assert_eq!(name("origin/feature/y").as_deref(), Some("feature/y"));
+    assert_eq!(name(head), None, "a commit");
+    assert_eq!(name(&head[..7]), None, "a short commit");
+    assert_eq!(name("v1"), None, "a tag");
+    assert_eq!(name("HEAD"), None, "moves with the worktree");
+    assert_eq!(name("gone"), None);
+    assert_eq!(name(""), None);
+    assert_eq!(name("--all"), None);
 }
 
 #[test]

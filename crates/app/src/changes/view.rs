@@ -11,24 +11,24 @@ use std::time::Instant;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::Icon;
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::TextareaState;
+use gpui_kit::component::input::{InputState, TextareaState};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, StyledExt as _, Theme, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_core::WorkspaceId;
 use hangar_core::changes::{ChangedPath, FileDiff, FileStatus, LineKind};
-use hangar_core::ports::CodeHost;
+use hangar_core::ports::{CodeHost, Store};
+use hangar_core::{AgentKind, WorkspaceId};
 
 use super::highlight::{RowStyles, highlight_rows};
 use super::language::language_for_path;
 use super::live::WorkspaceDiff;
 use super::model::{
     DiffRow, DisplayLine, ListEntry, SplitRow, file_list, file_title, flatten, hunk_header,
-    list_paths, reselect, short_sha, split_rows, status_letter, widest_row,
+    list_paths, reselect, split_rows, status_letter, widest_row,
 };
-use super::review::{ReviewInfo, ReviewTarget, StageState};
+use super::review::{self, ReviewInfo, ReviewTarget, StageState};
 pub use actions::Busy;
 
 use crate::ui::components::{Chip, Delta, EmptyState, Segmented, UiButton, section_label};
@@ -58,9 +58,23 @@ struct Source {
 
 /// One commit message box per workspace, so drafts survive switching panes.
 struct CommitBox {
-    input: Entity<TextareaState>,
-    _change: Subscription,
+    subject: Entity<InputState>,
+    body: Entity<TextareaState>,
+    _subscriptions: Vec<Subscription>,
 }
+
+/// The agent a workspace runs (or last ran), as the shell knows it.
+#[derive(Clone, Debug)]
+pub struct WorkspaceAgent {
+    pub name: SharedString,
+    pub kind: AgentKind,
+    /// Still running, so a prompt can reach it.
+    pub live: bool,
+}
+
+/// Looks up a workspace's agent. Called while rendering and from click handlers only, never
+/// from inside an update of the shell.
+pub type AgentProbe = Box<dyn Fn(WorkspaceId, &App) -> Option<WorkspaceAgent>>;
 
 /// The diff on screen. Rows and styles always belong to `file`.
 struct Shown {
@@ -96,10 +110,17 @@ pub struct ChangesPanel {
     info_tasks: HashMap<WorkspaceId, Task<()>>,
     busy: HashMap<WorkspaceId, Busy>,
     commit_boxes: HashMap<WorkspaceId, CommitBox>,
+    /// Credit the workspace's agent with a `Co-authored-by` trailer (saved setting).
+    coauthor: bool,
+    store: Option<Arc<dyn Store>>,
+    agent_probe: Option<AgentProbe>,
     /// Full-width review screen instead of the side panel.
     wide: bool,
     /// Side-by-side diff on the review screen.
     split_view: bool,
+    /// Base branch name per workspace (`None`: the base is a commit), once resolved.
+    base_names: HashMap<WorkspaceId, Option<String>>,
+    base_tasks: HashMap<WorkspaceId, Task<()>>,
     /// Files marked viewed on the review screen, per workspace (not persisted).
     viewed: HashMap<WorkspaceId, HashSet<PathBuf>>,
     /// Focused on the review screen so Escape reaches its key context.
@@ -107,7 +128,7 @@ pub struct ChangesPanel {
     _theme: Subscription,
 }
 
-actions!(changes, [ExitReview]);
+actions!(changes, [ExitReview, CommitStaged]);
 
 #[derive(Clone, Copy, Debug)]
 pub struct ReviewStats {
@@ -120,6 +141,13 @@ pub struct ReviewStats {
 pub enum ChangesEvent {
     /// The review screen's back button or Escape.
     ExitReview,
+    /// The side panel's "Full review" button.
+    OpenReview,
+    /// Put `text` in the workspace agent's input (not sent) and focus it.
+    AskAgent {
+        workspace: WorkspaceId,
+        text: String,
+    },
 }
 
 impl EventEmitter<ChangesEvent> for ChangesPanel {}
@@ -152,8 +180,13 @@ impl ChangesPanel {
             info_tasks: HashMap::new(),
             busy: HashMap::new(),
             commit_boxes: HashMap::new(),
+            coauthor: true,
+            store: None,
+            agent_probe: None,
             wide: false,
             split_view: true,
+            base_names: HashMap::new(),
+            base_tasks: HashMap::new(),
             viewed: HashMap::new(),
             focus: cx.focus_handle(),
             _theme: theme,
@@ -163,10 +196,28 @@ impl ChangesPanel {
     pub fn set_wide(&mut self, wide: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.wide != wide {
             self.wide = wide;
+            if wide {
+                self.reveal_selected();
+            }
             cx.notify();
         }
         if wide {
             window.focus(&self.focus, cx);
+        }
+    }
+
+    /// Scrolls the file list to the selected file (the review screen lists more rows).
+    fn reveal_selected(&self) {
+        let Some(selected) = self.selected.as_deref() else {
+            return;
+        };
+        let index = self
+            .list
+            .iter()
+            .position(|e| matches!(e, ListEntry::File(f) if f.path == selected));
+        if let Some(index) = index {
+            self.list_scroll
+                .scroll_to_item(index, ScrollStrategy::Center);
         }
     }
 
@@ -227,6 +278,39 @@ impl ChangesPanel {
         });
         self.sync(cx);
         self.reload_info(cx);
+        self.resolve_base(cx);
+    }
+
+    fn resolve_base(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = &self.source else { return };
+        let workspace = source.workspace;
+        if self.base_names.contains_key(&workspace) || self.base_tasks.contains_key(&workspace) {
+            return;
+        }
+        let ws = &source.target.workspace;
+        let (worktree, base) = (ws.worktree_path.clone(), ws.base.clone());
+        let task = cx.spawn(async move |this, cx| {
+            let name = cx
+                .background_executor()
+                .spawn(async move { review::resolve_base_name(&worktree, &base) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.base_names.insert(workspace, name);
+                this.base_tasks.remove(&workspace);
+                cx.notify();
+            });
+        });
+        self.base_tasks.insert(workspace, task);
+    }
+
+    /// `main`, or the merge-base's short sha while the name is unknown or there is none.
+    fn base_label(&self, merge_base: &str) -> String {
+        let name = self
+            .source
+            .as_ref()
+            .and_then(|s| self.base_names.get(&s.workspace))
+            .and_then(|n| n.as_deref());
+        review::base_label(name, merge_base)
     }
 
     fn clear(&mut self) {
@@ -421,7 +505,7 @@ impl ChangesPanel {
                         div()
                             .flex_none()
                             .text_color(t.tx3)
-                            .child(format!("→ {}", short_sha(&summary.merge_base))),
+                            .child(format!("→ {}", self.base_label(&summary.merge_base))),
                     ),
             })
             .child(div().flex_1())
@@ -431,6 +515,15 @@ impl ChangesPanel {
             })
             .when(self.source.is_some(), |this| {
                 this.child(
+                    UiButton::new("changes-full-review")
+                        .label("Full review")
+                        .kbd("⌘⇧R")
+                        .ghost()
+                        .small()
+                        .tooltip("Review every change full width")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangesEvent::OpenReview))),
+                )
+                .child(
                     UiButton::new("changes-refresh")
                         .icon(Lucide::RefreshCw)
                         .ghost()
@@ -574,6 +667,18 @@ impl ChangesPanel {
                             .child(div().flex_shrink_0().child(name)),
                     )
                     .child(counts(file, cx))
+                    .when(self.wide, |this| {
+                        let viewed = self.is_viewed(&file.path);
+                        // Viewed files fade, so what is left to read stands out.
+                        this.when(viewed && !selected, |this| this.opacity(0.55))
+                            .child(div().w(px(14.)).flex_shrink_0().when(viewed, |this| {
+                                this.child(
+                                    Icon::new(Lucide::Check)
+                                        .size(px(12.))
+                                        .text_color(cx.tokens().grn),
+                                )
+                            }))
+                    })
                     .into_any_element()
             }
         }
@@ -674,6 +779,39 @@ impl ChangesPanel {
         cx.notify();
     }
 
+    /// A button that starts a message to the workspace's agent with `text`; disabled, with the
+    /// reason, when no agent runs.
+    fn ask_agent_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: Lucide,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> UiButton {
+        let agent = self.workspace_agent(cx);
+        let tooltip = match &agent {
+            None => "No agent runs in this workspace".to_owned(),
+            Some(agent) if !agent.live => format!("{} is no longer running", agent.name),
+            Some(agent) => format!("Write to {}", agent.name),
+        };
+        let workspace = self.workspace();
+        UiButton::new(id)
+            .icon(icon)
+            .label(label)
+            .small()
+            .tooltip(tooltip)
+            .disabled(!agent.is_some_and(|a| a.live))
+            .on_click(cx.listener(move |_, _, _, cx| {
+                if let Some(workspace) = workspace {
+                    cx.emit(ChangesEvent::AskAgent {
+                        workspace,
+                        text: text.clone(),
+                    });
+                }
+            }))
+    }
+
     /// The full-width review screen: top bar, file column with commit/PR actions, diff.
     fn render_wide(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.tokens();
@@ -720,8 +858,11 @@ impl ChangesPanel {
                     .unwrap_or_else(|| "detached".into());
                 let n = |v: u64| usize::try_from(v).unwrap_or(usize::MAX);
                 this.child(
-                    Chip::new(format!("{branch} → {}", short_sha(&summary.merge_base)))
-                        .icon(Lucide::GitBranch),
+                    Chip::new(format!(
+                        "{branch} → {}",
+                        self.base_label(&summary.merge_base)
+                    ))
+                    .icon(Lucide::GitBranch),
                 )
                 .child(
                     div()
@@ -733,6 +874,13 @@ impl ChangesPanel {
                 .child(Delta::new(n(summary.insertions), n(summary.deletions)))
             })
             .child(div().flex_1())
+            .child(self.ask_agent_button(
+                "review-request-changes",
+                "Request changes",
+                Lucide::Pencil,
+                "Please change: ".to_owned(),
+                cx,
+            ))
             .child(
                 Segmented::new("review-mode", ["Split", "Inline"])
                     .selected(if self.split_view { 0 } else { 1 })
@@ -771,6 +919,9 @@ impl ChangesPanel {
             .key_context("ReviewScreen")
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &ExitReview, _, cx| cx.emit(ChangesEvent::ExitReview)))
+            .on_action(
+                cx.listener(|this, _: &CommitStaged, window, cx| this.commit_shortcut(window, cx)),
+            )
             .bg(t.app)
             .child(top)
             .child(
@@ -818,6 +969,13 @@ impl ChangesPanel {
             .child(div().min_w_0().truncate().child(file_title(file)))
             .child(counts(file, cx))
             .child(div().flex_1())
+            .child(self.ask_agent_button(
+                "review-ask-file",
+                "Ask agent about this file",
+                Lucide::MessageSquare,
+                format!("About {}: ", path.display()),
+                cx,
+            ))
             .child(
                 UiButton::new("review-viewed")
                     .icon(Lucide::Check)
@@ -925,6 +1083,10 @@ impl Render for ChangesPanel {
         };
         v_flex()
             .size_full()
+            .key_context("ChangesPanel")
+            .on_action(
+                cx.listener(|this, _: &CommitStaged, window, cx| this.commit_shortcut(window, cx)),
+            )
             .bg(cx.tokens().panel)
             .child(header)
             .child(body)

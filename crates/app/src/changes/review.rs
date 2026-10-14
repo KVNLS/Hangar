@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
+use hangar_core::AgentKind;
 use hangar_core::changes::{ChangedPath, Status};
 use hangar_core::ports::CodeHost;
 use hangar_core::review::{
@@ -48,15 +49,64 @@ pub fn stage_paths(change: &ChangedPath) -> Vec<PathBuf> {
     paths
 }
 
+/// What the diff is compared against: the base branch's name, else the merge-base commit.
+pub fn base_label(branch: Option<&str>, merge_base: &str) -> String {
+    match branch.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(branch) => branch.to_owned(),
+        None => crate::changes::model::short_sha(merge_base).to_owned(),
+    }
+}
+
+/// The branch the workspace base names (`origin/main` → `main`); `None` for a commit. Blocks.
+pub fn resolve_base_name(worktree: &Path, base: &str) -> Option<String> {
+    hangar_worktree::base_branch_name(worktree, base)
+        .inspect_err(|err| tracing::warn!(%err, base, "could not resolve the base branch"))
+        .ok()
+        .flatten()
+}
+
 /// Why Commit is disabled, if it is.
-pub fn commit_blocker(message: &str, staged: usize) -> Option<&'static str> {
+pub fn commit_blocker(subject: &str, staged: usize) -> Option<&'static str> {
     if staged == 0 {
         Some("Stage files to commit")
-    } else if message.trim().is_empty() {
-        Some("Write a commit message")
+    } else if subject.trim().is_empty() {
+        Some("Write a commit subject")
     } else {
         None
     }
+}
+
+/// `Co-authored-by: Claude <noreply@anthropic.com>` for an agent preset; `None` for a shell or
+/// a custom command (no one to credit).
+pub fn coauthor_trailer(agent: &AgentKind) -> Option<String> {
+    let (name, email) = match agent {
+        AgentKind::Claude => ("Claude", "noreply@anthropic.com"),
+        AgentKind::Codex => ("Codex", "noreply@openai.com"),
+        AgentKind::OpenCode => ("OpenCode", "noreply@opencode.ai"),
+        AgentKind::Gemini => ("Gemini", "noreply@google.com"),
+        AgentKind::Shell | AgentKind::Custom(_) => return None,
+    };
+    Some(format!("Co-authored-by: {name} <{email}>"))
+}
+
+/// The commit message: subject, body and trailer separated by blank lines. The trailer is left
+/// out when the body already has it.
+pub fn commit_message(subject: &str, body: &str, trailer: Option<&str>) -> String {
+    let mut message = subject.trim().to_owned();
+    let body = body.trim();
+    if !body.is_empty() {
+        message.push_str("\n\n");
+        message.push_str(body);
+    }
+    if let Some(trailer) = trailer.map(str::trim).filter(|t| !t.is_empty())
+        && !body
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case(trailer))
+    {
+        message.push_str("\n\n");
+        message.push_str(trailer);
+    }
+    message
 }
 
 /// The branch's upstream when it is the same-named remote branch (where Push goes). A branch
@@ -128,9 +178,27 @@ pub fn default_merge_message(
     }
 }
 
-/// `#12 · open` for the PR chip.
+/// `PR #12 opened` (or `merged`, `closed`) for the PR button.
 pub fn pr_label(pr: &PrInfo) -> String {
-    format!("#{} · {}", pr.number, pr.state.to_lowercase())
+    let state = match pr.state.to_lowercase().as_str() {
+        "open" => "opened".to_owned(),
+        other => other.to_owned(),
+    };
+    format!("PR #{} {state}", pr.number)
+}
+
+/// The number at the end of a pull request URL (`…/pull/12`).
+pub fn pr_number(url: &str) -> Option<u64> {
+    let (_, tail) = url.trim().trim_end_matches('/').rsplit_once("/pull/")?;
+    tail.parse().ok()
+}
+
+/// The toast after opening a pull request.
+pub fn pr_opened_text(url: &str, branch: &str, base: &str) -> String {
+    match pr_number(url) {
+        Some(n) => format!("Opened PR #{n} · {branch} → {base}"),
+        None => format!("Opened {url} · {branch} → {base}"),
+    }
 }
 
 /// Errors the user can act on, worded for the UI; everything else is shown in full.
@@ -229,6 +297,7 @@ pub fn run_merge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::changes::model::short_sha;
     use hangar_core::changes::ChangeKind;
 
     fn change(staged: bool, unstaged: bool) -> ChangedPath {
@@ -264,10 +333,46 @@ mod tests {
     }
 
     #[test]
+    fn base_labels() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(base_label(Some("main"), sha), "main");
+        assert_eq!(base_label(Some(" "), sha), short_sha(sha));
+        assert_eq!(base_label(None, sha), short_sha(sha));
+    }
+
+    #[test]
     fn commit_and_push_text() {
         assert_eq!(commit_blocker("msg", 0), Some("Stage files to commit"));
-        assert_eq!(commit_blocker(" \n", 2), Some("Write a commit message"));
+        assert_eq!(commit_blocker(" \n", 2), Some("Write a commit subject"));
         assert_eq!(commit_blocker("msg", 1), None);
+
+        let claude = coauthor_trailer(&AgentKind::Claude);
+        assert_eq!(
+            claude.as_deref(),
+            Some("Co-authored-by: Claude <noreply@anthropic.com>")
+        );
+        assert!(
+            coauthor_trailer(&AgentKind::Codex)
+                .unwrap()
+                .contains("Codex <")
+        );
+        assert_eq!(coauthor_trailer(&AgentKind::Shell), None);
+        assert_eq!(coauthor_trailer(&AgentKind::Custom("aider".into())), None);
+        let trailer = claude.as_deref();
+        assert_eq!(commit_message(" Fix it ", "", None), "Fix it");
+        assert_eq!(
+            commit_message("Fix it", " Why.\n", trailer),
+            "Fix it\n\nWhy.\n\nCo-authored-by: Claude <noreply@anthropic.com>"
+        );
+        assert_eq!(
+            commit_message("Fix it", "", trailer),
+            "Fix it\n\nCo-authored-by: Claude <noreply@anthropic.com>"
+        );
+        let signed = "Why.\n\nco-authored-by: Claude <noreply@anthropic.com>";
+        assert_eq!(
+            commit_message("Fix it", signed, trailer),
+            format!("Fix it\n\n{signed}")
+        );
 
         let mut status = Status::default();
         assert_eq!(push_label(&status), "Publish");
@@ -323,7 +428,23 @@ mod tests {
             state: "OPEN".into(),
             title: "t".into(),
         };
-        assert_eq!(pr_label(&pr), "#3 · open");
+        assert_eq!(pr_label(&pr), "PR #3 opened");
+        let merged = PrInfo {
+            state: "MERGED".into(),
+            ..pr
+        };
+        assert_eq!(pr_label(&merged), "PR #3 merged");
+        assert_eq!(pr_number("https://github.com/o/r/pull/42"), Some(42));
+        assert_eq!(pr_number("https://github.com/o/r/pull/42/"), Some(42));
+        assert_eq!(pr_number("https://github.com/o/r/issues/42"), None);
+        assert_eq!(
+            pr_opened_text("https://github.com/o/r/pull/7", "hangar/x", "main"),
+            "Opened PR #7 · hangar/x → main"
+        );
+        assert_eq!(
+            pr_opened_text("https://example.com/x", "b", "main"),
+            "Opened https://example.com/x · b → main"
+        );
     }
 
     #[test]

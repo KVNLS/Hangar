@@ -66,6 +66,7 @@ impl Render for ChatView {
                             .px(SPACE_6)
                             .py(SPACE_4)
                             .children(items)
+                            .children(self.render_done_card(cx))
                             .when(working, |this| {
                                 this.child(
                                     div()
@@ -83,6 +84,77 @@ impl Render for ChatView {
             )
             .child(self.render_composer(cx))
     }
+}
+
+impl ChatView {
+    /// "Ready for review" after a turn that ended normally, while the workspace has changes.
+    fn render_done_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.turn_done || self.running || self.exited {
+            return None;
+        }
+        let summary = self.diff.as_ref()?.0.read(cx).summary()?;
+        if summary.files == 0 {
+            return None;
+        }
+        let text = done_summary(summary.files, summary.insertions, summary.deletions);
+        let t = cx.tokens();
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(SPACE_2)
+                .p(SPACE_3)
+                .rounded(RADIUS)
+                .border_1()
+                .border_color(t.line)
+                .bg(t.panel)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(SPACE_2)
+                        .type_body_strong()
+                        .child(
+                            Icon::new(Lucide::CircleCheck)
+                                .size(px(13.))
+                                .text_color(t.grn),
+                        )
+                        .child("Ready for review"),
+                )
+                .child(div().type_mono().text_color(t.tx2).child(text))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(6.))
+                        .child(
+                            UiButton::new("chat-review")
+                                .small()
+                                .primary()
+                                .icon(Lucide::FileDiff)
+                                .label("Review changes")
+                                .kbd("⌘⇧R")
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(crate::shell::OpenReview), cx)
+                                }),
+                        )
+                        .child(
+                            UiButton::new("chat-ask-changes")
+                                .small()
+                                .label("Ask for changes")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.focus_composer(window, cx)
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+/// `3 files changed, +12 −4`.
+fn done_summary(files: usize, insertions: u64, deletions: u64) -> String {
+    let s = if files == 1 { "" } else { "s" };
+    format!("{files} file{s} changed, +{insertions} −{deletions}")
 }
 
 fn centered(child: impl IntoElement) -> Div {
@@ -825,5 +897,14 @@ mod tests {
         );
         assert_eq!(diff_lines("", "x\ny"), vec![('+', "x"), ('+', "y")]);
         assert!(diff_lines("same", "same").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod done_card_tests {
+    #[test]
+    fn summary_text() {
+        assert_eq!(super::done_summary(1, 3, 0), "1 file changed, +3 −0");
+        assert_eq!(super::done_summary(4, 12, 7), "4 files changed, +12 −7");
     }
 }

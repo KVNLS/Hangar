@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use gpui_kit::component::input::{InputEvent, TextareaState};
+use gpui_kit::component::input::{InputEvent, Position, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use hangar_agents::acp::protocol::{
@@ -18,6 +18,7 @@ use hangar_agents::acp::protocol::{
 use hangar_agents::acp::{AcpEvent, AcpSession, PermissionRequest};
 use hangar_core::AcpTurn;
 
+use crate::changes::WorkspaceDiff;
 use crate::terminal_view::TerminalWaker;
 
 const CONTEXT: &str = "ChatView";
@@ -100,6 +101,11 @@ pub struct ChatView {
     /// Slash commands the agent offers (`/name` at the start of a prompt).
     commands: Vec<AvailableCommand>,
     composer: Entity<TextareaState>,
+    /// The last turn ended normally: a "Ready for review" card follows it while the workspace
+    /// has changes.
+    turn_done: bool,
+    /// The workspace's live diff, for the review card (set by the shell).
+    diff: Option<(Entity<WorkspaceDiff>, Subscription)>,
     scroll: ScrollHandle,
     /// Keep the newest item in view; turned off when the user scrolls up.
     follow: bool,
@@ -162,6 +168,8 @@ impl ChatView {
             config: Vec::new(),
             commands: Vec::new(),
             composer,
+            turn_done: false,
+            diff: None,
             scroll: ScrollHandle::new(),
             follow: true,
             _tasks: vec![pump],
@@ -218,12 +226,46 @@ impl ChatView {
         self.session.prompt(text)?;
         self.items.push(Item::User(text.to_owned().into()));
         self.running = true;
+        self.turn_done = false;
         self.failed = false;
         self.plan = None;
         self.follow = true;
         cx.emit(ChatEvent::StateChanged);
         cx.notify();
         Ok(())
+    }
+
+    /// Puts `text` in the composer after any draft and focuses it, without sending.
+    pub fn prefill(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer.update(cx, |state, cx| {
+            let draft = state.value();
+            let value = match draft.trim_end() {
+                "" => text.to_owned(),
+                draft => format!("{draft}\n{text}"),
+            };
+            let last_line = value.split('\n').count().saturating_sub(1);
+            state.set_value(value, window, cx);
+            state.set_cursor_position(
+                Position::new(u32::try_from(last_line).unwrap_or(u32::MAX), u32::MAX),
+                window,
+                cx,
+            );
+        });
+    }
+
+    /// The workspace's live diff, summarized in the card after a finished turn.
+    pub fn set_diff(&mut self, diff: Entity<WorkspaceDiff>, cx: &mut Context<Self>) {
+        if self.diff.as_ref().is_some_and(|(d, _)| *d == diff) {
+            return;
+        }
+        let observe = cx.observe(&diff, |_, _, cx| cx.notify());
+        self.diff = Some((diff, observe));
+        cx.notify();
+    }
+
+    fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer
+            .update(cx, |state, cx| state.focus(window, cx));
     }
 
     /// Asks the agent to stop the running turn; open permission requests are cancelled.
@@ -389,6 +431,7 @@ impl ChatView {
             }
             AcpEvent::TurnEnded(reason) => {
                 self.running = false;
+                self.turn_done = reason == StopReason::EndTurn;
                 let note = match reason {
                     StopReason::EndTurn => None,
                     StopReason::Cancelled => Some("Stopped"),

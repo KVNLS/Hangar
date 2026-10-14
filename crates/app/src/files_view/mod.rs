@@ -8,11 +8,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, Theme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
+use hangar_core::changes::{FileDiff, LineKind};
 
+use crate::changes::highlight::{RowStyles, highlight_lines};
+use crate::changes::language::language_for_path;
 use crate::changes::live::WorkspaceDiff;
 use crate::ui::components::{EmptyState, UiButton};
 use crate::ui::{ActiveTokens as _, TypeScale as _};
@@ -42,6 +45,8 @@ enum Viewer {
     Text {
         path: PathBuf,
         lines: Arc<Vec<SharedString>>,
+        /// Syntax styles per line, once highlighted (none for plain text).
+        styles: Option<Arc<Vec<RowStyles>>>,
     },
     Message {
         path: PathBuf,
@@ -58,12 +63,16 @@ pub struct FilesPanel {
     viewer: Viewer,
     list_task: Option<Task<()>>,
     read_task: Option<Task<()>>,
+    highlight_task: Option<Task<()>>,
     tree_scroll: UniformListScrollHandle,
     view_scroll: UniformListScrollHandle,
+    _theme: Subscription,
 }
 
 impl FilesPanel {
-    pub fn new(_: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        // Highlight colours come from the theme.
+        let theme = cx.observe_global::<Theme>(|this, cx| this.highlight(cx));
         Self {
             source: None,
             files: Arc::default(),
@@ -73,8 +82,10 @@ impl FilesPanel {
             viewer: Viewer::None,
             list_task: None,
             read_task: None,
+            highlight_task: None,
             tree_scroll: UniformListScrollHandle::new(),
             view_scroll: UniformListScrollHandle::new(),
+            _theme: theme,
         }
     }
 
@@ -93,6 +104,7 @@ impl FilesPanel {
         self.error = None;
         self.viewer = Viewer::None;
         self.read_task = None;
+        self.highlight_task = None;
         self.source = source.map(|s| Source {
             // The tree follows the worktree: relist when its diff (file events) changes.
             _observe: cx.observe(&s.diff, |this, _, cx| this.reload(cx)),
@@ -174,14 +186,50 @@ impl FilesPanel {
                     Ok(lines) => Viewer::Text {
                         path,
                         lines: Arc::new(lines),
+                        styles: None,
                     },
                     Err(text) => Viewer::Message { path, text },
                 };
                 this.view_scroll.scroll_to_item(0, ScrollStrategy::Top);
+                this.highlight(cx);
                 cx.notify();
             });
         }));
         cx.notify();
+    }
+
+    /// Highlights the file in the viewer off the main thread (again after a theme change).
+    fn highlight(&mut self, cx: &mut Context<Self>) {
+        let Viewer::Text { path, lines, .. } = &self.viewer else {
+            self.highlight_task = None;
+            return;
+        };
+        let Some(language) = language_for_path(path) else {
+            self.highlight_task = None;
+            return;
+        };
+        let (path, lines) = (path.clone(), lines.clone());
+        let theme = cx.theme().highlight_theme.clone();
+        self.highlight_task = Some(cx.spawn(async move |this, cx| {
+            let job = lines.clone();
+            let styles = cx
+                .background_executor()
+                .spawn(async move { highlight_lines(&job, language, &theme) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Viewer::Text {
+                    path: shown,
+                    lines: shown_lines,
+                    styles: slot,
+                } = &mut this.viewer
+                    && *shown == path
+                    && Arc::ptr_eq(shown_lines, &lines)
+                {
+                    *slot = Some(Arc::new(styles));
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn render_tree_row(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -273,9 +321,15 @@ impl FilesPanel {
                     .child(text.clone())
                     .into_any_element(),
             ),
-            Viewer::Text { path, lines } => {
+            Viewer::Text { path, lines, .. } => {
                 let count = lines.len();
                 let gutter = px(12. + count.to_string().len() as f32 * 7.5);
+                let added: Arc<HashSet<u32>> = Arc::new(
+                    self.source
+                        .as_ref()
+                        .and_then(|s| s.diff.read(cx).files().get(path).map(|f| added_lines(f)))
+                        .unwrap_or_default(),
+                );
                 (
                     Some(path),
                     uniform_list(
@@ -283,16 +337,30 @@ impl FilesPanel {
                         count,
                         cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                             let t = cx.tokens();
-                            let Viewer::Text { lines, .. } = &this.viewer else {
+                            let Viewer::Text { lines, styles, .. } = &this.viewer else {
                                 return Vec::new();
                             };
                             range
                                 .filter_map(|ix| {
                                     let line = lines.get(ix)?.clone();
+                                    let line_styles = styles
+                                        .as_ref()
+                                        .and_then(|s| s.get(ix))
+                                        .filter(|s| !s.is_empty());
+                                    let body = match line_styles {
+                                        Some(runs) => StyledText::new(line)
+                                            .with_highlights(runs.clone())
+                                            .into_any_element(),
+                                        None => line.into_any_element(),
+                                    };
+                                    let added = u32::try_from(ix + 1)
+                                        .is_ok_and(|number| added.contains(&number));
                                     Some(
                                         h_flex()
                                             .h(px(VIEW_ROW_HEIGHT))
+                                            .min_w_full()
                                             .whitespace_nowrap()
+                                            .when(added, |this| this.bg(t.addbg))
                                             .child(
                                                 div()
                                                     .w(gutter + px(12.))
@@ -302,7 +370,7 @@ impl FilesPanel {
                                                     .text_color(t.tx3)
                                                     .child((ix + 1).to_string()),
                                             )
-                                            .child(line),
+                                            .child(body),
                                     )
                                 })
                                 .collect::<Vec<_>>()
@@ -352,6 +420,16 @@ impl FilesPanel {
             )
             .into_any_element()
     }
+}
+
+/// Line numbers (1-based, in the new file) the diff adds.
+fn added_lines(file: &FileDiff) -> HashSet<u32> {
+    file.hunks
+        .iter()
+        .flat_map(|h| &h.lines)
+        .filter(|l| l.kind == LineKind::Added)
+        .filter_map(|l| l.new_lineno)
+        .collect()
 }
 
 /// The file's lines, or a short message when it is too big, binary or unreadable.
@@ -461,5 +539,48 @@ impl Render for FilesPanel {
             )
             .child(self.render_viewer(cx))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::added_lines;
+    use hangar_core::changes::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
+
+    #[test]
+    fn added_lines_are_new_line_numbers() {
+        let line = |kind, old, new| DiffLine {
+            kind,
+            old_lineno: old,
+            new_lineno: new,
+            text: String::new(),
+        };
+        let file = FileDiff {
+            path: "a.rs".into(),
+            old_path: None,
+            status: FileStatus::Modified,
+            old_mode: None,
+            new_mode: None,
+            binary: false,
+            truncated: false,
+            insertions: 2,
+            deletions: 1,
+            hunks: vec![Hunk {
+                old_start: 1,
+                old_lines: 2,
+                new_start: 1,
+                new_lines: 3,
+                header: String::new(),
+                lines: vec![
+                    line(LineKind::Context, Some(1), Some(1)),
+                    line(LineKind::Removed, Some(2), None),
+                    line(LineKind::Added, None, Some(2)),
+                    line(LineKind::Added, None, Some(3)),
+                ],
+            }],
+        };
+        assert_eq!(added_lines(&file), HashSet::from([2, 3]));
     }
 }

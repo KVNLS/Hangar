@@ -70,3 +70,30 @@ pub fn default_branch(repo: &Path) -> Result<Option<String>> {
     }
     current_branch(repo)
 }
+
+/// The branch a workspace base names, without its remote (`origin/main` → `main`), or `None`
+/// when the base is a commit, a tag, `HEAD` (which moves) or does not resolve.
+pub fn base_branch_name(repo: &Path, base: &str) -> Result<Option<String>> {
+    let base = base.trim();
+    if base.is_empty() || base == "HEAD" || base.starts_with('-') {
+        return Ok(None);
+    }
+    let out = Git::new(repo).query([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--symbolic-full-name",
+        base,
+    ])?;
+    Ok(out.as_deref().and_then(branch_of_ref))
+}
+
+/// `refs/heads/x` → `x`, `refs/remotes/origin/x` → `x`; anything else → `None`.
+fn branch_of_ref(full: &str) -> Option<String> {
+    let full = full.trim();
+    let name = match full.strip_prefix("refs/heads/") {
+        Some(local) => local,
+        None => full.strip_prefix("refs/remotes/")?.split_once('/')?.1,
+    };
+    (!name.is_empty() && name != "HEAD").then(|| name.to_owned())
+}

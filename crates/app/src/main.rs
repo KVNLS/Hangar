@@ -136,6 +136,7 @@ fn run_app() {
             }
             hangar_app::terminal_view::init(cx);
             hangar_app::chat_view::init(cx);
+            hangar_app::changes::init(cx);
             hangar_app::device_view::init(cx);
             hangar_app::shell::init(cx);
             cx.on_window_closed(|cx, _| cx.quit()).detach();
