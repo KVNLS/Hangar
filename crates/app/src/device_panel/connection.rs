@@ -142,7 +142,7 @@ impl DevicePanel {
     fn on_booted(
         &mut self,
         key: DeviceKey,
-        result: anyhow::Result<hangar_devices::DeviceInfo>,
+        result: anyhow::Result<hangar_core::device::DeviceInfo>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

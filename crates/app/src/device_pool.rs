@@ -40,7 +40,7 @@ pub use hangar_usecases::device_pool::{
 pub type DeviceStatus<'a> = hangar_usecases::device_pool::DeviceStatus<'a, DeviceSession>;
 
 impl Session for DeviceSession {
-    fn info(&self) -> &hangar_devices::DeviceInfo {
+    fn info(&self) -> &hangar_core::device::DeviceInfo {
         DeviceSession::info(self)
     }
 

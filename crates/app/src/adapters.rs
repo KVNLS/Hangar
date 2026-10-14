@@ -16,6 +16,9 @@ use hangar_worktree::{Gh, GitCli};
 
 use crate::setup_probe::SystemProbe;
 
+pub mod devices;
+pub mod vcs;
+
 pub fn version_control() -> &'static dyn VersionControl {
     &GitCli
 }

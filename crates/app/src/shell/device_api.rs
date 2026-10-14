@@ -6,7 +6,8 @@
 
 use std::time::Duration;
 
-use hangar_devices::{Frame, Input, LogEntry, LogFilter, LogLevel, Orientation};
+use crate::adapters::devices::{LogEntry, LogFilter};
+use hangar_core::device::{Frame, Input, LogLevel, Orientation};
 
 use super::toast::ToastKind;
 use super::*;
@@ -183,7 +184,7 @@ impl HangarApp {
         cx.spawn(async move |_, _| {
             let acquired = acquire.await?;
             if let Some(missing) = acquired.session.capabilities().missing_for(&input) {
-                return Err(hangar_devices::Error::Unsupported(missing).into());
+                return Err(crate::adapters::devices::Error::Unsupported(missing).into());
             }
             acquired
                 .session
@@ -205,7 +206,10 @@ impl HangarApp {
         cx.spawn(async move |_, _| {
             let acquired = acquire.await?;
             if !acquired.session.capabilities().text {
-                return Err(hangar_devices::Error::Unsupported("text input on this device").into());
+                return Err(crate::adapters::devices::Error::Unsupported(
+                    "text input on this device",
+                )
+                .into());
             }
             acquired
                 .session
@@ -435,7 +439,8 @@ fn format_log(e: &LogEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::{format_log, save_screenshot};
-    use hangar_devices::{Frame, LogEntry, LogLevel};
+    use crate::adapters::devices::LogEntry;
+    use hangar_core::device::{Frame, LogLevel};
 
     #[test]
     fn screenshots_are_saved_as_png_per_workspace() {

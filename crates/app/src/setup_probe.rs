@@ -99,9 +99,9 @@ fn or_late<T>(probed: Result<T, Late>, tool: &str, fallback: T, late: &mut Vec<S
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn git() -> GitFact {
-    match hangar_worktree::git_version() {
+    match crate::adapters::vcs::git_version() {
         Ok(version) => {
-            let (name, email) = hangar_worktree::identity().unwrap_or_else(|err| {
+            let (name, email) = crate::adapters::vcs::identity().unwrap_or_else(|err| {
                 tracing::warn!(%err, "cannot read the git identity");
                 (None, None)
             });
@@ -111,7 +111,7 @@ fn git() -> GitFact {
                 email,
             }
         }
-        Err(hangar_worktree::Error::GitTooOld { found, required }) => GitFact::TooOld {
+        Err(crate::adapters::vcs::Error::GitTooOld { found, required }) => GitFact::TooOld {
             version: found.to_string(),
             required: required.to_string(),
         },
@@ -144,11 +144,11 @@ const XCODE_APP: &str = "/Applications/Xcode.app";
 
 #[cfg(target_os = "macos")]
 fn xcode() -> Result<XcodeFact, Late> {
-    use hangar_devices::{ios, simctl};
+    use crate::adapters::devices::{ios, simctl};
     let installed = Path::new(XCODE_APP).is_dir();
     let dir = match ios::developer_dir() {
         Ok(dir) => dir,
-        Err(hangar_devices::Error::Timeout(_)) => return Err(Late),
+        Err(crate::adapters::devices::Error::Timeout(_)) => return Err(Late),
         Err(_) => return Ok(XcodeFact::Missing),
     };
     let Some((app, _)) = dir.split_once(".app/") else {
@@ -175,12 +175,12 @@ fn xcode() -> Result<XcodeFact, Late> {
 }
 
 fn android() -> Result<AndroidFact, Late> {
-    let Ok(sdk) = hangar_devices::android::AndroidSdk::locate() else {
+    let Ok(sdk) = crate::adapters::devices::android::AndroidSdk::locate() else {
         return Ok(AndroidFact::Missing);
     };
-    let avds = match hangar_devices::android::list_avds(&sdk) {
+    let avds = match crate::adapters::devices::android::list_avds(&sdk) {
         Ok(avds) => avds.len(),
-        Err(hangar_devices::Error::Timeout(_)) => return Err(Late),
+        Err(crate::adapters::devices::Error::Timeout(_)) => return Err(Late),
         Err(err) => {
             tracing::warn!(%err, "cannot list AVDs");
             0

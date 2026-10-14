@@ -16,7 +16,7 @@ use gpui_kit::component::h_flex;
 use gpui_kit::component::select::{SelectEvent, SelectItem, SelectState};
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_devices::Input;
+use hangar_core::device::Input;
 
 use logs::LogsPane;
 

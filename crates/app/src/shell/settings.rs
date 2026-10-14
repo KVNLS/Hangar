@@ -18,7 +18,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 
 use gpui_kit::component::tooltip::Tooltip;
 use hangar_agents::acp::approval::ApprovalLevel;
-use hangar_devices::capacity::Pressure;
+use hangar_core::device::Pressure;
 
 use super::new_workspace::tilde;
 use super::*;

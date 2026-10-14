@@ -6,7 +6,8 @@
 
 use std::time::Duration;
 
-use hangar_devices::{Input, geometry};
+use crate::adapters::devices::geometry;
+use hangar_core::device::Input;
 
 /// An axis-aligned rectangle in window space.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -82,7 +83,7 @@ pub fn to_device_clamped(px: f64, py: f64, image: Rect, screen: (f64, f64)) -> O
 /// frame: the screen spec describes the portrait panel, so a landscape frame swaps its sides.
 /// Without a spec the frame's pixels are taken as points (scale 1).
 pub fn screen_points(
-    spec: Option<hangar_devices::ScreenSpec>,
+    spec: Option<hangar_core::device::ScreenSpec>,
     frame: Option<(u32, u32)>,
 ) -> Option<(f64, f64)> {
     if let Some(s) = spec {

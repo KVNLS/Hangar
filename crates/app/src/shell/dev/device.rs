@@ -108,7 +108,7 @@ pub(super) async fn dev_pool_frames(
             ),
             Err(err) => tracing::error!(%slug, "HANGAR_DEV_POOL_FRAMES save: {err}"),
         }
-        let tap = hangar_devices::Input::Tap {
+        let tap = hangar_core::device::Input::Tap {
             x: shot.width_pt / 2.0,
             y: shot.height_pt / 2.0,
         };
@@ -228,7 +228,7 @@ pub(super) const DEV_BOOT_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) const DEV_POLL: Duration = Duration::from_millis(100);
 
 pub(super) enum DevAction {
-    Input(hangar_devices::Input),
+    Input(hangar_core::device::Input),
     Text(String),
 }
 
@@ -291,7 +291,7 @@ pub(super) async fn dev_device(
             panel.view().and_then(|view| {
                 view.read(cx)
                     .painted_frame()
-                    .and_then(hangar_devices::Frame::snapshot)
+                    .and_then(hangar_core::device::Frame::snapshot)
             })
         })
     };

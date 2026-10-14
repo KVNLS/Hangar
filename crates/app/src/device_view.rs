@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_devices::{DeviceInfo, Frame, FramePixels, Input, Key, Orientation};
+use hangar_core::device::{DeviceInfo, Frame, FramePixels, Input, Key, Orientation};
 
 use geometry::{Gesture, Rect};
 pub use session::{DeviceHandle, DeviceSession, InputResult, Outcome, TextResult};
@@ -674,7 +674,7 @@ impl Stats {
 mod tests {
     use super::{key_text, named_key};
     use gpui_kit::{Keystroke, Modifiers};
-    use hangar_devices::Key;
+    use hangar_core::device::Key;
 
     fn key(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
         Keystroke {

@@ -6,7 +6,7 @@ use hangar_core::{Project, ProjectId, SessionStatus, Workspace, WorkspaceId, Wor
 use serde::{Deserialize, Serialize};
 
 use crate::device_panel::{DeviceKey, LogsSettings};
-use hangar_devices::LogLevel;
+use hangar_core::device::LogLevel;
 
 /// Most panes the window may be split into.
 pub const MAX_PANES: usize = 4;
