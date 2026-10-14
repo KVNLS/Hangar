@@ -65,9 +65,8 @@ Git access is the `git` CLI with porcelain output, not a library.
     last started (`workspace_agent:<id>`); the sidebar picker is only the default for new workspaces.
 
 ## Explicitly unimplemented (return `Unsupported`)
-- `mcp` orchestration: `agent_transcript` for terminal agents (use `workspaces_list` for their state and
-  diff); `ask_user`; `notifications/tools/list_changed` when the setting changes (agents see it on their next
-  `tools/list` or in a new session).
+- `mcp` orchestration: `notifications/tools/list_changed` when the setting changes (agents see it on their
+  next `tools/list` or in a new session).
 - `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
   Android rotation needs a sensor-following foreground app and upside-down is usually refused (spikes/m4-android-notes.md);
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
@@ -491,7 +490,25 @@ Git access is the `git` CLI with porcelain output, not a library.
     operations, so a streaming chunk remeasures one row. Seen on screen with a 40-line reply and a tool call.
     Known limit: a cross-message selection drops the parts scrolled well off screen (gpui-component sweeps
     unpainted selection participants).
-- Next: `ask_user`; persisting cost per day; merge `orchestration-core` into main.
+- Follow-ups (2026-10-08, branch `m10-followups`):
+  - **`ask_user`** for every agent (owner decision): `{question, choices? ≤6}` → `{answer, choice}`. The
+    workspace reads Needs input (Dock badge, ⌘J) until answered from the answer sheet (overview card
+    "Answer", pane banner "<agent> asks: …", palette "Answer" group, ⌘J opens it); choices are buttons,
+    a typed answer sends with ⌘⏎, esc keeps it for later. The call waits up to 30 min
+    (`Timeouts.ask`); the question is withdrawn when the agent stops or the workspace closes; a lead hears
+    when a child asks. Codex gets `tool_timeout_sec=1800` (its default is 60 s). `HANGAR_DEV_ANSWER`.
+    Live: Claude Code (structured) asked with two choices, choice 1 was picked, it created that file.
+    Not seen on screen (session locked): the sheet, banner and card. Other agents' MCP timeouts unchecked.
+  - **Terminal transcripts**: terminal Claude Code's hooks pass `transcript_path`, accepted only as a
+    `.jsonl` under `~/.claude/projects` after resolving links (`mcp_host::accept_transcript`), parsed by
+    `agents::claude_transcript` off the UI thread. Other terminal agents return their recent screen and
+    scrollback (`Terminal::recent_lines`, 120 lines, box rows dropped) as one approximate entry.
+    Unit-tested; not run live with a lead.
+  - **Cost across restarts and per day**: `Session.cost` (schema v7 `cost_amount/cost_currency`,
+    `Store::record_session_cost`) saved when an agent reports a new total; status bar "$X today"
+    (`history::cost_today`: today's ended sessions + this run's, each once), Done-today rows show cost.
+    Live: a turn's $0.25 was saved while running and kept after a relaunch closed the session. A session
+    started yesterday and still running counts fully today. Not seen on screen (session locked).
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a
