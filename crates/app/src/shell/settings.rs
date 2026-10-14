@@ -10,6 +10,8 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{Icon, Sizable as _};
 
+use gpui_kit::component::tooltip::Tooltip;
+use hangar_agents::acp::approval::ApprovalLevel;
 use hangar_devices::capacity::Pressure;
 
 use super::new_workspace::tilde;
@@ -103,6 +105,9 @@ pub(super) struct SettingsUi {
     /// Agent id → version printed by `--version`, read once per run.
     versions: HashMap<String, String>,
     versions_started: Cell<bool>,
+    /// The saved default approval level, once read.
+    approval: Option<ApprovalLevel>,
+    approval_started: Cell<bool>,
 }
 
 impl SettingsUi {
@@ -115,6 +120,8 @@ impl SettingsUi {
                 keys_filter,
                 versions: HashMap::new(),
                 versions_started: Cell::new(false),
+                approval: None,
+                approval_started: Cell::new(false),
             },
             sub,
         )
@@ -380,6 +387,105 @@ impl HangarApp {
             ))
             .child(card(cx).children(rows))
             .child(self.render_ollama_card(cx))
+            .child(self.render_permissions(cx))
+    }
+
+    fn render_permissions(&self, cx: &mut Context<Self>) -> Div {
+        v_flex()
+            .gap(px(10.))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child("Permissions"))
+            .child(self.render_approval_mode_row(cx))
+    }
+
+    /// Reads the saved approval level once, in the background.
+    fn load_approval_level(&self, cx: &mut Context<Self>) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        if self.settings_ui.approval_started.replace(true) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let level = cx
+                .background_executor()
+                .spawn(async move { ops::approval_level(&*store) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.settings_ui.approval.get_or_insert(level);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn set_approval_level(
+        &mut self,
+        level: ApprovalLevel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_ui.approval = Some(level);
+        // Running chats answer reads at the new level; modes change with the next session.
+        for live in self.live.sessions.values() {
+            if let AgentSurface::Chat { view, .. } = &live.surface {
+                view.update(cx, |chat, _| chat.set_approval(level));
+            }
+        }
+        self.persist(window, cx, move |store| {
+            ops::save_approval_level(store, level)
+        });
+        cx.notify();
+    }
+
+    /// "Default approval mode": the mode structured agents start in.
+    fn render_approval_mode_row(&self, cx: &mut Context<Self>) -> Div {
+        let t = cx.tokens();
+        self.load_approval_level(cx);
+        let level = self.settings_ui.approval.unwrap_or_default();
+        let selected = ApprovalLevel::ALL
+            .iter()
+            .position(|l| *l == level)
+            .unwrap_or(0);
+        card(cx).child(
+            h_flex()
+                .px(px(14.))
+                .py_3()
+                .gap_4()
+                .items_center()
+                .justify_between()
+                .child(
+                    v_flex()
+                        .id("approval-mode-help")
+                        .gap_0p5()
+                        .tooltip(|window, cx| {
+                            Tooltip::new(
+                                "Structured agents only: terminal agents keep their own \
+                                 settings. Applied when an agent starts. Auto-approve reads \
+                                 keeps the agent's asking mode and Hangar allows read and \
+                                 search requests once. Full auto uses the agent's bypass mode \
+                                 (Claude Code: Bypass permissions, Codex: Full Access, Gemini: \
+                                 YOLO); OpenCode has none and keeps its own permissions.",
+                            )
+                            .build(window, cx)
+                        })
+                        .child("Default approval mode")
+                        .child(
+                            div()
+                                .type_secondary()
+                                .text_color(t.tx3)
+                                .child("Agents can override per workspace."),
+                        ),
+                )
+                .child(
+                    Segmented::new("approval-mode", ApprovalLevel::ALL.map(|l| l.label()))
+                        .selected(selected)
+                        .on_select(cx.listener(|this, i: &usize, window, cx| {
+                            if let Some(level) = ApprovalLevel::ALL.get(*i) {
+                                this.set_approval_level(*level, window, cx);
+                            }
+                        })),
+                ),
+        )
     }
 
     /// "Devices at once", the detected capacity and memory pressure.
