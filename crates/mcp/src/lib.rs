@@ -49,7 +49,7 @@ pub use protocol::{
 pub use screenshot::{MAX_SIDE, Screenshot, ScreenshotError, encode_screenshot};
 pub use server::{bind, handle_envelope, serve, serve_connection};
 pub use tools::{
-    Button, Content, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES,
+    Answer, Button, Content, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES,
     DeviceStatus, MAX_LOG_LINES, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES, ParseError, Press, Tool,
     ToolError, ToolOutput, definitions,
 };

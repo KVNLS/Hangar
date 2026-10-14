@@ -2,6 +2,7 @@
 
 pub mod acp;
 mod adapter;
+pub mod claude_transcript;
 mod error;
 pub mod ollama;
 mod path;

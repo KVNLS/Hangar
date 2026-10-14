@@ -15,6 +15,7 @@ mod ollama;
 mod orchestration;
 mod overview;
 mod palette;
+mod questions;
 mod queue;
 mod run;
 mod settings;
@@ -160,6 +161,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("CompareAttempts")),
+        KeyBinding::new("cmd-enter", SubmitSheet, Some("AnswerSheet")),
+        KeyBinding::new("escape", CloseSheet, Some("AnswerSheet")),
     ]);
 }
 
@@ -204,6 +207,10 @@ struct LiveSession {
     activity: status::Activity,
     /// What a terminal agent last reported through its hooks (Claude Code); `None` without hooks.
     signal: Option<hangar_core::AgentSignal>,
+    /// A terminal Claude Code's session transcript, as its hooks reported it (checked).
+    transcript_path: Option<PathBuf>,
+    /// The session's cost as last saved (structured agents that report one).
+    saved_cost: Option<hangar_core::changes::Cost>,
     _exit: Subscription,
 }
 
@@ -386,6 +393,8 @@ struct LiveState {
     diffs: HashMap<WorkspaceId, DiffEntry>,
     /// "Max concurrent agents" and the workspaces waiting for a slot.
     agent_queue: hangar_usecases::agents::AgentQueue<queue::StartRequest>,
+    /// Questions agents asked the user (`ask_user`), one per workspace.
+    questions: HashMap<WorkspaceId, questions::PendingQuestion>,
     /// The queue as last saved, to write it only when it changed.
     saved_queue: Vec<(WorkspaceId, queue::StartRequest)>,
     /// Agents spawning off the main thread: they hold a slot before they have a session.
@@ -405,6 +414,8 @@ struct WorkState {
     busy: HashSet<WorkspaceId>,
     /// "Compare attempts", when open.
     compare: Option<compare::CompareAttempts>,
+    /// The answer sheet of an agent's question, when open.
+    answer: Option<questions::AnswerSheet>,
     /// Child workspaces each agent is creating through the orchestration tools.
     child_creates: HashMap<WorkspaceId, usize>,
 }
@@ -621,6 +632,7 @@ impl HangarApp {
                 diffs: HashMap::new(),
                 agent_queue: Default::default(),
                 saved_queue: Vec::new(),
+                questions: HashMap::new(),
                 starting: HashSet::new(),
                 done_today: Default::default(),
             },
@@ -630,6 +642,7 @@ impl HangarApp {
                 load_error: None,
                 new_workspace: None,
                 compare: None,
+                answer: None,
                 child_creates: HashMap::new(),
                 creating: HashSet::new(),
                 busy: HashSet::new(),
@@ -812,6 +825,8 @@ impl HangarApp {
                     self.sync_max_agents_input(window, cx);
                 }
                 self.restore_agent_queue(loaded.agent_queue, window, cx);
+                // Today's finished sessions, for "Done today" and the day's cost.
+                self.refresh_done_today(cx);
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
                     self.layout.changes.open = false;
@@ -1010,13 +1025,19 @@ mod tests {
     /// declared for the shell must be taken as `&Action` by some handler in the shell's sources.
     #[test]
     fn every_shell_action_has_a_handler() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell");
-        let sources: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap()
-            .flatten()
-            .map(|e| std::fs::read_to_string(e.path()).unwrap())
-            .collect();
-        let module = std::fs::read_to_string(dir.join("mod.rs")).unwrap();
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let module = std::fs::read_to_string(src.join("shell.rs")).unwrap();
+        let mut sources = vec![module.clone()];
+        let mut dirs = vec![src.join("shell")];
+        while let Some(dir) = dirs.pop() {
+            for path in std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()) {
+                if path.is_dir() {
+                    dirs.push(path);
+                } else {
+                    sources.push(std::fs::read_to_string(path).unwrap());
+                }
+            }
+        }
         let start = module.find("actions!(").unwrap();
         let list = &module[start..];
         let list = &list[list.find('[').unwrap() + 1..list.find(']').unwrap()];

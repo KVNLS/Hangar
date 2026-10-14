@@ -1,7 +1,7 @@
 //! What agents finished: the sessions that ended on the local day, for the overview's
 //! "Done today". Pure: the caller passes the clock and the local UTC offset.
 
-use hangar_core::changes::DiffStat;
+use hangar_core::changes::{Cost, DiffStat};
 use hangar_core::{
     AgentKind, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
     WorkspaceStatus,
@@ -53,6 +53,7 @@ pub struct Finished {
     pub archived: bool,
     pub outcome: Outcome,
     pub changes: Option<DiffStat>,
+    pub cost: Option<Cost>,
     pub ended_at: Timestamp,
 }
 
@@ -94,6 +95,7 @@ pub fn done_today<'a>(
                 archived: ws.status == WorkspaceStatus::Archived,
                 outcome,
                 changes: session.changes,
+                cost: session.cost.clone(),
                 ended_at,
             })
         })
@@ -102,131 +104,27 @@ pub fn done_today<'a>(
     done
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
+/// What today cost, per currency in first-seen order: the sessions that ended today as stored,
+/// and the `live` ones with their latest cost (which wins when a session is in both).
+pub fn cost_today(ended_today: &[Session], live: &[(SessionId, Cost)]) -> Vec<Cost> {
+    let stored = ended_today
+        .iter()
+        .filter(|s| !live.iter().any(|(id, _)| *id == s.id))
+        .filter_map(|s| s.cost.as_ref());
+    sum_costs(stored.chain(live.iter().map(|(_, cost)| cost)))
+}
 
-    use hangar_core::ProjectId;
-
-    use super::*;
-    use crate::sessions::stopped;
-
-    const HOUR: i64 = 3_600_000;
-    /// 2026-10-08T00:00:00Z.
-    const MIDNIGHT_UTC: i64 = 1_791_417_600_000;
-
-    fn workspace(name: &str, task: Option<&str>) -> Workspace {
-        Workspace {
-            id: WorkspaceId::new(),
-            project_id: ProjectId::new(),
-            name: name.to_owned(),
-            slug: name.to_owned(),
-            branch: format!("hangar/{name}"),
-            base: "main".to_owned(),
-            worktree_path: PathBuf::from(format!("/wt/{name}")),
-            status: WorkspaceStatus::Active,
-            created_at: Timestamp(0),
-            task: task.map(str::to_owned),
-            group: None,
-            parent: None,
+/// Costs summed per currency, in first-seen order.
+pub fn sum_costs<'a>(costs: impl IntoIterator<Item = &'a Cost>) -> Vec<Cost> {
+    let mut totals: Vec<Cost> = Vec::new();
+    for cost in costs {
+        match totals.iter_mut().find(|t| t.currency == cost.currency) {
+            Some(total) => total.amount += cost.amount,
+            None => totals.push(cost.clone()),
         }
     }
-
-    fn ended(ws: &Workspace, status: SessionStatus, at: i64) -> Session {
-        let mut s = Session::new(ws.id, AgentKind::Claude);
-        s.status = status;
-        s.ended_at = Some(Timestamp(at));
-        s
-    }
-
-    #[test]
-    fn the_local_day_follows_the_offset() {
-        let now = Timestamp(MIDNIGHT_UTC + 10 * HOUR);
-        assert_eq!(local_day_start(now, 0), Timestamp(MIDNIGHT_UTC));
-        // UTC+2: local midnight was 22:00 UTC the day before.
-        assert_eq!(
-            local_day_start(now, 2 * 3600),
-            Timestamp(MIDNIGHT_UTC - 2 * HOUR)
-        );
-        // UTC-7 at 03:00 UTC is still the previous local day, which started at 07:00 UTC.
-        let early = Timestamp(MIDNIGHT_UTC + 3 * HOUR);
-        assert_eq!(
-            local_day_start(early, -7 * 3600),
-            Timestamp(MIDNIGHT_UTC - 17 * HOUR)
-        );
-        assert_eq!(
-            clock_label(Timestamp(MIDNIGHT_UTC + 9 * HOUR + 5 * 60_000), 3600),
-            "10:05"
-        );
-        assert_eq!(clock_label(Timestamp(MIDNIGHT_UTC), -3600), "23:00");
-    }
-
-    #[test]
-    fn outcomes_tell_exits_failures_and_stops_apart() {
-        assert_eq!(Outcome::of(&SessionStatus::Running), None);
-        assert_eq!(
-            Outcome::of(&SessionStatus::Exited { code: 0 }),
-            Some(Outcome::Done)
-        );
-        assert_eq!(
-            Outcome::of(&SessionStatus::Exited { code: 1 }),
-            Some(Outcome::Failed)
-        );
-        assert_eq!(
-            Outcome::of(&SessionStatus::Failed {
-                message: "spawn failed".into()
-            }),
-            Some(Outcome::Failed)
-        );
-        assert_eq!(
-            Outcome::of(&stopped("workspace archived")),
-            Some(Outcome::Stopped)
-        );
-    }
-
-    #[test]
-    fn done_today_keeps_todays_ends_with_their_workspace_latest_first() {
-        let login = workspace("login", Some("Fix the login crash\nwith a test"));
-        let mut docs = workspace("docs", None);
-        docs.status = WorkspaceStatus::Archived;
-        let gone = workspace("gone", None);
-        let offset = 2 * 3600;
-        // Local midnight is 22:00 UTC the day before.
-        let today = MIDNIGHT_UTC - 2 * HOUR;
-        let mut with_diff = ended(&login, SessionStatus::Exited { code: 0 }, today + HOUR);
-        with_diff.changes = Some(DiffStat {
-            files: 2,
-            insertions: 10,
-            deletions: 1,
-        });
-        let sessions = [
-            with_diff.clone(),
-            ended(&docs, stopped("workspace archived"), today + 3 * HOUR),
-            ended(&login, SessionStatus::Exited { code: 0 }, today - 1),
-            ended(&gone, SessionStatus::Exited { code: 0 }, today + 2 * HOUR),
-            Session::new(login.id, AgentKind::Codex),
-        ];
-        let known = [&login, &docs];
-        let lookup = |id| known.iter().copied().find(|w| w.id == id);
-        let done = done_today(&sessions, lookup, Timestamp(today + 5 * HOUR), offset);
-
-        assert_eq!(done.len(), 2);
-        assert_eq!(done[0].workspace, docs.id);
-        assert_eq!(done[0].title, "docs");
-        assert!(done[0].archived);
-        assert_eq!(done[0].outcome, Outcome::Stopped);
-        assert_eq!(
-            done[1],
-            Finished {
-                session: with_diff.id,
-                workspace: login.id,
-                agent: AgentKind::Claude,
-                title: "Fix the login crash".to_owned(),
-                archived: false,
-                outcome: Outcome::Done,
-                changes: with_diff.changes,
-                ended_at: Timestamp(today + HOUR),
-            }
-        );
-    }
+    totals
 }
+
+#[cfg(test)]
+mod tests;

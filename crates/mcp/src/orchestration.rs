@@ -64,6 +64,8 @@ pub enum TranscriptEntry {
         answer: Option<String>,
     },
     Notice(String),
+    /// A terminal agent's recent screen and scrollback text, when no structured transcript exists.
+    Screen(String),
 }
 
 impl ToolOutput {
@@ -120,6 +122,9 @@ impl ToolOutput {
                     None => format!("[permission · waiting for the user] {title}"),
                 },
                 TranscriptEntry::Notice(text) => format!("[hangar] {text}"),
+                TranscriptEntry::Screen(text) => {
+                    format!("[terminal screen and scrollback, approximate]\n{text}")
+                }
             })
             .collect();
         Self::text(blocks.join("\n\n"))

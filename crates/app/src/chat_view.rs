@@ -7,7 +7,7 @@ mod subagent;
 mod usage;
 
 pub use subagent::subagent_state;
-pub use usage::{costs_label, usage_label};
+pub use usage::{costs_label, stored_cost, stored_costs_label, usage_label};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -152,6 +152,8 @@ pub struct ChatView {
     focus: Option<String>,
     /// Read-kind permission requests are answered without asking at this level.
     approval: ApprovalLevel,
+    /// The agent waits on a question it asked the user (`ask_user`).
+    asking: bool,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -222,6 +224,7 @@ impl ChatView {
             turn_start: 0,
             focus: None,
             approval: ApprovalLevel::default(),
+            asking: false,
             _tasks: vec![pump],
             _subscriptions: subscriptions,
         };
@@ -242,6 +245,14 @@ impl ChatView {
 
     pub fn set_approval(&mut self, level: ApprovalLevel) {
         self.approval = level;
+    }
+
+    /// Whether the agent waits on a question it asked the user; the working line says so.
+    pub fn set_asking(&mut self, asking: bool, cx: &mut Context<Self>) {
+        if self.asking != asking {
+            self.asking = asking;
+            cx.notify();
+        }
     }
 
     /// Context use and cost as the agent last reported them.

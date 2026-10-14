@@ -14,7 +14,7 @@ use anyhow::Context as _;
 use hangar_core::{AgentSignal, WorkspaceId};
 use hangar_devices::{Frame, Input, LogEntry, LogLevel};
 use hangar_mcp::{
-    ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost,
+    Answer, ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost,
     ToolOutput, TranscriptEntry, encode_screenshot, new_session_secret,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -73,10 +73,19 @@ pub enum McpRequest {
         app_id: String,
         reply: Reply<()>,
     },
-    /// What the workspace's terminal agent reported through its hooks (no reply).
+    /// `ask_user`: shows the question and replies with the user's answer.
+    Ask {
+        ws: WorkspaceId,
+        question: String,
+        choices: Vec<String>,
+        reply: Reply<Answer>,
+    },
+    /// What the workspace's terminal agent reported through its hooks (no reply), with its
+    /// transcript file when the hook named an acceptable one.
     Signal {
         ws: WorkspaceId,
         signal: AgentSignal,
+        transcript: Option<PathBuf>,
     },
     /// The workspaces `ws`'s agent created (orchestration tools, like the three below).
     Children {
@@ -121,9 +130,19 @@ impl McpRequest {
             | Self::Children { ws, .. }
             | Self::CreateChild { ws, .. }
             | Self::PromptChild { ws, .. }
-            | Self::Transcript { ws, .. } => *ws,
+            | Self::Transcript { ws, .. }
+            | Self::Ask { ws, .. } => *ws,
         }
     }
+}
+
+/// `raw` when it is a `.jsonl` file inside `root` (Claude Code's projects directory) once links
+/// are resolved: an agent must not make Hangar read any other file on a lead's behalf.
+pub fn accept_transcript(raw: &Path, root: &Path) -> Option<PathBuf> {
+    let path = raw.canonicalize().ok()?;
+    let root = root.canonicalize().ok()?;
+    (path.starts_with(&root) && path.extension().is_some_and(|e| e == "jsonl") && path.is_file())
+        .then_some(path)
 }
 
 /// How long a tool call waits for the GPUI side.
@@ -133,6 +152,8 @@ pub struct Timeouts {
     pub build_and_run: Duration,
     /// `workspace_create`: a worktree checkout and the agent's start.
     pub create: Duration,
+    /// `ask_user`: how long a question waits for the user.
+    pub ask: Duration,
 }
 
 impl Default for Timeouts {
@@ -141,6 +162,7 @@ impl Default for Timeouts {
             call: Duration::from_secs(30),
             build_and_run: Duration::from_secs(20 * 60),
             create: Duration::from_secs(3 * 60),
+            ask: Duration::from_secs(30 * 60),
         }
     }
 }
@@ -368,13 +390,27 @@ impl ToolHost for McpHost {
         self.orchestration.load(Ordering::Relaxed) && self.knows_session(session)
     }
 
-    fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError> {
+    fn agent_signal(
+        &self,
+        session: &str,
+        signal: AgentSignal,
+        transcript: Option<&str>,
+    ) -> Result<(), ToolError> {
         let ws = self
             .sessions
             .resolve(session)
             .ok_or(ToolError::UnknownSession)?;
+        let transcript = transcript.and_then(|raw| {
+            let root =
+                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/projects"))?;
+            accept_transcript(Path::new(raw), &root)
+        });
         self.requests
-            .send(McpRequest::Signal { ws, signal })
+            .send(McpRequest::Signal {
+                ws,
+                signal,
+                transcript,
+            })
             .map_err(|_| ToolError::Failed("Hangar is shutting down".into()))
     }
 
@@ -465,6 +501,15 @@ impl ToolHost for McpHost {
                     reply,
                 })?;
                 Ok(ToolOutput::text(format!("Launched {label}.")))
+            }
+            Tool::AskUser { question, choices } => {
+                let answer = self.ask("ask_user", self.timeouts.ask, |reply| McpRequest::Ask {
+                    ws,
+                    question,
+                    choices,
+                    reply,
+                })?;
+                Ok(ToolOutput::answer(&answer))
             }
             Tool::WorkspacesList => {
                 let children = self.ask("workspaces_list", call, |reply| McpRequest::Children {

@@ -196,6 +196,7 @@ impl Render for HangarApp {
             .child(self.render_status_bar(cx))
             .children(self.render_new_workspace_sheet(cx))
             .children(self.render_compare(cx))
+            .children(self.render_answer_sheet(cx))
             .children(self.render_palette(cx))
             .children(self.render_toast(cx))
     }
@@ -415,7 +416,55 @@ impl HangarApp {
                 }),
             )
             .child(tab_bar)
+            .children(workspace_id.and_then(|id| self.question_banner(id, cx)))
             .child(body)
+    }
+
+    /// "<agent> asks: …  Answer" above a pane whose agent waits on a question.
+    fn question_banner(&self, id: WorkspaceId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let question = self.question(id)?;
+        let t = cx.tokens();
+        let (fg, bg) = crate::ui::components::state_colors(AgentState::Input, t);
+        let agent = self
+            .live
+            .sessions
+            .get(&id)
+            .map(|l| l.agent_name.to_string())
+            .unwrap_or_else(|| "The agent".to_owned());
+        Some(
+            h_flex()
+                .flex_none()
+                .px_3()
+                .py_1p5()
+                .gap_2()
+                .items_center()
+                .bg(bg)
+                .border_b_1()
+                .border_color(t.line)
+                .child(StateGlyph::new(AgentState::Input))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.5))
+                        .text_color(fg)
+                        .child(format!(
+                            "{agent} asks: {}",
+                            super::questions::question_line(&question.text)
+                        )),
+                )
+                .child(
+                    UiButton::new(SharedString::from(format!("pane-answer-{id}")))
+                        .label("Answer")
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_answer_sheet(id, window, cx)
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The sidebar with a drag handle on its right edge.

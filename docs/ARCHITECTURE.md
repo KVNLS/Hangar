@@ -108,8 +108,9 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
   device pool, panel and views, plus `mcp_host` and four `shell` modules; many only name types
   that `core::device` also exports).
 - [x] `HangarApp` has at most 15 fields.
-- [ ] No source file over about 800 lines (today: `device_pool/mod.rs` 1,828, `device_panel/mod.rs`
-  1,361, `changes/view.rs` 1,123, `shell/dev.rs` 993 and five files of 810–890 lines).
+- [ ] No source file over about 800 lines (today: `shell.rs` 1,065, `shell/lifecycle.rs` 1,025,
+  `chat_view.rs` 1,003, `chat_view/render.rs` 984 and three files of 840–890 lines; the device pool,
+  device panel, changes view, dev hooks and settings were split by concern).
 - [x] Every port is tested against its real adapter.
 
 ## References

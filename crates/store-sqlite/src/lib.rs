@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, ffi, params};
 use uuid::Uuid;
 
-use hangar_core::changes::DiffStat;
+use hangar_core::changes::{Cost, DiffStat};
 use hangar_core::ports::{PortError, PortResult};
 use hangar_core::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Setting, Timestamp,
@@ -78,6 +78,11 @@ ALTER TABLE sessions ADD COLUMN prompt TEXT;
 ALTER TABLE sessions ADD COLUMN files INTEGER;
 ALTER TABLE sessions ADD COLUMN insertions INTEGER;
 ALTER TABLE sessions ADD COLUMN deletions INTEGER;
+"#,
+    // v7: what a session cost (its agent's running total).
+    r#"
+ALTER TABLE sessions ADD COLUMN cost_amount REAL;
+ALTER TABLE sessions ADD COLUMN cost_currency TEXT;
 "#,
 ];
 
@@ -290,8 +295,8 @@ impl Store {
             .execute(
                 "INSERT INTO sessions
                  (id, workspace_id, agent, command, args, status, created_at, ended_at, prompt,
-                  files, insertions, deletions)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  files, insertions, deletions, cost_amount, cost_currency)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     session.id.0.to_string(),
                     session.workspace_id.0.to_string(),
@@ -305,6 +310,8 @@ impl Store {
                     session.changes.map(|c| c.files),
                     session.changes.map(|c| c.insertions),
                     session.changes.map(|c| c.deletions),
+                    session.cost.as_ref().map(|c| c.amount),
+                    session.cost.as_ref().map(|c| c.currency.as_str()),
                 ],
             )
             .map_err(|e| {
@@ -381,6 +388,15 @@ impl Store {
         )?;
         ensure_changed(changed, "session", id)?;
         self.get_session(id)
+    }
+
+    /// Records what the session has cost so far (the agent's latest running total).
+    pub fn record_session_cost(&self, id: SessionId, cost: &Cost) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE sessions SET cost_amount = ?2, cost_currency = ?3 WHERE id = ?1",
+            params![id.0.to_string(), cost.amount, cost.currency],
+        )?;
+        ensure_changed(changed, "session", id)
     }
 
     /// The raw JSON stored under `key`; `None` when it was never set.
@@ -592,12 +608,14 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
 }
 
 const SESSION_COLUMNS: &str = "id, workspace_id, agent, command, args, status, created_at, \
-     ended_at, prompt, files, insertions, deletions";
+     ended_at, prompt, files, insertions, deletions, cost_amount, cost_currency";
 
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
     let files: Option<u32> = row.get(9)?;
     let insertions: Option<u32> = row.get(10)?;
     let deletions: Option<u32> = row.get(11)?;
+    let cost_amount: Option<f64> = row.get(12)?;
+    let cost_currency: Option<String> = row.get(13)?;
     Ok(Session {
         id: SessionId(uuid_at(row, 0)?),
         workspace_id: WorkspaceId(uuid_at(row, 1)?),
@@ -613,6 +631,9 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
             insertions: insertions.unwrap_or_default(),
             deletions: deletions.unwrap_or_default(),
         }),
+        cost: cost_amount
+            .zip(cost_currency)
+            .map(|(amount, currency)| Cost { amount, currency }),
     })
 }
 
@@ -676,6 +697,10 @@ impl hangar_core::ports::Store for Store {
 
     fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>> {
         Store::list_sessions_since(self, since).map_err(PortError::new)
+    }
+
+    fn record_session_cost(&self, id: SessionId, cost: &Cost) -> PortResult<()> {
+        Store::record_session_cost(self, id, cost).map_err(PortError::new)
     }
 
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {

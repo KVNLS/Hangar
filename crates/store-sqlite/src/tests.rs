@@ -473,14 +473,12 @@ fn sessions_before_history_migrate_without_prompt_or_changes() {
     s.status = SessionStatus::Exited { code: 0 };
     s.ended_at = Some(Timestamp(5));
     {
-        // A database as written by the build before session history: every migration but the
-        // history one, which is the last.
+        // A database as written by the build before session history (v5).
         let conn = Connection::open(&path).unwrap();
-        for sql in &MIGRATIONS[..MIGRATIONS.len() - 1] {
+        for sql in &MIGRATIONS[..5] {
             conn.execute_batch(sql).unwrap();
         }
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION - 1)
-            .unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
         conn.execute(
             "INSERT INTO projects (id, name, repo_path, default_base, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -674,4 +672,36 @@ fn a_workspace_parent_round_trips() {
     store.insert_workspace(&child).unwrap();
     assert_eq!(store.get_workspace(child.id).unwrap(), child);
     assert_eq!(store.list_workspaces(p.id).unwrap(), vec![lead, child]);
+}
+
+#[test]
+fn a_session_records_its_cost() {
+    let store = store();
+    let p = project("/repos/cost");
+    store.insert_project(&p).unwrap();
+    let w = workspace(p.id, "cost");
+    store.insert_workspace(&w).unwrap();
+    let s = Session::new(w.id, AgentKind::Claude);
+    store.insert_session(&s).unwrap();
+    assert_eq!(store.get_session(s.id).unwrap().cost, None);
+    let cost = Cost {
+        amount: 0.27,
+        currency: "USD".into(),
+    };
+    store.record_session_cost(s.id, &cost).unwrap();
+    store
+        .record_session_cost(
+            s.id,
+            &Cost {
+                amount: 0.31,
+                ..cost.clone()
+            },
+        )
+        .unwrap();
+    let saved = store.get_session(s.id).unwrap();
+    assert_eq!(
+        saved.cost.map(|c| (c.amount, c.currency)),
+        Some((0.31, "USD".to_owned()))
+    );
+    assert!(store.record_session_cost(SessionId::new(), &cost).is_err());
 }

@@ -44,6 +44,12 @@ pub enum Tool {
     LaunchApp {
         app_id: String,
     },
+    /// Asks the user a question and waits for the answer.
+    AskUser {
+        question: String,
+        /// Answers to offer as buttons (the user may still type another one).
+        choices: Vec<String>,
+    },
     /// The workspaces the caller's agent created.
     WorkspacesList,
     WorkspaceCreate {
@@ -145,6 +151,7 @@ impl Tool {
             Self::Logs { .. } => "logs",
             Self::BuildAndRun => "build_and_run",
             Self::LaunchApp { .. } => "launch_app",
+            Self::AskUser { .. } => "ask_user",
             Self::WorkspacesList => "workspaces_list",
             Self::WorkspaceCreate { .. } => "workspace_create",
             Self::AgentPrompt { .. } => "agent_prompt",
@@ -257,6 +264,39 @@ impl Tool {
                     agent: agent.map(|a| a.trim().to_owned()),
                 }
             }
+            "ask_user" => {
+                let question = a.required_string("question").map_err(invalid)?;
+                let question = question.trim().to_owned();
+                if question.is_empty() || question.chars().count() > MAX_QUESTION_CHARS {
+                    return Err(invalid(format!(
+                        "\"question\" must have 1 to {MAX_QUESTION_CHARS} characters"
+                    )));
+                }
+                let choices = match a.get("choices") {
+                    None => Vec::new(),
+                    Some(Value::Array(items)) => items
+                        .iter()
+                        .map(|item| match item.as_str().map(str::trim) {
+                            Some(c) if !c.is_empty() && c.chars().count() <= MAX_CHOICE_CHARS => {
+                                Ok(c.to_owned())
+                            }
+                            _ => Err(invalid(format!(
+                                "each choice must be a string of 1 to {MAX_CHOICE_CHARS} characters"
+                            ))),
+                        })
+                        .collect::<Result<_, _>>()?,
+                    Some(v) => {
+                        return Err(invalid(format!(
+                            "\"choices\" must be an array of strings, got {}",
+                            kind(v)
+                        )));
+                    }
+                };
+                if choices.len() > MAX_CHOICES {
+                    return Err(invalid(format!("at most {MAX_CHOICES} choices")));
+                }
+                Self::AskUser { question, choices }
+            }
             "agent_prompt" => {
                 let workspace = a.workspace().map_err(invalid)?;
                 let text = a.required_string("text").map_err(invalid)?;
@@ -278,7 +318,7 @@ impl Tool {
     }
 }
 
-const TOOL_NAMES: [&str; 13] = [
+const TOOL_NAMES: [&str; 14] = [
     "device_info",
     "screenshot",
     "tap",
@@ -288,6 +328,7 @@ const TOOL_NAMES: [&str; 13] = [
     "logs",
     "build_and_run",
     "launch_app",
+    "ask_user",
     "workspaces_list",
     "workspace_create",
     "agent_prompt",
@@ -309,6 +350,7 @@ fn allowed_args(tool: &str) -> &'static [&'static str] {
         "press" => &["button", "key"],
         "logs" => &["lines", "level", "process"],
         "launch_app" => &["app_id"],
+        "ask_user" => &["question", "choices"],
         "workspace_create" => &["task", "name", "agent"],
         "agent_prompt" => &["workspace", "text"],
         "agent_transcript" => &["workspace", "last"],
@@ -441,10 +483,42 @@ fn point_schema(description: &str) -> Value {
     json!({ "type": "number", "minimum": 0, "description": description })
 }
 
-/// The `tools` array of a `tools/list` result: the device tools, then the orchestration tools
-/// when they are on.
+/// Longest `ask_user` question, in characters.
+pub const MAX_QUESTION_CHARS: usize = 2000;
+/// Most `ask_user` choices, and the longest one.
+pub const MAX_CHOICES: usize = 6;
+pub const MAX_CHOICE_CHARS: usize = 80;
+
+/// The `tools` array of a `tools/list` result: the device tools and `ask_user`, then the
+/// orchestration tools when they are on.
 pub fn definitions(orchestration: bool) -> Vec<Value> {
     let mut tools = device_definitions();
+    tools.push(json!({
+        "name": "ask_user",
+        "description": "Ask the user a question and wait for the answer (it may take minutes). \
+            Use it when a decision is theirs to make: an ambiguous requirement, a risky step, a \
+            choice between approaches. Offer choices when the likely answers are known; the \
+            user can still type their own. Returns {\"answer\", \"choice\"} (the chosen index, \
+            or null for a typed answer).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "maxLength": MAX_QUESTION_CHARS,
+                    "description": "The question, self-contained: the user may not have followed your work.",
+                },
+                "choices": {
+                    "type": "array",
+                    "items": { "type": "string", "maxLength": MAX_CHOICE_CHARS },
+                    "maxItems": MAX_CHOICES,
+                    "description": "Suggested answers, shown as buttons.",
+                },
+            },
+            "required": ["question"],
+            "additionalProperties": false,
+        },
+    }));
     if orchestration {
         tools.extend(orchestration_definitions());
     }
@@ -650,9 +724,9 @@ fn orchestration_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "agent_transcript",
-            "description": "The last messages of the structured agent in a workspace this agent \
-                created: prompts, replies, tool calls with their status, permission requests. \
-                Terminal agents have no transcript.",
+            "description": "The last messages of the agent in a workspace this agent created: \
+                prompts, replies, tool calls with their status, permission requests. For a \
+                terminal agent other than Claude Code, its recent screen and scrollback text.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -685,11 +759,24 @@ pub struct ToolOutput {
     pub content: Vec<Content>,
 }
 
+/// The user's answer to `ask_user`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answer {
+    pub text: String,
+    /// Index of the offered choice the user picked; `None` for a typed answer.
+    pub choice: Option<usize>,
+}
+
 impl ToolOutput {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             content: vec![Content::Text(text.into())],
         }
+    }
+
+    /// `{"answer": "...", "choice": 1 | null}`.
+    pub fn answer(answer: &Answer) -> Self {
+        Self::text(json!({ "answer": answer.text, "choice": answer.choice }).to_string())
     }
 
     /// The image plus a line mapping its pixels to the device's point space.
@@ -772,303 +859,4 @@ pub enum ToolError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(name: &str, args: Value) -> Result<Tool, ParseError> {
-        Tool::parse(name, Some(&args))
-    }
-
-    fn message(r: Result<Tool, ParseError>) -> String {
-        match r {
-            Err(ParseError::InvalidArguments { message, .. }) => message,
-            other => panic!("expected invalid arguments, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn orchestration_tools_are_listed_only_when_on() {
-        let names = |on| -> Vec<String> {
-            definitions(on)
-                .iter()
-                .map(|d| d["name"].as_str().unwrap().to_owned())
-                .collect()
-        };
-        assert_eq!(names(false), TOOL_NAMES[..9]);
-        assert_eq!(names(true), TOOL_NAMES);
-        for name in TOOL_NAMES {
-            assert_eq!(
-                Tool::is_orchestration_name(name),
-                ORCHESTRATION_TOOLS.contains(&name)
-            );
-        }
-    }
-
-    #[test]
-    fn parses_orchestration_tools() {
-        assert_eq!(
-            parse("workspaces_list", json!({})),
-            Ok(Tool::WorkspacesList)
-        );
-        assert_eq!(
-            parse("workspace_create", json!({"task": "Fix login"})),
-            Ok(Tool::WorkspaceCreate {
-                task: "Fix login".into(),
-                name: None,
-                agent: None
-            })
-        );
-        assert_eq!(
-            parse(
-                "workspace_create",
-                json!({"task": "Fix", "name": " ", "agent": " codex-acp "})
-            ),
-            Ok(Tool::WorkspaceCreate {
-                task: "Fix".into(),
-                name: None,
-                agent: Some("codex-acp".into())
-            })
-        );
-        assert_eq!(
-            parse(
-                "agent_prompt",
-                json!({"workspace": " Login ", "text": "go on"})
-            ),
-            Ok(Tool::AgentPrompt {
-                workspace: "Login".into(),
-                text: "go on".into()
-            })
-        );
-        assert_eq!(
-            parse("agent_transcript", json!({"workspace": "Login"})),
-            Ok(Tool::AgentTranscript {
-                workspace: "Login".into(),
-                last: DEFAULT_TRANSCRIPT_MESSAGES
-            })
-        );
-        assert_eq!(
-            parse(
-                "agent_transcript",
-                json!({"workspace": "Login", "last": 50})
-            ),
-            Ok(Tool::AgentTranscript {
-                workspace: "Login".into(),
-                last: 50
-            })
-        );
-        assert_eq!(
-            message(parse("workspace_create", json!({"task": "  "}))),
-            "\"task\" must not be empty"
-        );
-        assert_eq!(
-            message(parse("workspace_create", json!({}))),
-            "missing required string \"task\""
-        );
-        assert_eq!(
-            message(parse("workspace_create", json!({"task": "x", "agent": ""}))),
-            "\"agent\" must not be empty"
-        );
-        assert_eq!(
-            message(parse(
-                "agent_prompt",
-                json!({"workspace": "x", "text": " "})
-            )),
-            "\"text\" must not be empty"
-        );
-        assert_eq!(
-            message(parse(
-                "agent_prompt",
-                json!({"workspace": "", "text": "hi"})
-            )),
-            "\"workspace\" must not be empty"
-        );
-        assert!(
-            message(parse(
-                "agent_transcript",
-                json!({"workspace": "x", "last": 51})
-            ))
-            .contains("between 1 and 50")
-        );
-        assert!(
-            message(parse(
-                "agent_transcript",
-                json!({"workspace": "x", "last": 0})
-            ))
-            .contains("between 1 and 50")
-        );
-        assert_eq!(
-            message(parse("workspaces_list", json!({"all": true}))),
-            "unknown argument(s) all; this tool takes no arguments"
-        );
-    }
-
-    #[test]
-    fn every_definition_parses_its_name() {
-        let defs = definitions(true);
-        assert_eq!(defs.len(), TOOL_NAMES.len());
-        for (def, name) in defs.iter().zip(TOOL_NAMES) {
-            assert_eq!(def["name"], name);
-            let props = def["inputSchema"]["properties"]
-                .as_object()
-                .map(|p| p.len())
-                .unwrap_or(0);
-            assert_eq!(props, allowed_args(name).len(), "{name}");
-        }
-    }
-
-    #[test]
-    fn parses_happy_paths() {
-        assert_eq!(Tool::parse("device_info", None), Ok(Tool::DeviceInfo));
-        assert_eq!(parse("screenshot", json!({})), Ok(Tool::Screenshot));
-        assert_eq!(
-            parse("tap", json!({"x": 10, "y": 20.5})),
-            Ok(Tool::Tap { x: 10.0, y: 20.5 })
-        );
-        assert_eq!(
-            parse(
-                "swipe",
-                json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4})
-            ),
-            Ok(Tool::Swipe {
-                from_x: 1.0,
-                from_y: 2.0,
-                to_x: 3.0,
-                to_y: 4.0,
-                duration_ms: DEFAULT_SWIPE_MS
-            })
-        );
-        assert_eq!(
-            parse(
-                "swipe",
-                json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "duration_ms": 500.0})
-            )
-            .map(|t| matches!(
-                t,
-                Tool::Swipe {
-                    duration_ms: 500,
-                    ..
-                }
-            )),
-            Ok(true)
-        );
-        assert_eq!(
-            parse("type_text", json!({"text": "hé"})),
-            Ok(Tool::TypeText { text: "hé".into() })
-        );
-        assert_eq!(
-            parse("press", json!({"button": "volume_up"})),
-            Ok(Tool::Press(Press::Button(Button::VolumeUp)))
-        );
-        assert_eq!(
-            parse("press", json!({"key": "arrow_left"})),
-            Ok(Tool::Press(Press::Key(Key::ArrowLeft)))
-        );
-        assert_eq!(
-            parse("logs", json!({})),
-            Ok(Tool::Logs {
-                lines: 200,
-                min_level: None,
-                process: None
-            })
-        );
-        assert_eq!(
-            parse(
-                "logs",
-                json!({"lines": 2000, "level": "warning", "process": "MyApp"})
-            ),
-            Ok(Tool::Logs {
-                lines: 2000,
-                min_level: Some(LogLevel::Warn),
-                process: Some("MyApp".into())
-            })
-        );
-        assert_eq!(parse("build_and_run", json!({})), Ok(Tool::BuildAndRun));
-        assert_eq!(
-            parse("launch_app", json!({"app_id": "com.example"})),
-            Ok(Tool::LaunchApp {
-                app_id: "com.example".into()
-            })
-        );
-    }
-
-    #[test]
-    fn press_maps_to_device_input() {
-        assert_eq!(Press::Button(Button::Home).input(), Input::Home);
-        assert_eq!(Press::Key(Key::Enter).input(), Input::Key(Key::Enter));
-    }
-
-    #[test]
-    fn reports_precise_validation_errors() {
-        assert_eq!(
-            Tool::parse("nope", None),
-            Err(ParseError::UnknownTool("nope".into()))
-        );
-        assert_eq!(
-            message(parse("tap", json!({"x": 1}))),
-            "missing required number \"y\""
-        );
-        assert_eq!(
-            message(parse("tap", json!({"x": "1", "y": 2}))),
-            "\"x\" must be a number, got a string"
-        );
-        assert!(message(parse("tap", json!({"x": -1, "y": 2}))).contains("non-negative"));
-        assert_eq!(
-            message(parse("tap", json!({"x": 1, "y": 2, "z": 3}))),
-            "unknown argument(s) z; expected only x, y"
-        );
-        assert_eq!(
-            message(parse("screenshot", json!({"scale": 2}))),
-            "unknown argument(s) scale; this tool takes no arguments"
-        );
-        assert_eq!(
-            message(Tool::parse("tap", Some(&json!([1, 2])))),
-            "arguments must be an object, got an array"
-        );
-        assert!(
-            message(parse(
-                "swipe",
-                json!({"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "duration_ms": 1.5})
-            ))
-            .contains("integer between 0 and 10000")
-        );
-        assert_eq!(
-            message(parse("press", json!({"button": "power"}))),
-            "\"button\" must be one of home, back, lock, volume_up, volume_down, app_switch, got \"power\""
-        );
-        assert_eq!(
-            message(parse("press", json!({"button": "home", "key": "enter"}))),
-            "pass either \"button\" or \"key\", not both"
-        );
-        assert_eq!(
-            message(parse("press", json!({}))),
-            "missing \"button\" or \"key\""
-        );
-        assert!(message(parse("logs", json!({"lines": 2001}))).contains("between 1 and 2000"));
-        assert!(message(parse("logs", json!({"lines": 0}))).contains("between 1 and 2000"));
-        assert!(message(parse("logs", json!({"level": "warn"}))).contains("got \"warn\""));
-        assert_eq!(
-            message(parse("type_text", json!({"text": ""}))),
-            "\"text\" must not be empty"
-        );
-        assert_eq!(
-            message(parse("launch_app", json!({}))),
-            "missing required string \"app_id\""
-        );
-    }
-
-    #[test]
-    fn screenshot_caption_maps_pixels_to_points() {
-        let shot = Screenshot {
-            png: vec![1, 2, 3],
-            width: 512,
-            height: 1024,
-        };
-        let out = ToolOutput::screenshot(shot, 393.0, 852.0);
-        assert_eq!(out.content[0], Content::Png(vec![1, 2, 3]));
-        let Content::Text(caption) = &out.content[1] else {
-            panic!("expected caption");
-        };
-        assert!(caption.contains("512x1024 px"), "{caption}");
-        assert!(caption.contains("393 x 852 points"), "{caption}");
-    }
-}
+mod tests;

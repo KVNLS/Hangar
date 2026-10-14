@@ -2,6 +2,7 @@
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::TitleBar;
+use gpui_kit::component::tooltip::Tooltip;
 
 use super::*;
 use crate::ui::components::{Chip, StateGlyph, UiButton};
@@ -238,40 +239,39 @@ impl HangarApp {
             .collect();
         let live_cost =
             crate::chat_view::costs_label(&hangar_agents::acp::usage::total_costs(&costs));
-        let focused = self.layout.panes.slot(self.layout.panes.focused());
-        let pool = self.device_pool.read(cx);
-        // Every device the pool runs, booted or on its way, not only the focused workspace's.
-        let mut devices: Vec<String> = pool
-            .rows()
-            .into_iter()
-            .filter_map(|row| match row.state {
-                "open" | "running" => Some(format!("{} · booted", row.name)),
-                "starting" | "shutting down" => Some(format!("{} · {}", row.name, row.state)),
-                _ => None,
+        // Today: sessions that ended today as saved, plus every session of this run (live wins).
+        let session_costs: Vec<(hangar_core::SessionId, hangar_core::changes::Cost)> = self
+            .live
+            .sessions
+            .values()
+            .filter_map(|l| match &l.surface {
+                AgentSurface::Chat { view, .. } => view
+                    .read(cx)
+                    .usage()
+                    .cost()
+                    .map(|c| (l.session.id, crate::chat_view::stored_cost(&c))),
+                AgentSurface::Terminal { .. } => None,
             })
             .collect();
-        devices.sort();
-        if devices.is_empty() {
-            let fallback = match focused {
-                Some(id) => {
-                    let name = pool.device_name(id).map(str::to_owned);
-                    let state = match pool.status(id) {
-                        crate::device_pool::DeviceStatus::Closed { .. } => Some("off"),
-                        _ => None,
-                    };
-                    name.zip(state).map(|(n, s)| format!("{n} · {s}"))
+        let today_cost = crate::chat_view::stored_costs_label(
+            &hangar_usecases::history::cost_today(&self.live.done_today.sessions, &session_costs),
+        );
+        let focused = self.layout.panes.slot(self.layout.panes.focused());
+        let pool = self.device_pool.read(cx);
+        // Every device the pool runs, booted or on its way: one count, names in the tooltip.
+        let mut devices: Vec<String> = Vec::new();
+        let mut transitioning = 0;
+        for row in pool.rows() {
+            match row.state {
+                "open" | "running" => devices.push(row.name),
+                "starting" | "shutting down" => {
+                    transitioning += 1;
+                    devices.push(format!("{} · {}", row.name, row.state));
                 }
-                None => self
-                    .device_panel
-                    .read(cx)
-                    .picker()
-                    .selected_entry()
-                    .map(|entry| {
-                        format!("{} · {}", entry.info.name, entry.info.state.to_lowercase())
-                    }),
-            };
-            devices.extend(fallback);
+                _ => {}
+            }
         }
+        devices.sort();
         let pressure = pool.pressure();
         // The focused workspace's run when it is busy or failed, else any run in progress.
         let focused_run = match focused {
@@ -286,15 +286,13 @@ impl HangarApp {
                 .filter(|(_, state)| matches!(state, AgentState::Working | AgentState::Failed)),
             None => None,
         };
-        let run = focused_run
-            .or_else(|| {
-                self.live
-                    .runs
-                    .values()
-                    .map(|run| run.summary())
-                    .find(|(_, state)| *state == AgentState::Working)
-            })
-            .unwrap_or_else(|| ("builds idle".to_owned(), AgentState::Idle));
+        let run = focused_run.or_else(|| {
+            self.live
+                .runs
+                .values()
+                .map(|run| run.summary())
+                .find(|(_, state)| *state == AgentState::Working)
+        });
         h_flex()
             .flex_none()
             .h(STATUS_BAR_HEIGHT)
@@ -320,28 +318,37 @@ impl HangarApp {
                             .child(format!("{n} {}", state.short_label()))
                     }),
             )
-            .child(div().w(px(1.)).h(px(12.)).bg(t.line2))
-            .child({
-                let (text, state) = run;
+            .when_some(run, |this, (text, state)| {
                 let color = match state {
                     AgentState::Failed => t.red,
-                    AgentState::Working => t.acc,
-                    _ => t.tx2,
+                    _ => t.acc,
                 };
-                h_flex()
-                    .gap(px(5.))
-                    .items_center()
-                    .text_color(color)
-                    .child(gpui_kit::component::Icon::new(Lucide::Hammer).size(px(11.)))
-                    .child(text)
+                this.child(
+                    h_flex()
+                        .gap(px(5.))
+                        .items_center()
+                        .text_color(color)
+                        .child(gpui_kit::component::Icon::new(Lucide::Hammer).size(px(11.)))
+                        .child(text),
+                )
             })
-            .children(devices.into_iter().map(|device| {
-                h_flex()
-                    .gap(px(5.))
-                    .items_center()
-                    .child(gpui_kit::component::Icon::new(Lucide::Smartphone).size(px(11.)))
-                    .child(device)
-            }))
+            .when(!devices.is_empty(), |this| {
+                let n = devices.len();
+                let mut label = format!("{n} device{}", if n == 1 { "" } else { "s" });
+                if transitioning > 0 {
+                    label.push_str(&format!(" · {transitioning} changing"));
+                }
+                let list = SharedString::from(devices.join("\n"));
+                this.child(
+                    h_flex()
+                        .id("status-devices")
+                        .gap(px(5.))
+                        .items_center()
+                        .tooltip(move |window, cx| Tooltip::new(list.clone()).build(window, cx))
+                        .child(gpui_kit::component::Icon::new(Lucide::Smartphone).size(px(11.)))
+                        .child(label),
+                )
+            })
             .child(div().flex_1())
             .child(format!(
                 "{agents} agent{} running",
@@ -355,11 +362,15 @@ impl HangarApp {
                 )
             })
             .when_some(live_cost, |this, cost| this.child(format!("{cost} live")))
+            .when_some(today_cost, |this, cost| {
+                this.child(div().text_color(t.tx3).child(format!("{cost} today")))
+            })
             // Memory pressure is the only live host figure the pool tracks; RAM totals are a
             // launch-time snapshot and per-agent memory is not measured.
+            // Shown only when it calls for action.
             .when_some(pressure, |this, pressure| {
                 let color = match pressure {
-                    hangar_devices::capacity::Pressure::Normal => t.tx2,
+                    hangar_devices::capacity::Pressure::Normal => return this,
                     hangar_devices::capacity::Pressure::Warn => t.amb,
                     hangar_devices::capacity::Pressure::Critical => t.red,
                 };

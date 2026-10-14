@@ -36,6 +36,7 @@ fn short() -> Timeouts {
         call: Duration::from_millis(200),
         build_and_run: Duration::from_millis(800),
         create: Duration::from_millis(800),
+        ask: Duration::from_millis(800),
     }
 }
 
@@ -87,6 +88,18 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                         _ => Ok(()),
                     };
                     let _ = reply.send(result);
+                }
+                McpRequest::Ask {
+                    question,
+                    choices,
+                    reply,
+                    ..
+                } => {
+                    record(format!("ask {question} {choices:?}"));
+                    let _ = reply.send(Ok(hangar_mcp::Answer {
+                        text: choices.first().cloned().unwrap_or_else(|| "typed".into()),
+                        choice: (!choices.is_empty()).then_some(0),
+                    }));
                 }
                 McpRequest::Signal { signal, .. } => record(format!("signal {}", signal.as_str())),
                 McpRequest::Text { text, reply, .. } => {
@@ -435,16 +448,18 @@ fn agent_signals_go_to_the_workspace_without_waiting() {
     let (host, sessions, mut rx) = host(short());
     let ws = WorkspaceId::new();
     let s = sessions.register(ws);
-    host.agent_signal(&s, hangar_core::AgentSignal::Approval)
+    host.agent_signal(&s, hangar_core::AgentSignal::Approval, None)
         .unwrap();
     match rx.try_recv() {
-        Ok(McpRequest::Signal { ws: got, signal }) => {
+        Ok(McpRequest::Signal {
+            ws: got, signal, ..
+        }) => {
             assert_eq!((got, signal), (ws, hangar_core::AgentSignal::Approval));
         }
         other => panic!("expected a signal, got {:?}", other.map(|r| r.workspace())),
     }
     assert_eq!(
-        host.agent_signal("nope", hangar_core::AgentSignal::Working),
+        host.agent_signal("nope", hangar_core::AgentSignal::Working, None),
         Err(ToolError::UnknownSession)
     );
 }
@@ -549,4 +564,70 @@ fn orchestration_tools_map_to_requests() {
             format!("{ws} transcript Shell 10"),
         ]
     );
+}
+
+#[test]
+fn only_jsonl_files_inside_the_projects_directory_are_accepted() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".claude/projects");
+    let project = root.join("-repo");
+    std::fs::create_dir_all(&project).unwrap();
+    let good = project.join("s.jsonl");
+    std::fs::write(&good, "{}").unwrap();
+    let outside = home.path().join("secret.jsonl");
+    std::fs::write(&outside, "{}").unwrap();
+    let not_jsonl = project.join("notes.txt");
+    std::fs::write(&not_jsonl, "x").unwrap();
+    let link = project.join("escape.jsonl");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+    assert_eq!(
+        accept_transcript(&good, &root),
+        Some(good.canonicalize().unwrap())
+    );
+    for bad in [
+        outside.clone(),
+        not_jsonl,
+        link,
+        project.join("../../secret.jsonl"),
+        project.join("missing.jsonl"),
+    ] {
+        assert_eq!(accept_transcript(&bad, &root), None, "{}", bad.display());
+    }
+}
+
+#[test]
+fn ask_user_waits_for_the_answer() {
+    let (host, sessions, rx) = host(short());
+    let log = Log::default();
+    fake_consumer(rx, log.clone());
+    let s = sessions.register(WorkspaceId::new());
+    let out = host
+        .call(
+            &s,
+            Tool::AskUser {
+                question: "REST or GraphQL?".into(),
+                choices: vec!["REST".into(), "GraphQL".into()],
+            },
+        )
+        .unwrap();
+    assert_eq!(text(&out), r#"{"answer":"REST","choice":0}"#);
+    assert!(log.lock().unwrap()[0].ends_with(r#"ask REST or GraphQL? ["REST", "GraphQL"]"#));
+}
+
+#[test]
+fn an_unanswered_question_times_out() {
+    // Nobody consumes the requests: the question is never answered.
+    let (host, sessions, _rx) = host(short());
+    let s = sessions.register(WorkspaceId::new());
+    let err = host
+        .call(
+            &s,
+            Tool::AskUser {
+                question: "Still there?".into(),
+                choices: vec![],
+            },
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("ask_user timed out"), "{err}");
 }
