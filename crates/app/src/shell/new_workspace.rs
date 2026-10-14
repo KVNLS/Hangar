@@ -50,7 +50,7 @@ pub(super) struct NewWorkspaceSheet {
 }
 
 /// `~/…` for paths under the home directory.
-fn tilde(path: &std::path::Path) -> String {
+pub(super) fn tilde(path: &std::path::Path) -> String {
     match std::env::var_os("HOME").map(PathBuf::from) {
         Some(home) if path.starts_with(&home) => {
             format!("~/{}", path.strip_prefix(&home).unwrap_or(path).display())

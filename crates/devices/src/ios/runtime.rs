@@ -28,7 +28,8 @@ pub(crate) fn simulator_kit_candidates(developer_dir: &str) -> Vec<String> {
     ]
 }
 
-pub(crate) fn developer_dir() -> Result<String, Error> {
+/// The active developer directory (`xcode-select -p`). Runs a process: call it off the UI thread.
+pub fn developer_dir() -> Result<String, Error> {
     let out = Command::new("xcode-select").arg("-p").output()?;
     if !out.status.success() {
         return Err(Error::Command(format!(

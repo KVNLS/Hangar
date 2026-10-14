@@ -379,6 +379,7 @@ impl HangarApp {
                 id: a.id().to_owned(),
                 name: a.display_name().to_owned(),
                 installed: true,
+                path: None,
             })
             .collect();
         let options = agent_options(&initial_choices);
