@@ -21,6 +21,7 @@ gpui_kit::assets::icon_assets!(
         FileDiff,
         GitBranch,
         GitCommitHorizontal,
+        GitFork,
         GitPullRequest,
         Hammer,
         House,

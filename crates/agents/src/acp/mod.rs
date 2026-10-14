@@ -3,6 +3,7 @@
 mod adapter;
 mod client;
 pub mod protocol;
+pub mod subagents;
 
 pub use adapter::{AcpAdapter, AcpSession, acp_presets};
 pub use client::{AcpEvent, PermissionRequest, RequestId};

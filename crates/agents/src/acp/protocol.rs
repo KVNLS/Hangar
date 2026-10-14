@@ -350,6 +350,12 @@ pub struct ToolCall {
     pub status: ToolStatus,
     pub content: Vec<ToolContent>,
     pub locations: Vec<Location>,
+    /// The agent's own tool name (Claude Code: `_meta.claudeCode.toolName`, e.g. `Agent`).
+    pub tool_name: Option<String>,
+    /// The subagent launch call this call was made under (`_meta.claudeCode.parentToolUseId`).
+    pub parent: Option<String>,
+    /// For a subagent launch, its agent type (`rawInput.subagent_type`).
+    pub subagent_type: Option<String>,
 }
 
 /// The fields a `tool_call_update` (or permission request) changes; `None` keeps the old value.
@@ -361,6 +367,9 @@ pub struct ToolCallUpdate {
     pub status: Option<ToolStatus>,
     pub content: Option<Vec<ToolContent>>,
     pub locations: Option<Vec<Location>>,
+    pub tool_name: Option<String>,
+    pub parent: Option<String>,
+    pub subagent_type: Option<String>,
 }
 
 impl ToolCallUpdate {
@@ -372,6 +381,13 @@ impl ToolCallUpdate {
             status: v["status"].as_str().and_then(ToolStatus::parse),
             content: parse_tool_content(&v["content"]),
             locations: parse_locations(&v["locations"]),
+            tool_name: v["_meta"]["claudeCode"]["toolName"]
+                .as_str()
+                .map(str::to_owned),
+            parent: v["_meta"]["claudeCode"]["parentToolUseId"]
+                .as_str()
+                .map(str::to_owned),
+            subagent_type: v["rawInput"]["subagent_type"].as_str().map(str::to_owned),
         })
     }
 }
@@ -393,6 +409,21 @@ impl ToolCall {
         if let Some(locations) = &update.locations {
             self.locations.clone_from(locations);
         }
+        // Later updates may omit the metadata; it never changes once known.
+        for (field, value) in [
+            (&mut self.tool_name, &update.tool_name),
+            (&mut self.parent, &update.parent),
+            (&mut self.subagent_type, &update.subagent_type),
+        ] {
+            if value.is_some() {
+                field.clone_from(value);
+            }
+        }
+    }
+
+    /// Launches a subagent (Claude Code's `Agent`, formerly `Task`, tool).
+    pub fn is_subagent(&self) -> bool {
+        matches!(self.tool_name.as_deref(), Some("Agent" | "Task"))
     }
 
     /// A call first seen through an update (allowed by the protocol).
@@ -617,6 +648,41 @@ mod tests {
                 new_text: "b".into()
             }
         );
+    }
+
+    #[test]
+    fn subagent_metadata() {
+        let u = json!({
+            "sessionUpdate": "tool_call", "toolCallId": "a1", "title": "Migrate CartStore",
+            "kind": "think", "status": "in_progress",
+            "rawInput": {"description": "Migrate CartStore", "subagent_type": "general-purpose"},
+            "_meta": {"claudeCode": {"toolName": "Agent"}}
+        });
+        let Some(SessionUpdate::ToolCall(launch)) = parse_update(&u) else {
+            panic!("not a tool call");
+        };
+        assert!(launch.is_subagent());
+        assert_eq!(launch.subagent_type.as_deref(), Some("general-purpose"));
+        assert_eq!(launch.parent, None);
+
+        let u = json!({
+            "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "Read a.rs", "kind": "read",
+            "_meta": {"claudeCode": {"toolName": "Read", "parentToolUseId": "a1"}}
+        });
+        let Some(SessionUpdate::ToolCall(mut child)) = parse_update(&u) else {
+            panic!("not a tool call");
+        };
+        assert!(!child.is_subagent());
+        assert_eq!(child.parent.as_deref(), Some("a1"));
+
+        let u =
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"});
+        let Some(SessionUpdate::ToolCallUpdate(update)) = parse_update(&u) else {
+            panic!("not an update");
+        };
+        child.apply(&update);
+        assert_eq!(child.parent.as_deref(), Some("a1"));
+        assert_eq!(child.tool_name.as_deref(), Some("Read"));
     }
 
     #[test]

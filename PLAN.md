@@ -312,6 +312,16 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Dev: `HANGAR_DEV_OLLAMA=<host>` turns it on for the run (not saved) and waits for the model list before
   `HANGAR_DEV_OPEN` spawns the agent.
 
+## Overview subagents (2026-10-06, unit-tested, not checked on screen)
+- Claude Code (ACP) subagents: `Agent`/`Task` tool calls (`_meta.claudeCode.toolName`) and their children
+  (`_meta.claudeCode.parentToolUseId`) become `acp::subagents::Subagent`s (running / waiting for approval /
+  done / failed, current activity). Hangar stays on the adapter's fallback mode (no `subagents` client
+  capability, so no `subagent_spawned` child sessions).
+- Overview cards list the current turn's subagents ("N subagents · …", up to 4 rows, "+N more"); a row opens
+  the workspace and scrolls the chat to the launch call. The header counts running subagents.
+- Not done: child tool calls stay flat in the chat transcript (not nested under their subagent); no
+  per-subagent diff counts or devices on the rows; OpenCode, Codex and Gemini report no parent link.
+
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a
   `GEMINI_API_KEY` (or Vertex AI) before a turn, modes and MCP can be checked live, or drop the presets.

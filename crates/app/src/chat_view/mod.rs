@@ -15,6 +15,7 @@ use gpui_kit::*;
 use hangar_agents::acp::protocol::{
     AvailableCommand, ConfigOption, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
 };
+use hangar_agents::acp::subagents::{PendingPermission, Subagent, subagents};
 use hangar_agents::acp::{AcpEvent, AcpSession, PermissionRequest};
 use hangar_core::AcpTurn;
 
@@ -103,6 +104,10 @@ pub struct ChatView {
     scroll: ScrollHandle,
     /// Keep the newest item in view; turned off when the user scrolls up.
     follow: bool,
+    /// The first item of the current (or last) prompt turn.
+    turn_start: usize,
+    /// A tool call to scroll to, and whether the scroll is still to be requested.
+    reveal: Option<(String, ScrollAnchor, bool)>,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -164,6 +169,8 @@ impl ChatView {
             composer,
             scroll: ScrollHandle::new(),
             follow: true,
+            turn_start: 0,
+            reveal: None,
             _tasks: vec![pump],
             _subscriptions: subscriptions,
         };
@@ -190,7 +197,7 @@ impl ChatView {
                 .map(str::trim)
                 .find(|l| !l.is_empty())
                 .map(|l| SharedString::from(l.to_owned())),
-            Item::Tool(call) => Some(call.title.clone().into()),
+            Item::Tool(call) if call.parent.is_none() => Some(call.title.clone().into()),
             Item::Permission {
                 title,
                 outcome: None,
@@ -198,6 +205,40 @@ impl ChatView {
             } => Some(format!("Wants to: {title}").into()),
             _ => None,
         })
+    }
+
+    /// The subagents launched in the current (or last) turn.
+    pub fn subagents(&self) -> Vec<Subagent> {
+        let pending = self
+            .pending_permission()
+            .and_then(|i| match &self.items[i] {
+                Item::Permission { request, title, .. } => Some(PendingPermission {
+                    call: &request.tool_call,
+                    title: title.as_ref(),
+                }),
+                _ => None,
+            });
+        let calls = self.items[self.turn_start.min(self.items.len())..]
+            .iter()
+            .filter_map(|item| match item {
+                Item::Tool(call) => Some(call),
+                _ => None,
+            });
+        subagents(calls, pending)
+    }
+
+    /// Scrolls the transcript to tool call `id` on the next render.
+    pub fn reveal_tool(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.tools.contains_key(id) {
+            return;
+        }
+        self.follow = false;
+        self.reveal = Some((
+            id.to_owned(),
+            ScrollAnchor::for_handle(self.scroll.clone()),
+            true,
+        ));
+        cx.notify();
     }
 
     /// Sends `text` as the next prompt. Fails while a turn runs or after the agent exited.
@@ -216,6 +257,7 @@ impl ChatView {
             );
         }
         self.session.prompt(text)?;
+        self.turn_start = self.items.len();
         self.items.push(Item::User(text.to_owned().into()));
         self.running = true;
         self.failed = false;

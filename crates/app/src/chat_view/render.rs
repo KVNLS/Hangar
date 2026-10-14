@@ -22,10 +22,16 @@ const RADIUS: Pixels = px(6.);
 const MAX_CARD_LINES: usize = 40;
 
 impl Render for ChatView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
         if self.follow {
             self.scroll.scroll_to_bottom();
+        }
+        // Requested from render so the anchored item is laid out in this frame before the
+        // scroll applies on the next one.
+        if let Some((_, anchor, requested @ true)) = &mut self.reveal {
+            *requested = false;
+            anchor.scroll_to(window, cx);
         }
         let items: Vec<AnyElement> = (0..self.items.len())
             .filter_map(|i| self.render_item(i, cx))
@@ -160,7 +166,14 @@ impl ChatView {
                     })
                     .into_any_element()
             }
-            Item::Tool(call) => self.render_tool(index, call, cx),
+            Item::Tool(call) => match &self.reveal {
+                Some((id, anchor, _)) if *id == call.id => div()
+                    .id("chat-reveal")
+                    .anchor_scroll(Some(anchor.clone()))
+                    .child(self.render_tool(index, call, cx))
+                    .into_any_element(),
+                _ => self.render_tool(index, call, cx),
+            },
             Item::Plan(entries) => div()
                 .flex()
                 .flex_col()
