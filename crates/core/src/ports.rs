@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::changes::{DiffOptions, FileDiff, GitDirs, Status};
 use crate::{
     Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
@@ -87,4 +88,23 @@ pub trait VersionControl: Send + Sync {
     fn change_counts(&self, worktree: &Path) -> PortResult<ChangeCounts>;
     /// Commits on `HEAD` of `worktree` that are not on `base`.
     fn commits_ahead(&self, worktree: &Path, base: &str) -> PortResult<u32>;
+}
+
+/// Reading a worktree's changes: what the file watcher and the live diff need.
+pub trait Changes: Send + Sync {
+    /// Status limited to `paths` (relative to the worktree, a directory covers everything below
+    /// it); empty `paths` means the whole worktree.
+    fn status(&self, worktree: &Path, paths: &[PathBuf]) -> PortResult<Status>;
+    fn merge_base(&self, worktree: &Path, rev: &str) -> PortResult<String>;
+    /// The working tree against the commit `rev`, limited to `paths` as in [`Changes::status`].
+    fn diff(
+        &self,
+        worktree: &Path,
+        rev: &str,
+        paths: &[PathBuf],
+        options: &DiffOptions,
+    ) -> PortResult<Vec<FileDiff>>;
+    fn git_dirs(&self, worktree: &Path) -> PortResult<GitDirs>;
+    /// The subset of `paths` the repository ignores.
+    fn ignored(&self, worktree: &Path, paths: &[PathBuf]) -> PortResult<Vec<PathBuf>>;
 }

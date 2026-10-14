@@ -1,9 +1,10 @@
-//! [`GitCli`]: the git CLI behind `hangar_core`'s [`VersionControl`] port.
+//! [`GitCli`]: the git CLI behind `hangar_core`'s [`VersionControl`] and [`Changes`] ports.
 
 use std::path::{Path, PathBuf};
 
+use hangar_core::changes::{DiffOptions, FileDiff, GitDirs, Status};
 use hangar_core::ports::{
-    ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, VersionControl,
+    ChangeCounts, Changes, ListedWorktree, NewWorktree, PortError, PortResult, VersionControl,
 };
 
 use crate::{ChangeKind, CreateOptions, Git};
@@ -84,5 +85,33 @@ impl VersionControl for GitCli {
         out.trim()
             .parse()
             .map_err(|_| PortError::new(format!("unexpected `git rev-list --count` output: {out}")))
+    }
+}
+
+impl Changes for GitCli {
+    fn status(&self, worktree: &Path, paths: &[PathBuf]) -> PortResult<Status> {
+        crate::status_paths(worktree, paths).map_err(PortError::new)
+    }
+
+    fn merge_base(&self, worktree: &Path, rev: &str) -> PortResult<String> {
+        crate::merge_base(worktree, rev).map_err(PortError::new)
+    }
+
+    fn diff(
+        &self,
+        worktree: &Path,
+        rev: &str,
+        paths: &[PathBuf],
+        options: &DiffOptions,
+    ) -> PortResult<Vec<FileDiff>> {
+        crate::diff_paths(worktree, rev, paths, options).map_err(PortError::new)
+    }
+
+    fn git_dirs(&self, worktree: &Path) -> PortResult<GitDirs> {
+        crate::git_dirs(worktree).map_err(PortError::new)
+    }
+
+    fn ignored(&self, worktree: &Path, paths: &[PathBuf]) -> PortResult<Vec<PathBuf>> {
+        crate::check_ignored(worktree, paths).map_err(PortError::new)
     }
 }

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
+use crate::adapters;
 use anyhow::{Context as _, anyhow};
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, AgentHandle, PtyAdapter, SpawnContext, UpdateHook};
@@ -16,7 +17,6 @@ use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
 use hangar_usecases::workspaces::Workspaces;
 pub use hangar_usecases::workspaces::{DeleteOptions, DeleteOutcome, DeleteSummary};
-use hangar_worktree::GitCli;
 
 use crate::agents::{self, AgentExtras};
 use crate::setting_keys;
@@ -449,7 +449,8 @@ pub fn restore_workspace(store: &Store, id: WorkspaceId) -> anyhow::Result<()> {
 /// Reads the worktree's status for the delete confirmation.
 pub fn delete_summary(workspace: &Workspace) -> anyhow::Result<DeleteSummary> {
     Ok(hangar_usecases::workspaces::delete_summary(
-        &GitCli, workspace,
+        adapters::version_control(),
+        workspace,
     )?)
 }
 
@@ -471,7 +472,7 @@ pub fn remove_project(store: &Store, id: ProjectId) -> anyhow::Result<()> {
 }
 
 fn workspaces(store: &Store) -> Workspaces<'_> {
-    Workspaces::new(store, &GitCli)
+    Workspaces::new(store, adapters::version_control())
 }
 
 /// Session status for a finished program.

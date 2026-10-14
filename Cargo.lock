@@ -3067,6 +3067,7 @@ dependencies = [
 name = "hangar-files"
 version = "0.1.0"
 dependencies = [
+ "hangar-core",
  "hangar-worktree",
  "notify 8.2.0",
  "tempfile",

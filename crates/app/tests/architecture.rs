@@ -19,7 +19,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("hangar-terminal", &[]),
     ("hangar-devices", &["hangar-core"]),
     ("hangar-agents", &["hangar-terminal"]),
-    ("hangar-files", &["hangar-worktree"]),
+    ("hangar-files", &["hangar-core"]),
     ("hangar-runner", &["hangar-core"]),
     ("hangar-mcp", &["hangar-core"]),
 ];

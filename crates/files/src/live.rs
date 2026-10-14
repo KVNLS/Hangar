@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Instant;
 
-use hangar_worktree::{ChangeKind, DiffOptions, FileDiff, FileStatus, Status};
+use hangar_core::changes::{ChangeKind, DiffOptions, FileDiff, FileStatus, Status};
+use hangar_core::ports::Changes;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::error::{Error, Result};
@@ -77,18 +78,23 @@ impl LiveDiff {
     /// Updates (or errors, after which the worker keeps going) arrive on an unbounded tokio
     /// channel whose receiver works without a tokio runtime.
     pub fn start(
+        changes: Arc<dyn Changes>,
         worktree: &Path,
         base: impl Into<String>,
         config: LiveDiffConfig,
     ) -> Result<(Self, UnboundedReceiver<Result<DiffUpdate>>)> {
         let (input, input_rx) = mpsc::channel();
         let batch_tx = input.clone();
-        let watcher = Watcher::with_sink(worktree, config.watcher.clone(), move |batch| {
-            batch_tx.send(Input::Batch(batch)).is_ok()
-        })?;
+        let watcher = Watcher::with_sink(
+            changes.clone(),
+            worktree,
+            config.watcher.clone(),
+            move |batch| batch_tx.send(Input::Batch(batch)).is_ok(),
+        )?;
         let (out_tx, out_rx) = unbounded_channel();
         let shared = Arc::new(Mutex::new(Shared::default()));
         let worker = Worker {
+            changes,
             worktree: watcher.root().to_path_buf(),
             base: base.into(),
             config,
@@ -166,6 +172,7 @@ impl Job {
 }
 
 struct Worker {
+    changes: Arc<dyn Changes>,
     worktree: PathBuf,
     base: String,
     config: LiveDiffConfig,
@@ -214,7 +221,7 @@ impl Worker {
             || self.merge_base.is_none()
             || job.paths.len() > self.config.max_incremental_paths;
         if full {
-            self.merge_base = Some(hangar_worktree::merge_base(&self.worktree, &self.base)?);
+            self.merge_base = Some(self.changes.merge_base(&self.worktree, &self.base)?);
         }
         let merge_base = self.merge_base.clone().unwrap_or_default();
         let (mut files, previous_status) = {
@@ -252,11 +259,11 @@ impl Worker {
         // when everything is recomputed, otherwise patch the previous one.
         let status = match previous_status {
             Some(mut status) if !full => {
-                let partial = hangar_worktree::status_paths(&self.worktree, &pathspecs)?;
+                let partial = self.changes.status(&self.worktree, &pathspecs)?;
                 status.merge_partial(partial, &pathspecs);
                 status
             }
-            _ => hangar_worktree::status(&self.worktree)?,
+            _ => self.changes.status(&self.worktree, &[])?,
         };
         let conflicted: BTreeSet<&Path> = status
             .changes
@@ -265,12 +272,9 @@ impl Worker {
             .map(|c| c.path.as_path())
             .collect();
 
-        let fresh = hangar_worktree::diff_paths(
-            &self.worktree,
-            &merge_base,
-            &pathspecs,
-            &self.config.diff,
-        )?;
+        let fresh =
+            self.changes
+                .diff(&self.worktree, &merge_base, &pathspecs, &self.config.diff)?;
         let mut changed = Vec::new();
         let mut seen = BTreeSet::new();
         for mut file in fresh {

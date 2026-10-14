@@ -1,52 +1,10 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use hangar_core::changes::{ChangeKind, ChangedPath, Status};
+
 use crate::error::{Error, Result};
 use crate::git::{Git, bytes_to_path, bytes_to_string};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChangeKind {
-    Modified,
-    Added,
-    Deleted,
-    Renamed,
-    Copied,
-    TypeChanged,
-    Untracked,
-    Conflicted,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ChangedPath {
-    pub path: PathBuf,
-    /// Source path of a rename or copy.
-    pub orig_path: Option<PathBuf>,
-    pub kind: ChangeKind,
-    pub staged: bool,
-    pub unstaged: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Status {
-    /// `None` when HEAD is detached.
-    pub branch: Option<String>,
-    /// `None` before the first commit.
-    pub oid: Option<String>,
-    pub upstream: Option<String>,
-    pub ahead: u32,
-    pub behind: u32,
-    pub staged: usize,
-    pub unstaged: usize,
-    pub untracked: usize,
-    pub conflicted: usize,
-    pub changes: Vec<ChangedPath>,
-}
-
-impl Status {
-    pub fn is_clean(&self) -> bool {
-        self.changes.is_empty()
-    }
-}
 
 pub fn status(worktree: &Path) -> Result<Status> {
     status_paths(worktree, &[])
@@ -70,32 +28,6 @@ pub fn status_paths(worktree: &Path, paths: &[PathBuf]) -> Result<Status> {
     args.extend(paths.iter().map(|p| p.as_os_str().to_owned()));
     let out = Git::new(worktree).run_bytes(&args)?;
     parse_status(&out)
-}
-
-impl Status {
-    /// Replaces the changes under `paths` with those of `partial` (a [`status_paths`] result
-    /// for the same paths) and takes its branch headers.
-    pub fn merge_partial(&mut self, partial: Status, paths: &[PathBuf]) {
-        let covered = |p: &Path| paths.iter().any(|spec| p.starts_with(spec));
-        self.changes
-            .retain(|c| !covered(&c.path) && !c.orig_path.as_deref().is_some_and(covered));
-        self.changes.extend(partial.changes);
-        self.changes.sort_by(|a, b| a.path.cmp(&b.path));
-        self.changes.dedup_by(|a, b| a.path == b.path);
-        self.branch = partial.branch;
-        self.oid = partial.oid;
-        self.upstream = partial.upstream;
-        self.ahead = partial.ahead;
-        self.behind = partial.behind;
-        self.staged = self.changes.iter().filter(|c| c.staged).count();
-        self.unstaged = self.changes.iter().filter(|c| c.unstaged).count();
-        self.untracked = self.count(ChangeKind::Untracked);
-        self.conflicted = self.count(ChangeKind::Conflicted);
-    }
-
-    fn count(&self, kind: ChangeKind) -> usize {
-        self.changes.iter().filter(|c| c.kind == kind).count()
-    }
 }
 
 /// Parses `git status --porcelain=v2 --branch -z`.

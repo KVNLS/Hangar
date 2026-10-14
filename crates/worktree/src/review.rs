@@ -8,8 +8,9 @@ use std::time::Duration;
 use crate::error::{Error, Result};
 use crate::git::{Git, RawOutput, bytes_to_path};
 use crate::repo::{branch_exists, current_branch};
-use crate::status::{ChangeKind, status};
+use crate::status::status;
 use crate::worktree::list;
+use hangar_core::changes::ChangeKind;
 
 fn pathspec_args(head: &[&str], paths: &[PathBuf]) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["--literal-pathspecs".into()];

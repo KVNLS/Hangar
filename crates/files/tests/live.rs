@@ -7,10 +7,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 use hangar_files::{ChangeBatch, DiffUpdate, LiveDiff, LiveDiffConfig, Watcher, WatcherConfig};
-use hangar_worktree::{FileStatus, LineKind};
+use hangar_worktree::{FileStatus, GitCli, LineKind};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -95,7 +96,7 @@ async fn batches_until(
 #[tokio::test]
 async fn write_produces_batch() {
     let repo = Repo::new();
-    let (watcher, mut rx) = Watcher::start(&repo.path, config()).unwrap();
+    let (watcher, mut rx) = Watcher::start(Arc::new(GitCli), &repo.path, config()).unwrap();
     assert_eq!(watcher.root(), repo.path);
     settle(&mut rx).await;
     repo.write("src/new file.rs", "fn main() {}\n");
@@ -106,7 +107,7 @@ async fn write_produces_batch() {
 #[tokio::test]
 async fn ignored_and_heavy_paths_produce_nothing() {
     let repo = Repo::new();
-    let (_watcher, mut rx) = Watcher::start(&repo.path, config()).unwrap();
+    let (_watcher, mut rx) = Watcher::start(Arc::new(GitCli), &repo.path, config()).unwrap();
     settle(&mut rx).await;
     repo.write("debug.log", "x\n");
     repo.write("dist/bundle.js", "x\n");
@@ -127,7 +128,7 @@ async fn ignored_and_heavy_paths_produce_nothing() {
 async fn commit_sets_git_meta_changed() {
     let repo = Repo::new();
     repo.write("a.txt", "a\n");
-    let (_watcher, mut rx) = Watcher::start(&repo.path, config()).unwrap();
+    let (_watcher, mut rx) = Watcher::start(Arc::new(GitCli), &repo.path, config()).unwrap();
     settle(&mut rx).await;
     git(&repo.path, &["add", "a.txt"]);
     git(&repo.path, &["commit", "-q", "--no-verify", "-m", "a"]);
@@ -154,7 +155,7 @@ async fn linked_worktree_commit_sets_git_meta_changed() {
             linked.to_str().unwrap(),
         ],
     );
-    let (_watcher, mut rx) = Watcher::start(&linked, config()).unwrap();
+    let (_watcher, mut rx) = Watcher::start(Arc::new(GitCli), &linked, config()).unwrap();
     settle(&mut rx).await;
     fs::write(linked.join("b.txt"), "b\n").unwrap();
     git(&linked, &["add", "b.txt"]);
@@ -173,7 +174,7 @@ async fn reading_git_state_does_not_trigger_meta_changes() {
     let repo = Repo::new();
     repo.write("README.md", "changed\n");
     repo.write("new.txt", "n\n");
-    let (_watcher, mut rx) = Watcher::start(&repo.path, config()).unwrap();
+    let (_watcher, mut rx) = Watcher::start(Arc::new(GitCli), &repo.path, config()).unwrap();
     settle(&mut rx).await;
     for _ in 0..3 {
         hangar_worktree::status(&repo.path).unwrap();
@@ -189,7 +190,7 @@ async fn reading_git_state_does_not_trigger_meta_changes() {
 #[tokio::test]
 async fn dropping_the_watcher_closes_the_channel() {
     let repo = Repo::new();
-    let (watcher, mut rx) = Watcher::start(&repo.path, config()).unwrap();
+    let (watcher, mut rx) = Watcher::start(Arc::new(GitCli), &repo.path, config()).unwrap();
     drop(watcher);
     while timeout(WAIT, rx.recv()).await.unwrap().is_some() {}
 }
@@ -226,7 +227,8 @@ fn live_config() -> LiveDiffConfig {
 async fn live_diff_tracks_edit_and_checkout() {
     let repo = Repo::new();
     git(&repo.path, &["checkout", "-q", "-b", "feature"]);
-    let (live, mut rx) = LiveDiff::start(&repo.path, "main", live_config()).unwrap();
+    let (live, mut rx) =
+        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
 
     let initial = next_update(&mut rx).await;
     assert!(initial.full);
@@ -284,7 +286,8 @@ async fn live_diff_tracks_edit_and_checkout() {
 async fn live_diff_untracked_ignored_and_commit() {
     let repo = Repo::new();
     git(&repo.path, &["checkout", "-q", "-b", "feature"]);
-    let (live, mut rx) = LiveDiff::start(&repo.path, "main", live_config()).unwrap();
+    let (live, mut rx) =
+        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
     next_update(&mut rx).await;
 
     repo.write("debug.log", "ignored\n");
@@ -335,7 +338,8 @@ async fn live_diff_directory_rename() {
     git(&repo.path, &["add", "-A"]);
     git(&repo.path, &["commit", "-q", "--no-verify", "-m", "dir"]);
     git(&repo.path, &["checkout", "-q", "-b", "feature"]);
-    let (live, mut rx) = LiveDiff::start(&repo.path, "main", live_config()).unwrap();
+    let (live, mut rx) =
+        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
     next_update(&mut rx).await;
 
     // Moved without `git mv`: each file pairs with its deleted original as a rename.
@@ -364,7 +368,13 @@ async fn live_diff_directory_rename() {
 #[tokio::test]
 async fn live_diff_refresh_and_bad_base() {
     let repo = Repo::new();
-    let (live, mut rx) = LiveDiff::start(&repo.path, "no-such-branch", live_config()).unwrap();
+    let (live, mut rx) = LiveDiff::start(
+        Arc::new(GitCli),
+        &repo.path,
+        "no-such-branch",
+        live_config(),
+    )
+    .unwrap();
     let first = timeout(WAIT, rx.recv()).await.unwrap().unwrap();
     assert!(first.is_err());
     live.set_base("main").unwrap();

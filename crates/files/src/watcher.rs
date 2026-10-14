@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use hangar_core::ports::Changes;
 use notify::event::ModifyKind;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -63,23 +65,28 @@ impl Watcher {
     /// Starts watching `worktree`. Batches arrive on a tokio unbounded channel: its receiver
     /// needs no tokio runtime, so a GPUI background task can `recv().await` it directly.
     pub fn start(
+        changes: Arc<dyn Changes>,
         worktree: &Path,
         config: WatcherConfig,
     ) -> Result<(Self, UnboundedReceiver<ChangeBatch>)> {
         let (tx, rx) = unbounded_channel();
-        let watcher = Self::with_sink(worktree, config, move |batch| tx.send(batch).is_ok())?;
+        let watcher = Self::with_sink(changes, worktree, config, move |batch| {
+            tx.send(batch).is_ok()
+        })?;
         Ok((watcher, rx))
     }
 
     /// Like [`Watcher::start`] but hands batches to `sink`; returning `false` stops the thread.
     pub(crate) fn with_sink(
+        changes: Arc<dyn Changes>,
         worktree: &Path,
         config: WatcherConfig,
         sink: impl FnMut(ChangeBatch) -> bool + Send + 'static,
     ) -> Result<Self> {
         let root = worktree.canonicalize()?;
-        let dirs = hangar_worktree::git_dirs(&root)?;
+        let dirs = changes.git_dirs(&root)?;
         let classifier = Classifier {
+            changes,
             git_dir: canonical(dirs.git_dir),
             common_dir: canonical(dirs.common_dir),
             root: root.clone(),
@@ -181,6 +188,7 @@ fn debounce_loop(
 }
 
 struct Classifier {
+    changes: Arc<dyn Changes>,
     root: PathBuf,
     git_dir: PathBuf,
     common_dir: PathBuf,
@@ -263,7 +271,7 @@ impl Classifier {
         } = pending;
         if !candidates.is_empty() {
             let list: Vec<PathBuf> = candidates.iter().cloned().collect();
-            match hangar_worktree::check_ignored(&self.root, &list) {
+            match self.changes.ignored(&self.root, &list) {
                 Ok(ignored) => {
                     for path in ignored {
                         candidates.remove(&path);
@@ -327,6 +335,7 @@ mod tests {
 
     fn classifier() -> Classifier {
         Classifier {
+            changes: Arc::new(hangar_worktree::GitCli),
             root: "/wt".into(),
             git_dir: "/repo/.git/worktrees/wt".into(),
             common_dir: "/repo/.git".into(),
@@ -368,6 +377,7 @@ mod tests {
     #[test]
     fn main_checkout_git_dir_inside_root() {
         let c = Classifier {
+            changes: Arc::new(hangar_worktree::GitCli),
             root: "/repo".into(),
             git_dir: "/repo/.git".into(),
             common_dir: "/repo/.git".into(),

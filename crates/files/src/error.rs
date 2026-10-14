@@ -3,7 +3,7 @@ use std::io;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Git(#[from] hangar_worktree::Error),
+    Git(#[from] hangar_core::ports::PortError),
     #[error("file watcher: {0}")]
     Notify(#[from] notify::Error),
     #[error("I/O error: {0}")]
