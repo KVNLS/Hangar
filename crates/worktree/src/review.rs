@@ -218,6 +218,18 @@ pub fn push(worktree: &Path, remote: Option<&str>) -> Result<PushOutcome> {
     push_within(worktree, remote, PUSH_TIMEOUT)
 }
 
+/// `origin`, else the only remote; `None` when there is none or several without an `origin`.
+fn default_remote(worktree: &Path) -> Result<Option<String>> {
+    let all = remotes(worktree)?;
+    Ok(if all.iter().any(|r| r == "origin") {
+        Some("origin".to_owned())
+    } else if let [only] = all.as_slice() {
+        Some(only.clone())
+    } else {
+        None
+    })
+}
+
 /// A push that has not finished by then waits for something that will not come (a prompt, a
 /// dead network).
 const PUSH_TIMEOUT: Duration = Duration::from_secs(120);
@@ -248,14 +260,7 @@ fn push_within(worktree: &Path, remote: Option<&str>, timeout: Duration) -> Resu
             true,
         ),
         (None, None) => {
-            let all = remotes(worktree)?;
-            let r = if all.iter().any(|r| r == "origin") {
-                "origin".to_owned()
-            } else if let [only] = all.as_slice() {
-                only.clone()
-            } else {
-                return Err(Error::NoRemote);
-            };
+            let r = default_remote(worktree)?.ok_or(Error::NoRemote)?;
             (r, format!("refs/heads/{branch}:refs/heads/{branch}"), true)
         }
     };
@@ -325,54 +330,98 @@ pub(crate) fn parse_push_porcelain(out: &str) -> Vec<PushRef> {
 }
 
 /// After a non-fast-forward rejection: fetches the branch's upstream and rebases the local
-/// commits onto it (uncommitted changes are stashed and put back). A conflicting rebase is
-/// aborted, leaving the branch as it was, and reported as [`Error::RebaseConflicts`].
+/// commits onto it (uncommitted changes are stashed and put back). Without an upstream (a first
+/// push rejected because the remote already has a same-named branch) it rebases onto that branch
+/// and makes it the upstream. A conflicting rebase is aborted, leaving the branch as it was, and
+/// reported as [`Error::RebaseConflicts`]; uncommitted changes that conflict once put back are
+/// [`Error::PulledWithConflicts`].
 pub fn pull_rebase(worktree: &Path) -> Result<PullOutcome> {
     pull_rebase_within(worktree, PUSH_TIMEOUT)
 }
 
 fn pull_rebase_within(worktree: &Path, timeout: Duration) -> Result<PullOutcome> {
     let branch = current_branch(worktree)?.ok_or(Error::DetachedHead)?;
-    let up = upstream(worktree)?.ok_or_else(|| Error::NoUpstream(branch.clone()))?;
     let git = Git::new(worktree);
-    let fetch = git.output_timeout(["fetch", "--quiet", "--", &up.remote], timeout)?;
+    let (remote, set_upstream) = match upstream(worktree)? {
+        Some(up) => (up.remote, false),
+        None => (
+            default_remote(worktree)?.ok_or_else(|| Error::NoUpstream(branch.clone()))?,
+            true,
+        ),
+    };
+    // Without an upstream the same-named remote branch is used: prune so a deleted one is not
+    // taken for still there.
+    let prune = if set_upstream {
+        "--prune"
+    } else {
+        "--no-prune"
+    };
+    let fetch = git.output_timeout(["fetch", "--quiet", prune, "--", &remote], timeout)?;
     if !fetch.status.success() {
         return Err(git.failure(fetch));
     }
-    let behind = upstream(worktree)?.map_or(0, |u| u.behind);
-    if behind == 0 {
+    if set_upstream {
+        let tracking = format!("refs/remotes/{remote}/{branch}");
+        if git
+            .query(["rev-parse", "--verify", "--quiet", &tracking])?
+            .is_none()
+        {
+            return Err(Error::NoUpstream(branch));
+        }
+        git.run([
+            "branch",
+            &format!("--set-upstream-to={remote}/{branch}"),
+            &branch,
+        ])?;
+    }
+    let up = upstream(worktree)?.ok_or_else(|| Error::NoUpstream(branch.clone()))?;
+    if up.behind == 0 {
         return Ok(PullOutcome {
             upstream: up.name,
             pulled: 0,
         });
     }
-    let out = git.output(["rebase", "--autostash", "--quiet", &up.name], None)?;
+    // The merge backend, whatever rebase.backend says, so a conflict is always left in
+    // rebase-merge, where it is found and aborted below.
+    let out = git.output(
+        ["rebase", "--merge", "--autostash", "--quiet", &up.name],
+        None,
+    )?;
+    let conflicted = || -> Result<Vec<PathBuf>> {
+        Ok(git
+            .run_bytes(["diff", "--name-only", "-z", "--diff-filter=U"])?
+            .split(|&b| b == 0)
+            .filter(|p| !p.is_empty())
+            .map(bytes_to_path)
+            .collect())
+    };
     if out.status.success() {
+        // The rebase went through; putting the stashed changes back may still have conflicted.
+        let paths = conflicted()?;
+        if !paths.is_empty() {
+            return Err(Error::PulledWithConflicts {
+                onto: up.name,
+                pulled: up.behind,
+                paths,
+            });
+        }
         return Ok(PullOutcome {
             upstream: up.name,
-            pulled: behind,
+            pulled: up.behind,
         });
     }
-    let conflicted = git.run_bytes(["diff", "--name-only", "-z", "--diff-filter=U"]);
-    let in_progress = git
-        .run([
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-path",
-            "rebase-merge",
-        ])
-        .is_ok_and(|p| Path::new(p.trim()).exists());
+    let paths = conflicted();
+    let in_progress = ["rebase-merge", "rebase-apply"].into_iter().any(|dir| {
+        git.run(["rev-parse", "--path-format=absolute", "--git-path", dir])
+            .is_ok_and(|p| Path::new(p.trim()).exists())
+    });
     if in_progress && let Err(e) = git.run(["rebase", "--abort"]) {
         tracing::warn!("rebase --abort failed: {e}");
     }
-    match conflicted {
+    match paths {
         Ok(paths) if in_progress => Err(Error::RebaseConflicts {
             onto: up.name,
-            paths: paths
-                .split(|&b| b == 0)
-                .filter(|p| !p.is_empty())
-                .map(bytes_to_path)
-                .collect(),
+            paths,
         }),
         _ => Err(git.failure(out)),
     }

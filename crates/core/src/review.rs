@@ -112,6 +112,18 @@ pub enum ReviewError {
     /// Rebasing onto the upstream conflicted; the rebase was aborted and nothing changed.
     #[error("rebasing onto `{onto}` would conflict in: {}", join(.paths))]
     RebaseConflicts { onto: String, paths: Vec<PathBuf> },
+    /// The pull went through but the uncommitted changes put back on top conflict with it.
+    #[error(
+        "pulled {pulled} commit(s) from `{onto}`, but your uncommitted changes conflict with \
+         them in: {}; resolve the conflict markers (your changes are also saved in `git stash \
+         list`)",
+        join(.paths)
+    )]
+    PulledWithConflicts {
+        onto: String,
+        pulled: u32,
+        paths: Vec<PathBuf>,
+    },
     /// The base branch cannot receive a merge right now (not checked out, dirty, mid-merge).
     #[error("cannot merge into the base branch: {reason}")]
     BaseNotReady { reason: String },

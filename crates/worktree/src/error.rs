@@ -51,6 +51,14 @@ pub enum Error {
     /// Rebasing onto the upstream conflicted; the rebase was aborted and nothing changed.
     #[error("rebasing onto `{onto}` would conflict in: {}", .paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
     RebaseConflicts { onto: String, paths: Vec<PathBuf> },
+    /// The pull went through but the uncommitted changes put back on top conflict with it:
+    /// the files hold conflict markers and the changes are also kept in `git stash list`.
+    #[error("pulled {pulled} commit(s) from `{onto}`, but your uncommitted changes conflict with them in: {}; resolve the conflict markers (your changes are also saved in `git stash list`)", .paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
+    PulledWithConflicts {
+        onto: String,
+        pulled: u32,
+        paths: Vec<PathBuf>,
+    },
     /// The base branch cannot receive a merge right now (not checked out, dirty, mid-merge).
     #[error("cannot merge into the base branch: {reason}")]
     BaseNotReady { reason: String },
