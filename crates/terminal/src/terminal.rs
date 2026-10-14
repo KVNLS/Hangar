@@ -243,6 +243,44 @@ impl Terminal {
         self.palette = palette;
     }
 
+    /// The last `max` lines of text, scrollback included (the alternate screen has none), oldest
+    /// first. Soft-wrapped rows are joined; trailing spaces and trailing empty lines are dropped.
+    pub fn recent_lines(&self, max: usize) -> Vec<String> {
+        let grid = self.term.grid();
+        let cols = grid.columns();
+        let top = -(grid.history_size() as i32);
+        let bottom = grid.screen_lines() as i32;
+        let mut lines: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for row in top..bottom {
+            let grid_row = &grid[Line(row)];
+            for col in 0..cols {
+                let cell = &grid_row[Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                current.push(cell.c);
+                if let Some(zerowidth) = cell.zerowidth() {
+                    current.extend(zerowidth.iter());
+                }
+            }
+            let wrapped = cols > 0 && grid_row[Column(cols - 1)].flags.contains(Flags::WRAPLINE);
+            if !wrapped {
+                current.truncate(current.trim_end().len());
+                lines.push(std::mem::take(&mut current));
+            }
+        }
+        if !current.is_empty() {
+            current.truncate(current.trim_end().len());
+            lines.push(current);
+        }
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        let skip = lines.len().saturating_sub(max);
+        lines.split_off(skip)
+    }
+
     /// Plain-data copy of the visible screen, with colours resolved to RGB.
     pub fn snapshot(&self) -> Snapshot {
         let grid = self.term.grid();
@@ -427,6 +465,30 @@ mod tests {
 
     fn row_text(s: &Snapshot, row: usize) -> String {
         s.row_text(row)
+    }
+
+    #[test]
+    fn recent_lines_include_scrollback_and_join_wrapped_rows() {
+        let mut t = term(10, 3);
+        for i in 1..=6 {
+            t.advance(format!("line {i}\r\n").as_bytes());
+        }
+        // 14 characters on a 10-column screen: one soft-wrapped line.
+        t.advance(b"0123456789abcd");
+        assert_eq!(
+            t.recent_lines(100),
+            [
+                "line 1",
+                "line 2",
+                "line 3",
+                "line 4",
+                "line 5",
+                "line 6",
+                "0123456789abcd"
+            ]
+        );
+        assert_eq!(t.recent_lines(2), ["line 6", "0123456789abcd"]);
+        assert!(term(10, 3).recent_lines(5).is_empty());
     }
 
     #[test]

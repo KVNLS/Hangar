@@ -435,16 +435,18 @@ fn agent_signals_go_to_the_workspace_without_waiting() {
     let (host, sessions, mut rx) = host(short());
     let ws = WorkspaceId::new();
     let s = sessions.register(ws);
-    host.agent_signal(&s, hangar_core::AgentSignal::Approval)
+    host.agent_signal(&s, hangar_core::AgentSignal::Approval, None)
         .unwrap();
     match rx.try_recv() {
-        Ok(McpRequest::Signal { ws: got, signal }) => {
+        Ok(McpRequest::Signal {
+            ws: got, signal, ..
+        }) => {
             assert_eq!((got, signal), (ws, hangar_core::AgentSignal::Approval));
         }
         other => panic!("expected a signal, got {:?}", other.map(|r| r.workspace())),
     }
     assert_eq!(
-        host.agent_signal("nope", hangar_core::AgentSignal::Working),
+        host.agent_signal("nope", hangar_core::AgentSignal::Working, None),
         Err(ToolError::UnknownSession)
     );
 }
@@ -549,4 +551,34 @@ fn orchestration_tools_map_to_requests() {
             format!("{ws} transcript Shell 10"),
         ]
     );
+}
+
+#[test]
+fn only_jsonl_files_inside_the_projects_directory_are_accepted() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".claude/projects");
+    let project = root.join("-repo");
+    std::fs::create_dir_all(&project).unwrap();
+    let good = project.join("s.jsonl");
+    std::fs::write(&good, "{}").unwrap();
+    let outside = home.path().join("secret.jsonl");
+    std::fs::write(&outside, "{}").unwrap();
+    let not_jsonl = project.join("notes.txt");
+    std::fs::write(&not_jsonl, "x").unwrap();
+    let link = project.join("escape.jsonl");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+    assert_eq!(
+        accept_transcript(&good, &root),
+        Some(good.canonicalize().unwrap())
+    );
+    for bad in [
+        outside.clone(),
+        not_jsonl,
+        link,
+        project.join("../../secret.jsonl"),
+        project.join("missing.jsonl"),
+    ] {
+        assert_eq!(accept_transcript(&bad, &root), None, "{}", bad.display());
+    }
 }

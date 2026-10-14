@@ -73,10 +73,12 @@ pub enum McpRequest {
         app_id: String,
         reply: Reply<()>,
     },
-    /// What the workspace's terminal agent reported through its hooks (no reply).
+    /// What the workspace's terminal agent reported through its hooks (no reply), with its
+    /// transcript file when the hook named an acceptable one.
     Signal {
         ws: WorkspaceId,
         signal: AgentSignal,
+        transcript: Option<PathBuf>,
     },
     /// The workspaces `ws`'s agent created (orchestration tools, like the three below).
     Children {
@@ -124,6 +126,15 @@ impl McpRequest {
             | Self::Transcript { ws, .. } => *ws,
         }
     }
+}
+
+/// `raw` when it is a `.jsonl` file inside `root` (Claude Code's projects directory) once links
+/// are resolved: an agent must not make Hangar read any other file on a lead's behalf.
+pub fn accept_transcript(raw: &Path, root: &Path) -> Option<PathBuf> {
+    let path = raw.canonicalize().ok()?;
+    let root = root.canonicalize().ok()?;
+    (path.starts_with(&root) && path.extension().is_some_and(|e| e == "jsonl") && path.is_file())
+        .then_some(path)
 }
 
 /// How long a tool call waits for the GPUI side.
@@ -368,13 +379,27 @@ impl ToolHost for McpHost {
         self.orchestration.load(Ordering::Relaxed) && self.knows_session(session)
     }
 
-    fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError> {
+    fn agent_signal(
+        &self,
+        session: &str,
+        signal: AgentSignal,
+        transcript: Option<&str>,
+    ) -> Result<(), ToolError> {
         let ws = self
             .sessions
             .resolve(session)
             .ok_or(ToolError::UnknownSession)?;
+        let transcript = transcript.and_then(|raw| {
+            let root =
+                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/projects"))?;
+            accept_transcript(Path::new(raw), &root)
+        });
         self.requests
-            .send(McpRequest::Signal { ws, signal })
+            .send(McpRequest::Signal {
+                ws,
+                signal,
+                transcript,
+            })
             .map_err(|_| ToolError::Failed("Hangar is shutting down".into()))
     }
 

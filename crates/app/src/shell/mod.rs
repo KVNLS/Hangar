@@ -204,6 +204,8 @@ struct LiveSession {
     activity: status::Activity,
     /// What a terminal agent last reported through its hooks (Claude Code); `None` without hooks.
     signal: Option<hangar_core::AgentSignal>,
+    /// A terminal Claude Code's session transcript, as its hooks reported it (checked).
+    transcript_path: Option<PathBuf>,
     _exit: Subscription,
 }
 

@@ -51,7 +51,14 @@ pub trait ToolHost: Send + Sync {
 
     /// Records what the agent of the workspace owning `session` reports through its hooks
     /// (`Hangar notify`, see [`crate::hook`]).
-    fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError>;
+    /// `transcript`: the agent's own transcript file as the hook reported it (Claude Code), to
+    /// be checked by the host before it is ever read.
+    fn agent_signal(
+        &self,
+        session: &str,
+        signal: AgentSignal,
+        transcript: Option<&str>,
+    ) -> Result<(), ToolError>;
 }
 
 /// Hangar's own method (not MCP): `{"signal": "working" | "approval" | "input" | "turn_ended"}`.
@@ -150,7 +157,7 @@ fn agent_signal(
         agent = field("agent"),
         "agent signal from hook"
     );
-    host.agent_signal(session, signal)
+    host.agent_signal(session, signal, field("transcript"))
         .map(|()| json!({}))
         .map_err(|e| match e {
             ToolError::UnknownSession => (UNKNOWN_SESSION, "unknown workspace session".to_owned()),
@@ -285,7 +292,12 @@ pub(crate) mod tests {
             }
         }
 
-        fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError> {
+        fn agent_signal(
+            &self,
+            session: &str,
+            signal: AgentSignal,
+            _transcript: Option<&str>,
+        ) -> Result<(), ToolError> {
             if session != SESSION {
                 return Err(ToolError::UnknownSession);
             }

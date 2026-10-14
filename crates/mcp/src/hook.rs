@@ -77,27 +77,23 @@ pub fn notify_from_env(event: &str, input: impl Read) -> io::Result<()> {
         .get("agent_type")
         .or_else(|| payload.get("agent_id"))
         .and_then(Value::as_str);
-    send(
-        Path::new(&socket),
-        session.trim(),
-        signal,
-        Some(event),
-        agent,
-    )
+    // Claude Code's session transcript, so a lead agent can read this one (`agent_transcript`).
+    let transcript = payload.get("transcript_path").and_then(Value::as_str);
+    let extra = json!({ "event": event, "agent": agent, "transcript": transcript });
+    send(Path::new(&socket), session.trim(), signal, extra)
 }
 
 /// Sends one `hangar/agentSignal` and waits (briefly) for the app's answer.
 pub fn send_signal(socket: &Path, session: &str, signal: AgentSignal) -> io::Result<()> {
-    send(socket, session, signal, None, None)
+    send(socket, session, signal, json!({}))
 }
 
-fn send(
-    socket: &Path,
-    session: &str,
-    signal: AgentSignal,
-    event: Option<&str>,
-    agent: Option<&str>,
-) -> io::Result<()> {
+/// `extra`: more `params` fields (event, agent, transcript), all optional.
+fn send(socket: &Path, session: &str, signal: AgentSignal, extra: Value) -> io::Result<()> {
+    let mut params = json!({ "signal": signal.as_str() });
+    if let (Some(params), Value::Object(extra)) = (params.as_object_mut(), extra) {
+        params.extend(extra.into_iter().filter(|(_, v)| !v.is_null()));
+    }
     let mut stream = UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(HOOK_TIMEOUT))?;
     stream.set_write_timeout(Some(HOOK_TIMEOUT))?;
@@ -107,7 +103,7 @@ fn send(
             "jsonrpc": "2.0",
             "id": 1,
             "method": AGENT_SIGNAL_METHOD,
-            "params": { "signal": signal.as_str(), "event": event, "agent": agent },
+            "params": params,
         },
     });
     writeln!(stream, "{envelope}")?;

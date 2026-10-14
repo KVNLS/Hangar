@@ -400,6 +400,7 @@ impl HangarApp {
             surface: AgentSurface::Chat { acp, view },
             activity: Default::default(),
             signal: None,
+            transcript_path: None,
             _exit: exit,
         };
         self.insert_live_session(workspace_id, live, window, cx);
@@ -538,6 +539,7 @@ impl HangarApp {
             surface: AgentSurface::Terminal { handle, view },
             activity: Default::default(),
             signal: None,
+            transcript_path: None,
             _exit: exit,
         };
         self.insert_live_session(workspace_id, live, window, cx);

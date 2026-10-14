@@ -2,12 +2,75 @@
 //! the workspaces it created. The guard rails are `hangar_usecases::orchestration`; everything
 //! an agent does here is shown in its own pane.
 
+use anyhow::Context as _;
 use hangar_mcp::{ChildWorkspace, CreatedWorkspace, StartOutcome, ToolError, TranscriptEntry};
 use hangar_usecases::orchestration;
 
 use super::toast::ToastKind;
 use super::*;
 use crate::mcp_host::Reply;
+
+/// Terminal lines given for a terminal agent without a structured transcript.
+const SCREEN_LINES: usize = 120;
+
+/// What `agent_transcript` reads.
+pub(super) enum TranscriptSource {
+    Ready(Vec<TranscriptEntry>),
+    /// Claude Code's session file, checked by `mcp_host::accept_transcript`.
+    ClaudeFile(PathBuf),
+}
+
+/// The last `last` entries of the Claude Code session file at `path` (its tail only: the file
+/// grows with the session).
+pub(super) fn read_claude_transcript(
+    path: &std::path::Path,
+    last: usize,
+) -> anyhow::Result<Vec<TranscriptEntry>> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    const TAIL: u64 = 4 << 20;
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL)))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    // A cut first line is not JSON and is skipped by the parser.
+    let mut entries: Vec<TranscriptEntry> = hangar_agents::claude_transcript::parse(&text)
+        .into_iter()
+        .map(|entry| match entry {
+            hangar_agents::claude_transcript::Entry::User(text) => TranscriptEntry::User(text),
+            hangar_agents::claude_transcript::Entry::Agent(text) => TranscriptEntry::Agent(text),
+            hangar_agents::claude_transcript::Entry::Tool { title, status } => {
+                TranscriptEntry::Tool {
+                    title,
+                    status: status.to_owned(),
+                }
+            }
+        })
+        .collect();
+    let skip = entries.len().saturating_sub(last);
+    entries.drain(..skip);
+    Ok(entries)
+}
+
+/// Terminal lines as text for an agent: rows that only draw boxes or rules are dropped and runs
+/// of blank rows collapse to one.
+pub(super) fn screen_text(lines: &[String]) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in lines {
+        let line = line.trim_end();
+        let drawn = !line.is_empty()
+            && line
+                .chars()
+                .all(|c| c.is_whitespace() || ('\u{2500}'..='\u{259F}').contains(&c));
+        if drawn || (line.is_empty() && out.last().is_none_or(|l| l.is_empty())) {
+            continue;
+        }
+        out.push(line);
+    }
+    out.join("\n").trim().to_owned()
+}
 
 impl HangarApp {
     /// Turns the orchestration tools on or off for every agent, without saving.
@@ -241,27 +304,35 @@ impl HangarApp {
     }
 
     /// The last `last` messages of the structured agent in `ws`'s child `query`.
+    /// Where `child`'s transcript comes from: a structured agent's chat, a terminal Claude Code's
+    /// session file (read off the UI thread by the caller), or a terminal's recent text.
     pub(super) fn child_transcript(
         &self,
         ws: WorkspaceId,
         query: &str,
         last: usize,
         cx: &App,
-    ) -> anyhow::Result<(String, Vec<TranscriptEntry>)> {
+    ) -> anyhow::Result<(String, TranscriptSource)> {
         self.ensure_orchestration()?;
         let child = orchestration::find_child(self.every_workspace(), ws, query)?;
-        match &self.live_agent(child)?.surface {
+        let live = self.live_agent(child)?;
+        let source = match &live.surface {
             AgentSurface::Chat { view, .. } => {
-                Ok((child.name.clone(), view.read(cx).transcript(last)))
+                TranscriptSource::Ready(view.read(cx).transcript(last))
             }
-            AgentSurface::Terminal { .. } => {
-                Err(anyhow::Error::new(ToolError::Unsupported(format!(
-                    "transcripts of terminal agents (“{}” runs in a terminal); use \
-                     workspaces_list for its state and diff",
-                    child.name
-                ))))
+            AgentSurface::Terminal { .. } if live.transcript_path.is_some() => {
+                TranscriptSource::ClaudeFile(live.transcript_path.clone().unwrap_or_default())
             }
-        }
+            AgentSurface::Terminal { view, .. } => {
+                let lines = view
+                    .read(cx)
+                    .session()
+                    .terminal()
+                    .recent_lines(SCREEN_LINES);
+                TranscriptSource::Ready(vec![TranscriptEntry::Screen(screen_text(&lines))])
+            }
+        };
+        Ok((child.name.clone(), source))
     }
 
     /// The running agent of `child`.
@@ -297,5 +368,29 @@ impl HangarApp {
             _ if error => window.push_notification(Notification::error(text), cx),
             _ => self.show_toast(ToastKind::Info, text, cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::screen_text;
+
+    #[test]
+    fn screen_text_drops_drawn_rows_and_extra_blanks() {
+        let lines: Vec<String> = [
+            "",
+            "╭──────╮",
+            "│ hi   │",
+            "",
+            "",
+            "╰──────╯",
+            "$ ls",
+            "a.txt",
+            "",
+        ]
+        .iter()
+        .map(|l| (*l).to_owned())
+        .collect();
+        assert_eq!(screen_text(&lines), "│ hi   │\n\n$ ls\na.txt");
     }
 }

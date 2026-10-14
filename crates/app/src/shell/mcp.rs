@@ -68,12 +68,19 @@ fn answer<T: 'static, U: Send + 'static>(
 impl HangarApp {
     fn dispatch_mcp(&mut self, request: McpRequest, window: &mut Window, cx: &mut Context<Self>) {
         match request {
-            McpRequest::Signal { ws, signal } => {
+            McpRequest::Signal {
+                ws,
+                signal,
+                transcript,
+            } => {
                 if let Some(live) = self.live.sessions.get_mut(&ws)
                     && matches!(live.surface, AgentSurface::Terminal { .. })
                 {
                     tracing::debug!(workspace = %ws, signal = signal.as_str(), "agent signal");
                     live.signal = Some(signal);
+                    if transcript.is_some() {
+                        live.transcript_path = transcript;
+                    }
                     self.sync_attention(cx);
                     cx.notify();
                 }
@@ -145,7 +152,25 @@ impl HangarApp {
                 last,
                 reply,
             } => {
-                let _ = reply.send(self.child_transcript(ws, &child, last, cx));
+                use super::orchestration::{TranscriptSource, read_claude_transcript};
+                match self.child_transcript(ws, &child, last, cx) {
+                    Ok((name, TranscriptSource::Ready(entries))) => {
+                        let _ = reply.send(Ok((name, entries)));
+                    }
+                    Ok((name, TranscriptSource::ClaudeFile(path))) => {
+                        cx.background_executor()
+                            .spawn(async move {
+                                let _ = reply.send(
+                                    read_claude_transcript(&path, last)
+                                        .map(|entries| (name, entries)),
+                                );
+                            })
+                            .detach();
+                    }
+                    Err(err) => {
+                        let _ = reply.send(Err(err));
+                    }
+                }
             }
         }
     }
