@@ -1,6 +1,7 @@
 //! The pane of a structured (ACP) agent: messages, tool calls, plan and permission prompts as a
 //! transcript, and a composer.
 
+mod cap;
 mod render;
 mod rows;
 mod subagent;
@@ -61,6 +62,8 @@ enum Item {
     Agent {
         text: String,
         view: Entity<TextViewState>,
+        /// Trailing bytes of `text` not given to `view` (see [`cap`]).
+        hidden: usize,
         parent: Option<String>,
     },
     Thought {
@@ -816,15 +819,24 @@ impl ChatView {
                 parent,
             } => match self.open_text(parent.as_deref(), false) {
                 Some(i) => {
-                    if let Some(Item::Agent { text, view, .. }) = self.items.get_mut(i) {
+                    if let Some(Item::Agent {
+                        text, view, hidden, ..
+                    }) = self.items.get_mut(i)
+                    {
+                        let shown = cap::shown_part(text.len() - *hidden, &chunk);
+                        if shown > 0 {
+                            view.update(cx, |state, cx| state.push_str(&chunk[..shown], cx));
+                        }
+                        *hidden += chunk.len() - shown;
                         text.push_str(&chunk);
-                        view.update(cx, |state, cx| state.push_str(&chunk, cx));
                         touch(&mut self.dirty, i);
                     }
                 }
                 None => {
-                    let view = cx.new(|cx| TextViewState::markdown(&chunk, cx));
+                    let shown = cap::shown_part(0, &chunk);
+                    let view = cx.new(|cx| TextViewState::markdown(&chunk[..shown], cx));
                     self.items.push(Item::Agent {
+                        hidden: chunk.len() - shown,
                         text: chunk,
                         view,
                         parent,

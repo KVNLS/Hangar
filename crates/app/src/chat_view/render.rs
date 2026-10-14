@@ -15,6 +15,7 @@ use hangar_core::AgentState;
 
 use super::rows::Row;
 use super::{ChatView, Item, Outcome, usage_label};
+use crate::changes::model::DisplayLine;
 use crate::ui::components::{StateGlyph, UiButton};
 use crate::ui::{ActiveTokens as _, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TypeScale as _};
 
@@ -237,11 +238,19 @@ impl ChatView {
                 .child(div().type_secondary().text_color(t.tx3).child("You"))
                 .child(text.clone())
                 .into_any_element(),
-            Item::Agent { view, .. } => div()
+            Item::Agent { view, hidden, .. } => div()
                 .px(px(2.))
                 // Inline code and code blocks use the theme's mono family: no ligatures there.
                 .font_features(crate::ui::mono_features())
                 .child(TextView::new(view).selectable(true))
+                .when(*hidden > 0, |this| {
+                    this.child(
+                        div()
+                            .type_secondary()
+                            .text_color(t.tx3)
+                            .child(super::cap::hidden_notice(*hidden)),
+                    )
+                })
                 .into_any_element(),
             Item::Thought { text, open, .. } => {
                 let open = *open;
@@ -278,12 +287,16 @@ impl ChatView {
                             })),
                     )
                     .when(open, |this| {
+                        let shown = text.floor_char_boundary(super::cap::MAX_SHOWN_BYTES);
                         this.child(
                             div()
                                 .pl(px(18.))
                                 .type_secondary()
                                 .text_color(t.tx2)
-                                .child(text.clone()),
+                                .child(text[..shown].to_owned())
+                                .when(shown < text.len(), |this| {
+                                    this.child(super::cap::hidden_notice(text.len() - shown))
+                                }),
                         )
                     })
                     .into_any_element()
@@ -864,7 +877,7 @@ fn tool_body(content: &[ToolContent], root: &std::path::Path, cx: &App) -> Optio
                             .px(px(10.))
                             .whitespace_nowrap()
                             .text_color(t.tx2)
-                            .child(line.to_owned())
+                            .child(DisplayLine::new(line).text)
                             .into_any_element(),
                         &mut lines,
                     );
