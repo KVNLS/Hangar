@@ -9,7 +9,9 @@ use std::sync::mpsc::Receiver;
 use crate::adapters;
 use anyhow::{Context as _, anyhow};
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
-use hangar_agents::{AgentAdapter as _, AgentHandle, PtyAdapter, SpawnContext, UpdateHook};
+use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext, UpdateHook};
+
+use crate::pty::{self, AgentHandle};
 use hangar_core::{
     Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
 };
@@ -281,12 +283,12 @@ pub fn start_session_with(
     }
     ctx.env.extend(extra.env.iter().cloned());
     ctx.extra_args.extend(extra.args.iter().cloned());
-    ctx.on_update = Some(on_update);
 
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
     session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
-        .and_then(|()| adapter.spawn(&ctx).map_err(anyhow::Error::new))
+        .and_then(|()| Ok(adapter.launch(&ctx)?))
+        .and_then(|launch| Ok(pty::spawn(launch, on_update)?))
         .map(|handle| {
             let command = handle.program().display().to_string();
             (handle, command)

@@ -14,6 +14,7 @@ pub mod login_env;
 pub mod mcp_host;
 pub mod ops;
 pub mod paths;
+pub mod pty;
 pub mod setting_keys;
 pub mod shell;
 pub mod state;

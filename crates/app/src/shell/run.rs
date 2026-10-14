@@ -236,10 +236,11 @@ fn spawn_command(
     let mut ctx = SpawnContext::new(root.join(&command.cwd));
     ctx.env.extend(env.iter().cloned());
     ctx.env.extend(command.env.iter().cloned());
-    ctx.on_update = Some(hook);
     tracing::info!(%line, cwd = %ctx.cwd.display(), "run command");
     adapter
-        .spawn(&ctx)
+        .launch(&ctx)
+        .map_err(anyhow::Error::new)
+        .and_then(|launch| Ok(crate::pty::spawn(launch, hook)?))
         .with_context(|| format!("failed to start `{line}`"))
 }
 

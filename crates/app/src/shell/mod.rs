@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::pty::AgentHandle;
 use anyhow::anyhow;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -34,7 +35,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_agents::AgentHandle;
 use hangar_agents::acp::AcpSession;
 use hangar_core::{
     AgentState, Project, ProjectId, Session, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,

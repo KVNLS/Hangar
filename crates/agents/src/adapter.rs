@@ -1,21 +1,17 @@
-use std::ffi::OsString;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-
-use hangar_terminal::{GridSize, SpawnOptions, TerminalConfig, TerminalSession};
 
 use crate::error::{Error, Result};
 use crate::path::{find_program, resolve_program};
 
-/// Called from the terminal pump thread after each batch of program output.
+/// Called after each batch of agent output (ACP events; PTY output where the terminal is spawned).
 pub type UpdateHook = Arc<dyn Fn() + Send + Sync>;
 
 /// Where and how to start an agent.
 #[derive(Clone)]
 pub struct SpawnContext {
     pub cwd: PathBuf,
-    pub size: GridSize,
     /// Added on top of the adapter's env; wins on conflicts.
     pub env: Vec<(String, String)>,
     /// Appended after the adapter's own arguments.
@@ -27,7 +23,6 @@ impl SpawnContext {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
             cwd: cwd.into(),
-            size: GridSize::default(),
             env: Vec::new(),
             extra_args: Vec::new(),
             on_update: None,
@@ -39,7 +34,6 @@ impl fmt::Debug for SpawnContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SpawnContext")
             .field("cwd", &self.cwd)
-            .field("size", &self.size)
             .field("env", &self.env)
             .field("extra_args", &self.extra_args)
             .field("on_update", &self.on_update.is_some())
@@ -47,40 +41,17 @@ impl fmt::Debug for SpawnContext {
     }
 }
 
-/// A running agent. The app attaches a terminal view to [`AgentHandle::session`].
-pub struct AgentHandle {
-    agent_id: String,
-    program: PathBuf,
-    session: Arc<TerminalSession>,
-}
-
-impl AgentHandle {
-    pub fn agent_id(&self) -> &str {
-        &self.agent_id
-    }
-
-    /// Resolved executable that was started.
-    pub fn program(&self) -> &Path {
-        &self.program
-    }
-
-    pub fn session(&self) -> &Arc<TerminalSession> {
-        &self.session
-    }
-
-    pub fn into_session(self) -> Arc<TerminalSession> {
-        self.session
-    }
-}
-
-impl fmt::Debug for AgentHandle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AgentHandle")
-            .field("agent_id", &self.agent_id)
-            .field("program", &self.program)
-            .field("pid", &self.session.pid())
-            .finish()
-    }
+/// What to run for an agent: the resolved program with its arguments, directory and extra
+/// environment. Whoever owns the terminal starts it (`TerminalSession` in the app).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launch {
+    pub agent_id: String,
+    /// Resolved executable.
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    /// Added on top of the inherited environment.
+    pub env: Vec<(String, String)>,
 }
 
 pub trait AgentAdapter: Send + Sync {
@@ -88,7 +59,8 @@ pub trait AgentAdapter: Send + Sync {
     fn display_name(&self) -> &str;
     /// Whether the program resolves on the current process `PATH`.
     fn is_installed(&self) -> bool;
-    fn spawn(&self, ctx: &SpawnContext) -> Result<AgentHandle>;
+    /// Resolves the program and checks the directory; starts nothing.
+    fn launch(&self, ctx: &SpawnContext) -> Result<Launch>;
 }
 
 /// Runs an interactive CLI agent inside a pseudo-terminal.
@@ -145,39 +117,16 @@ impl AgentAdapter for PtyAdapter {
         find_program(&self.program, std::env::var_os("PATH").as_deref()).is_some()
     }
 
-    fn spawn(&self, ctx: &SpawnContext) -> Result<AgentHandle> {
+    fn launch(&self, ctx: &SpawnContext) -> Result<Launch> {
         if !ctx.cwd.is_dir() {
             return Err(Error::InvalidCwd(ctx.cwd.clone()));
         }
-        let program = self.resolve(ctx)?;
-        let options = SpawnOptions {
-            program: Some(program.clone().into_os_string()),
-            args: self
-                .args
-                .iter()
-                .chain(&ctx.extra_args)
-                .map(OsString::from)
-                .collect(),
-            cwd: Some(ctx.cwd.clone()),
-            env: self
-                .env
-                .iter()
-                .chain(&ctx.env)
-                .map(|(k, v)| (OsString::from(k), OsString::from(v)))
-                .collect(),
-            size: ctx.size,
-            cell_px: (0, 0),
-        };
-        let hook = ctx.on_update.clone();
-        let session = TerminalSession::spawn(&options, TerminalConfig::default(), move || {
-            if let Some(hook) = &hook {
-                hook();
-            }
-        })?;
-        Ok(AgentHandle {
+        Ok(Launch {
             agent_id: self.id.clone(),
-            program,
-            session: Arc::new(session),
+            program: self.resolve(ctx)?,
+            args: self.args.iter().chain(&ctx.extra_args).cloned().collect(),
+            cwd: ctx.cwd.clone(),
+            env: self.env.iter().chain(&ctx.env).cloned().collect(),
         })
     }
 }

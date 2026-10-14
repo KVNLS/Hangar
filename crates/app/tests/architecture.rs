@@ -18,7 +18,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("hangar-worktree", &["hangar-core"]),
     ("hangar-terminal", &[]),
     ("hangar-devices", &["hangar-core"]),
-    ("hangar-agents", &["hangar-terminal"]),
+    ("hangar-agents", &[]),
     ("hangar-files", &["hangar-core"]),
     ("hangar-runner", &["hangar-core"]),
     ("hangar-mcp", &["hangar-core"]),
@@ -101,6 +101,17 @@ fn library_crates_only_use_allowed_workspace_crates() {
                 package.name
             );
         }
+    }
+}
+
+/// Adapters meet only through `core`'s ports: no edge between two adapter crates.
+#[test]
+fn library_crates_depend_on_core_only() {
+    for (name, allowed) in ALLOWED {
+        assert!(
+            allowed.iter().all(|dep| *dep == "hangar-core"),
+            "{name} may only depend on hangar-core, not {allowed:?}"
+        );
     }
 }
 
