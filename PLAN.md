@@ -129,14 +129,12 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - **QA sweep 2026-10, not fixed yet** (reports in the owner's notes, `qa-2026-10/`):
   - Workspaces: a linked worktree can be added as its own project; delete stops the agent before
     checking the worktree can go; best-of-N has no rollback.
-  - Review: `.gitignore` edits leave ignored files in the live diff until a full refresh; non-GitHub
-    remotes show a permanent PR error; submodule edits, mode-only and CRLF changes are shown poorly.
+  - Review: submodule edits, mode-only and CRLF changes are shown poorly.
   - Run loop and devices: Android and the memory-pressure guard unchecked.
   - Agents: an `ask_user` whose bridge died while its agent lives stays open until the 30-minute timeout
     (no MCP cancellation); the chat shows only a long message's first 64 KB (no "show all"); resumed
     sessions may book their earlier cost again (unverified).
-  - UI: dark palette selection contrast; shortcut labels differ between palette, title bar and
-    Keybindings; a long name's " 2" suffix is cut off by truncation in the sidebar.
+  - UI: the Keybindings page misses context-scoped bindings (terminal ⌘C/⌘A, chat esc, ⌘⏎).
   - Persistence: a read-only database has no read-only mode (move aside, continue without saving or quit);
     git version/identity probes have no deadline.
 - **Devices:** simctl and Android frames still copied into the atlas (question 3); log lines from several
