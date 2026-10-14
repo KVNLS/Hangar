@@ -112,6 +112,8 @@ impl ChatView {
                 .into_any_element(),
             Item::Agent { view, .. } => div()
                 .px(px(2.))
+                // Inline code and code blocks use the theme's mono family: no ligatures there.
+                .font_features(crate::ui::mono_features())
                 .child(TextView::new(view).selectable(true))
                 .into_any_element(),
             Item::Thought { text, open } => {

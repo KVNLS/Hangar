@@ -626,6 +626,7 @@ impl LogsPane {
             .border_t_1()
             .border_color(theme.border)
             .font_family(theme.mono_font_family.clone())
+            .font_features(crate::ui::mono_features())
             .text_size(px(11.))
             .child(list)
             .children(empty)
