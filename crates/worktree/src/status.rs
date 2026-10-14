@@ -31,6 +31,19 @@ pub fn status_paths(worktree: &Path, paths: &[PathBuf]) -> Result<Status> {
 }
 
 /// Parses `git status --porcelain=v2 --branch -z`.
+/// Submodules checked out in `worktree` (`git submodule status`; a `-` line is one that was
+/// never initialized).
+pub fn initialized_submodules(worktree: &Path) -> Result<usize> {
+    let out = Git::new(worktree).run(["submodule", "status"])?;
+    Ok(count_initialized(&out))
+}
+
+fn count_initialized(out: &str) -> usize {
+    out.lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('-'))
+        .count()
+}
+
 pub fn parse_status(out: &[u8]) -> Result<Status> {
     let mut status = Status::default();
     let mut fields = out.split(|&b| b == 0).filter(|f| !f.is_empty());
@@ -154,6 +167,13 @@ fn push_change(status: &mut Status, [x, y]: [u8; 2], path: PathBuf, orig_path: O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_initialized_submodules() {
+        let out = " 1234 lib (heads/main)\n-5678 docs\n+9abc vendor (v1)\nU0000 broken\n";
+        assert_eq!(count_initialized(out), 3);
+        assert_eq!(count_initialized(""), 0);
+    }
 
     #[test]
     fn parses_branch_headers_and_entries() {

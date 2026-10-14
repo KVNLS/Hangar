@@ -485,6 +485,7 @@ fn delete_clean_workspace_keeps_branch_by_default() {
             uncommitted: 0,
             untracked: 0,
             ahead: Some(0),
+            submodules: 0,
         }
     );
 
@@ -833,6 +834,7 @@ fn delete_summary_description() {
         uncommitted: 2,
         untracked: 1,
         ahead: Some(3),
+        submodules: 0,
     };
     assert_eq!(
         dirty.describe("main"),

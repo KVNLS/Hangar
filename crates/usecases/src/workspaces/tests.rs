@@ -237,3 +237,28 @@ fn remove_project_lists_the_active_workspaces() {
         "archive or delete its workspaces first: One"
     );
 }
+
+#[test]
+fn initialized_submodules_need_force_and_are_named() {
+    let summary = DeleteSummary {
+        exists: true,
+        ahead: Some(0),
+        submodules: 2,
+        ..DeleteSummary::default()
+    };
+    assert!(!summary.is_dirty() && summary.needs_force());
+    let lines = summary.describe("main");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("2 initialized submodule(s)")),
+        "{lines:?}"
+    );
+    assert!(
+        !DeleteSummary {
+            exists: true,
+            ..DeleteSummary::default()
+        }
+        .needs_force()
+    );
+}

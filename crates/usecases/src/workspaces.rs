@@ -135,12 +135,19 @@ pub struct DeleteSummary {
     pub untracked: usize,
     /// Commits on the workspace branch that are not on its base; `None` if unknown.
     pub ahead: Option<u32>,
+    /// Initialized submodules, whose local commits go with the worktree.
+    pub submodules: usize,
 }
 
 impl DeleteSummary {
     /// Removing the worktree needs `--force` (and loses work).
     pub fn is_dirty(&self) -> bool {
         self.uncommitted > 0 || self.untracked > 0
+    }
+
+    /// Removing it needs `--force`: lost files, or submodules git will not remove otherwise.
+    pub fn needs_force(&self) -> bool {
+        self.is_dirty() || self.submodules > 0
     }
 
     pub fn describe(&self, base: &str) -> Vec<String> {
@@ -155,6 +162,12 @@ impl DeleteSummary {
             ));
         } else {
             lines.push("No uncommitted or untracked files.".to_owned());
+        }
+        if self.submodules > 0 {
+            lines.push(format!(
+                "{} initialized submodule(s): their local commits and changes are deleted too.",
+                self.submodules
+            ));
         }
         match self.ahead {
             Some(0) => lines.push(format!("No commits ahead of {base}.")),
@@ -485,6 +498,7 @@ pub fn delete_summary(git: &dyn VersionControl, workspace: &Workspace) -> Result
         uncommitted: counts.uncommitted,
         untracked: counts.untracked,
         ahead,
+        submodules: counts.submodules,
     })
 }
 

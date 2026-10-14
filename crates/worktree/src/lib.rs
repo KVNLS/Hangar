@@ -38,7 +38,7 @@ pub use review::{
     BaseCheckout, CommitOptions, base_checkout, commit, merge_conflicts, merge_into_base,
     pull_rebase, push, remotes, stage, stage_all, unstage, upstream,
 };
-pub use status::{parse_status, status, status_paths};
+pub use status::{initialized_submodules, parse_status, status, status_paths};
 pub use worktree::{
     CreateOptions, Worktree, create, delete_branch, list, parse_list, prune, remove,
 };
