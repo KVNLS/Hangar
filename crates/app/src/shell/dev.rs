@@ -64,6 +64,8 @@ pub struct DevOptions {
     pub files: Option<String>,
     /// `dark`, `light` or `system`: render every settings page, then set the appearance.
     pub appearance: Option<String>,
+    /// Screen to leave the window on once every other hook has run (for screenshots).
+    pub show: Option<String>,
     pub merge: Option<MergeStrategy>,
     /// Device id (simulator UDID) to open in the device panel.
     pub device: Option<String>,
@@ -160,6 +162,7 @@ impl DevOptions {
             overview: flag("HANGAR_DEV_OVERVIEW"),
             files: var("HANGAR_DEV_FILES"),
             appearance: var("HANGAR_DEV_APPEARANCE"),
+            show: var("HANGAR_DEV_SHOW"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
                 "squash" => Some(MergeStrategy::Squash),
@@ -355,6 +358,67 @@ pub(super) async fn run_dev_hooks(
         if let Ok(Some(task)) = task {
             task.await;
         }
+    }
+    if let Some(name) = dev.show.clone() {
+        dev_show(&this, &name, cx).await;
+    }
+}
+
+/// `HANGAR_DEV_SHOW`: leaves the window on one screen or overlay.
+async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindowContext) {
+    use super::settings::SettingsTab;
+    if name.starts_with("review") {
+        // The review screen only lists files once the changes panel has loaded them.
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while this
+            .update(cx, |this, cx| {
+                this.changes_panel.read(cx).review_stats().files == 0
+            })
+            .unwrap_or(false)
+            && std::time::Instant::now() < deadline
+        {
+            cx.background_executor().timer(DEV_POLL).await;
+        }
+    }
+    let shown = this.update_in(cx, |this, window, cx| {
+        let settings = |tab| (Screen::Settings, Some(tab));
+        let (screen, tab) = match name {
+            "workspace" => (Screen::Workspace, None),
+            "review" | "review-inline" => (Screen::Review, None),
+            "overview" => (Screen::Overview, None),
+            "settings" | "settings-agents" => settings(SettingsTab::Agents),
+            "settings-devices" => settings(SettingsTab::Devices),
+            "settings-appearance" => settings(SettingsTab::Appearance),
+            "settings-keybindings" => settings(SettingsTab::Keybindings),
+            "palette" | "sheet" => (Screen::Workspace, None),
+            _ => return false,
+        };
+        this.set_screen(screen, window, cx);
+        if let Some(tab) = tab {
+            this.open_settings_tab(tab, window, cx);
+        }
+        if name.starts_with("review") {
+            let split = name == "review";
+            this.changes_panel
+                .update(cx, |panel, cx| panel.set_split_view(split, cx));
+        }
+        match name {
+            "palette" => this.open_palette(window, cx),
+            "sheet" => match this.current_project() {
+                Some(project) => this.open_new_workspace(project, window, cx),
+                None => tracing::error!("HANGAR_DEV_SHOW sheet: no project"),
+            },
+            _ => {}
+        }
+        true
+    });
+    match shown {
+        Ok(true) => tracing::info!(%name, "HANGAR_DEV_SHOW"),
+        Ok(false) => tracing::error!(
+            %name,
+            "HANGAR_DEV_SHOW: expected workspace, review, review-inline, overview, settings-<tab>, palette or sheet"
+        ),
+        Err(_) => {}
     }
 }
 
