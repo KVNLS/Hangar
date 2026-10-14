@@ -554,7 +554,9 @@ fn settings_are_loaded_and_bad_ones_reported() {
     let layout = PaneLayout {
         panes: vec![Some(WorkspaceId::new()), None],
         focused: 1,
+        columns: vec![1, 1],
         sizes: vec![0.4, 0.6],
+        rows: vec![Vec::new(), Vec::new()],
         split: None,
         panel_width: Some(480.0),
     };

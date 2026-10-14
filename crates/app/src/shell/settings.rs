@@ -64,6 +64,12 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Build and run on the device", "cmd-r", "Workspace"),
     ("Stop the run", "cmd-.", "Workspace"),
     ("Split pane right", "cmd-d", "Workspace"),
+    ("Split pane right", "cmd-\\", "Workspace"),
+    ("Split pane down", "cmd-|", "Workspace"),
+    ("Focus pane 1", "cmd-alt-1", "Workspace"),
+    ("Focus pane 2", "cmd-alt-2", "Workspace"),
+    ("Focus pane 3", "cmd-alt-3", "Workspace"),
+    ("Focus pane 4", "cmd-alt-4", "Workspace"),
     ("Close pane", "cmd-w", "Workspace"),
     ("Right panel: Device", "cmd-1", "Workspace"),
     ("Right panel: Changes", "cmd-2", "Workspace"),
@@ -806,14 +812,15 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell/mod.rs"),
         )
         .unwrap();
-        let mut bound: Vec<&str> = module
+        // Source text: an escaped backslash (`\\`) is one character at runtime.
+        let mut bound: Vec<String> = module
             .match_indices("KeyBinding::new(\"")
             .map(|(at, m)| {
                 let rest = &module[at + m.len()..];
-                &rest[..rest.find('"').unwrap()]
+                rest[..rest.find('"').unwrap()].replace("\\\\", "\\")
             })
             .collect();
-        let mut listed: Vec<&str> = SHORTCUTS.iter().map(|(_, k, _)| *k).collect();
+        let mut listed: Vec<String> = SHORTCUTS.iter().map(|(_, k, _)| k.to_string()).collect();
         bound.sort_unstable();
         listed.sort_unstable();
         assert_eq!(bound, listed);

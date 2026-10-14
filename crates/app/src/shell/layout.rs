@@ -30,7 +30,7 @@ impl HangarApp {
     fn saved_layout(&self) -> PaneLayout {
         PaneLayout {
             panel_width: Some(self.layout.panel_width),
-            ..self.layout.panes.layout(&self.layout.pane_shares)
+            ..self.layout.panes.layout()
         }
     }
 
@@ -340,8 +340,8 @@ impl HangarApp {
         self.persist(window, cx, move |store| ops::save_device(store, &device));
     }
 
-    /// Shows the saved workspaces (without starting agents) and re-applies their widths once the
-    /// pane group has been laid out.
+    /// Shows the saved workspaces (without starting agents) and re-applies their sizes once the
+    /// pane groups have been laid out.
     pub(super) fn restore_layout(
         &mut self,
         layout: &PaneLayout,
@@ -349,120 +349,172 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         let projects = &self.work.projects;
-        let (panes, shares) = layout.restore(|id| projects.is_active(id));
-        self.layout.panes = panes;
-        self.layout.pane_shares = shares;
+        self.layout.panes = layout.restore(|id| projects.is_active(id));
         self.layout.panel_width = layout.panel_width();
         self.apply_pane_shares(window, cx);
     }
 
-    /// Splits the focused pane in two; the new, empty pane on its right gets focus and half its
-    /// width.
+    /// Adds a column right of the focused pane's one, holding a new, empty pane that gets focus.
     pub(super) fn split_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut shares = self.current_shares();
-        let Some(pane) = self.layout.panes.split() else {
+        if self.layout.panes.split().is_none() {
             tracing::info!("not splitting: {MAX_PANES} panes already");
             return;
-        };
-        let half = shares[pane - 1] / 2.;
-        shares[pane - 1] = half;
-        shares.insert(pane, half);
-        self.layout.pane_shares = shares;
-        self.focus_terminal(window, cx);
-        self.panes_changed(window, cx);
-        self.apply_pane_shares(window, cx);
-        cx.notify();
+        }
+        self.panes_rearranged(window, cx);
+    }
+
+    /// Adds a new, empty pane below the focused one and focuses it.
+    pub(super) fn split_pane_down(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.layout.panes.split_down().is_none() {
+            tracing::info!("not splitting: {MAX_PANES} panes already");
+            return;
+        }
+        self.panes_rearranged(window, cx);
     }
 
     /// Closes a pane; its workspace keeps running and can be shown again from the sidebar. Its
-    /// width goes to its neighbours.
+    /// space goes to its neighbours.
     pub(super) fn close_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let mut shares = self.current_shares();
-        if !self.layout.panes.close(pane) {
-            return;
+        if self.layout.panes.close(pane) {
+            self.panes_rearranged(window, cx);
         }
-        shares.remove(pane);
-        self.layout.pane_shares = sanitize_shares(&shares, self.layout.panes.count());
+    }
+
+    /// Focuses pane `pane` (⌘⌥1…), if there is one.
+    pub(super) fn focus_pane_number(
+        &mut self,
+        pane: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if pane < self.layout.panes.count() {
+            self.focus_pane(pane, window, cx);
+            self.focus_terminal(window, cx);
+        }
+    }
+
+    fn panes_rearranged(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_terminal(window, cx);
         self.panes_changed(window, cx);
         self.apply_pane_shares(window, cx);
         cx.notify();
     }
 
-    /// The pane group's resizable state, saving the panes' shares whenever the user resizes them.
-    pub(super) fn new_pane_sizes(
+    /// Fresh resizable states for the columns and for each column's panes, saving the shares
+    /// whenever the user resizes them.
+    pub(super) fn new_pane_groups(
+        columns: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> (Entity<ResizableState>, Subscription) {
-        let pane_sizes = cx.new(|_| ResizableState::default());
-        let sub = cx.subscribe_in(
-            &pane_sizes,
+    ) -> PaneGroups {
+        let column_sizes = cx.new(|_| ResizableState::default());
+        let mut subscriptions = vec![cx.subscribe_in(
+            &column_sizes,
             window,
             |this, sizes, _: &ResizablePanelEvent, window, cx| {
                 let sizes = sizes.read(cx);
                 let widths: Vec<f32> = sizes.sizes().iter().map(|s| s.as_f32()).collect();
                 let shares = pane_shares(&widths, sizes.container_size().as_f32());
-                if shares.len() == this.layout.panes.count() {
-                    this.layout.pane_shares = shares;
+                if this.layout.panes.set_column_shares(shares) {
                     this.save_layout(window, cx);
                 }
             },
-        );
-        (pane_sizes, sub)
-    }
-
-    /// The panes' width shares, equal when none were set.
-    fn current_shares(&self) -> Vec<f32> {
-        let count = self.layout.panes.count();
-        if self.layout.pane_shares.len() == count {
-            self.layout.pane_shares.clone()
-        } else {
-            vec![1. / count as f32; count]
+        )];
+        let mut row_sizes = Vec::with_capacity(columns);
+        for column in 0..columns {
+            let rows = cx.new(|_| ResizableState::default());
+            subscriptions.push(cx.subscribe_in(
+                &rows,
+                window,
+                move |this, sizes, _: &ResizablePanelEvent, window, cx| {
+                    let sizes = sizes.read(cx);
+                    let heights: Vec<f32> = sizes.sizes().iter().map(|s| s.as_f32()).collect();
+                    let shares = pane_shares(&heights, sizes.container_size().as_f32());
+                    if this.layout.panes.set_row_shares(column, shares) {
+                        this.save_layout(window, cx);
+                    }
+                },
+            ));
+            row_sizes.push(rows);
+        }
+        PaneGroups {
+            columns: column_sizes,
+            rows: row_sizes,
+            _subscriptions: subscriptions,
         }
     }
 
-    /// Resizes the pane group to the current shares once it has as many panels as panes and they
-    /// fill its width (new panels are only measured on the next layout).
+    /// Resizes the pane groups to the current shares once they have as many panels as panes and
+    /// fill their space (new panels are only measured on the next layout).
     fn apply_pane_shares(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The group state pins the sizes it measured and appends or truncates panels when the
+        // A group state pins the sizes it measured and appends or truncates panels when the
         // count changes, so its old sizes never fit again: start from fresh, evenly laid out panels.
-        let (sizes, sub) = Self::new_pane_sizes(window, cx);
-        self.layout.pane_sizes = sizes;
-        self.layout._pane_sizes_sub = sub;
-        let count = self.layout.panes.count();
-        if count < 2 {
+        let panes = &self.layout.panes;
+        let groups = Self::new_pane_groups(panes.column_count(), window, cx);
+        let mut pending: Vec<(Entity<ResizableState>, Vec<f32>)> = Vec::new();
+        if panes.column_count() > 1 && !panes.shares().columns.is_empty() {
+            pending.push((groups.columns.clone(), panes.column_shares()));
+        }
+        for (column, rows) in groups.rows.iter().enumerate() {
+            if panes
+                .shares()
+                .rows
+                .get(column)
+                .is_some_and(|r| !r.is_empty())
+            {
+                pending.push((rows.clone(), panes.row_shares(column)));
+            }
+        }
+        self.layout.pane_groups = groups;
+        if pending.is_empty() {
+            self.layout.apply_shares = None;
             return;
         }
-        let shares = self.current_shares();
         self.layout.apply_shares = Some(cx.spawn_in(window, async move |this, cx| {
             for _ in 0..40 {
-                let applied = this
-                    .update_in(cx, |this, window, cx| {
-                        this.layout.pane_sizes.update(cx, |sizes, cx| {
-                            let total = sizes.container_size().as_f32();
-                            let laid_out: f32 = sizes.sizes().iter().map(|s| s.as_f32()).sum();
-                            if sizes.sizes().len() != count
-                                || total <= 0.
-                                || (laid_out - total).abs() > 1.
-                            {
-                                return false;
-                            }
-                            for (ix, share) in shares.iter().enumerate().take(count - 1) {
-                                sizes.resize_panel(ix, px(total * share), window, cx);
-                            }
-                            tracing::debug!(?shares, sizes = ?sizes.sizes(), "pane widths applied");
-                            true
-                        })
+                let done = this
+                    .update_in(cx, |_, window, cx| {
+                        pending.retain(|(group, shares)| {
+                            !group.update(cx, |sizes, cx| apply_shares(sizes, shares, window, cx))
+                        });
+                        pending.is_empty()
                     })
                     .unwrap_or(true);
-                if applied {
+                if done {
                     return;
                 }
                 cx.background_executor()
                     .timer(Duration::from_millis(50))
                     .await;
             }
-            tracing::warn!("pane widths not applied: panes were never laid out");
+            tracing::warn!("pane sizes not applied: panes were never laid out");
         }));
     }
+}
+
+/// The resizable states of the pane columns and of each column's panes.
+pub(super) struct PaneGroups {
+    pub(super) columns: Entity<ResizableState>,
+    /// One per column.
+    pub(super) rows: Vec<Entity<ResizableState>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+/// Resizes a laid out group to `shares`. Returns `false` while it is not laid out yet.
+fn apply_shares(
+    sizes: &mut ResizableState,
+    shares: &[f32],
+    window: &mut Window,
+    cx: &mut Context<ResizableState>,
+) -> bool {
+    let total = sizes.container_size().as_f32();
+    let laid_out: f32 = sizes.sizes().iter().map(|s| s.as_f32()).sum();
+    if sizes.sizes().len() != shares.len() || total <= 0. || (laid_out - total).abs() > 1. {
+        return false;
+    }
+    for (ix, share) in shares.iter().enumerate().take(shares.len() - 1) {
+        sizes.resize_panel(ix, px(total * share), window, cx);
+    }
+    tracing::debug!(?shares, sizes = ?sizes.sizes(), "pane sizes applied");
+    true
 }

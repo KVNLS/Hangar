@@ -56,7 +56,7 @@ use crate::paths;
 use crate::setting_keys;
 use crate::state::{
     ChangesLayout, DeviceLayout, MAX_PANES, PANEL_DEFAULT_WIDTH, PANEL_WIDTH_RANGE, PaneLayout,
-    Panes, ProjectEntry, ProjectList, pane_shares, panel_width, sanitize_shares, status_label,
+    Panes, ProjectEntry, ProjectList, pane_shares, panel_width, status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
 pub use chrome::titlebar_options;
@@ -102,7 +102,12 @@ actions!(
         StopRun,
         RestartServer,
         SplitPane,
+        SplitPaneDown,
         ClosePane,
+        FocusPane1,
+        FocusPane2,
+        FocusPane3,
+        FocusPane4,
         Quit
     ]
 );
@@ -129,6 +134,13 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-r", Run, None),
         KeyBinding::new("cmd-.", StopRun, None),
         KeyBinding::new("cmd-d", SplitPane, None),
+        KeyBinding::new("cmd-\\", SplitPane, None),
+        // macOS reports ⌘⇧\ as ⌘| (shift folded into the character).
+        KeyBinding::new("cmd-|", SplitPaneDown, None),
+        KeyBinding::new("cmd-alt-1", FocusPane1, None),
+        KeyBinding::new("cmd-alt-2", FocusPane2, None),
+        KeyBinding::new("cmd-alt-3", FocusPane3, None),
+        KeyBinding::new("cmd-alt-4", FocusPane4, None),
         KeyBinding::new("cmd-w", ClosePane, None),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
         KeyBinding::new("escape", CloseScreen, Some("OverviewScreen")),
@@ -278,13 +290,10 @@ enum Screen {
 /// What the window shows and how it is laid out, with its debounced saves.
 struct Layout {
     panes: Panes,
-    pane_sizes: Entity<ResizableState>,
-    /// Each pane's share of the width, once the user has resized (or it was restored); empty
-    /// means equal shares.
-    pane_shares: Vec<f32>,
-    /// Pending resize of the pane group to `pane_shares`; replacing it cancels the previous one.
+    pane_groups: layout::PaneGroups,
+    /// Pending resize of the pane groups to the panes' shares; replacing it cancels the
+    /// previous one.
     apply_shares: Option<Task<()>>,
-    _pane_sizes_sub: Subscription,
     palette: Option<palette::Palette>,
     overview_by_project: bool,
     settings_tab: settings::SettingsTab,
@@ -400,7 +409,7 @@ impl HangarApp {
                 cx.notify();
             },
         );
-        let (pane_sizes, pane_sizes_sub) = Self::new_pane_sizes(window, cx);
+        let pane_groups = Self::new_pane_groups(1, window, cx);
 
         let changes_panel = cx.new(ChangesPanel::new);
         let changes_sub = cx.subscribe_in(
@@ -499,10 +508,8 @@ impl HangarApp {
             focus,
             layout: Layout {
                 panes: Panes::default(),
-                pane_sizes,
-                pane_shares: Vec::new(),
+                pane_groups,
                 apply_shares: None,
-                _pane_sizes_sub: pane_sizes_sub,
                 palette: None,
                 overview_by_project: false,
                 settings_tab: Default::default(),

@@ -1,6 +1,9 @@
 //! Rendering of the main window.
 
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{Sizable as _, v_resizable};
 
 use super::run::PaneTab;
 use super::*;
@@ -9,9 +12,25 @@ use crate::ui::{ActiveTokens as _, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT, TypeScale 
 
 impl Render for HangarApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut panes = h_resizable("panes").with_state(&self.layout.pane_sizes);
-        for pane in 0..self.layout.panes.count() {
-            panes = panes.child(resizable_panel().child(self.render_pane(pane, cx)));
+        let mut panes = h_resizable("panes").with_state(&self.layout.pane_groups.columns);
+        for (column, range) in self.layout.panes.columns().into_iter().enumerate() {
+            let content = match self.layout.pane_groups.rows.get(column) {
+                Some(rows) if range.len() > 1 => {
+                    let mut group = v_resizable(("pane-column", column)).with_state(rows);
+                    for pane in range {
+                        group = group.child(resizable_panel().child(self.render_pane(pane, cx)));
+                    }
+                    group.into_any_element()
+                }
+                _ => {
+                    let mut stack = v_flex().size_full();
+                    for pane in range {
+                        stack = stack.child(self.render_pane(pane, cx));
+                    }
+                    stack.into_any_element()
+                }
+            };
+            panes = panes.child(resizable_panel().child(content));
         }
         let main = match self.layout.screen {
             Screen::Review => div().flex_1().min_h_0().child(self.changes_panel.clone()),
@@ -78,6 +97,29 @@ impl Render for HangarApp {
             .on_action(cx.listener(|this, _: &Run, window, cx| this.run_focused(window, cx)))
             .on_action(cx.listener(|this, _: &StopRun, _, cx| this.stop_run(cx)))
             .on_action(cx.listener(|this, _: &SplitPane, window, cx| this.split_pane(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &SplitPaneDown, window, cx| this.split_pane_down(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusPane1, window, cx| {
+                    this.focus_pane_number(0, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusPane2, window, cx| {
+                    this.focus_pane_number(1, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusPane3, window, cx| {
+                    this.focus_pane_number(2, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusPane4, window, cx| {
+                    this.focus_pane_number(3, window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.close_pane(this.layout.panes.focused(), window, cx)
             }))
@@ -173,6 +215,7 @@ impl HangarApp {
         let workspace = workspace_id.and_then(|id| self.work.projects.workspace(id));
         let live = workspace_id.and_then(|id| self.live.sessions.get(&id));
         let panel_open = self.open_panel_tab().is_some() && focused;
+        let full = self.layout.panes.count() >= MAX_PANES;
 
         let shown = workspace_id.map(|id| self.pane_tab(id)).unwrap_or_default();
         let tab = match workspace {
@@ -247,30 +290,20 @@ impl HangarApp {
                 (false, false) => "Start",
             };
             can_start.then(|| {
-                h_flex()
-                    .gap_1()
-                    .child(
-                        UiButton::new(("start", pane))
-                            .icon(Lucide::Play)
-                            .label(format!("{label} {}", self.agent_display_name()))
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.start_agent_in(ws_id, true, window, cx)
-                            })),
-                    )
-                    .when(resumable, |row| {
-                        row.child(
-                            UiButton::new(("start-new", pane))
-                                .label("New conversation")
-                                .ghost()
-                                .small()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.start_agent_in(ws_id, false, window, cx)
-                                })),
-                        )
-                    })
+                UiButton::new(("start", pane))
+                    .icon(Lucide::Play)
+                    .label(format!("{label} {}", self.agent_display_name()))
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.start_agent_in(ws_id, true, window, cx)
+                    }))
             })
+        });
+        let new_conversation = workspace.map(|ws| ws.id).filter(|id| {
+            !self.work.busy.contains(id)
+                && live.is_none_or(|l| l.session.status.is_terminal())
+                && self.resumable_chat(*id, &self.agent_setup.agent).is_some()
         });
         let status = live
             .filter(|l| l.session.status.is_terminal())
@@ -312,42 +345,31 @@ impl HangarApp {
                     .icon(Lucide::Columns2)
                     .ghost()
                     .small()
-                    .disabled(self.layout.panes.count() >= MAX_PANES)
-                    .tooltip("Split right ⌘D")
+                    .disabled(full)
+                    .tooltip("Split right ⌘\\")
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.layout.panes.focus(pane);
                         this.split_pane(window, cx)
                     })),
             )
-            .when(self.layout.panes.count() > 1, |this| {
-                this.child(
-                    UiButton::new(("close-pane", pane))
-                        .icon(Lucide::X)
-                        .ghost()
-                        .small()
-                        .tooltip("Close pane ⌘W (the agent keeps running)")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.close_pane(pane, window, cx)
-                        })),
-                )
-            })
             .child(
-                div().px_1p5().child(
-                    UiButton::new(("panel-toggle", pane))
-                        .icon(Lucide::PanelRight)
-                        .ghost()
-                        .small()
-                        .selected(panel_open)
-                        .tooltip(if panel_open {
-                            "Hide panel ⌘⇧D"
-                        } else {
-                            "Show panel ⌘⇧D"
-                        })
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.toggle_panel_for(pane, window, cx)
-                        })),
-                ),
-            );
+                UiButton::new(("split-down", pane))
+                    .icon(Lucide::Rows2)
+                    .ghost()
+                    .small()
+                    .disabled(full)
+                    .tooltip("Split down ⌘⇧\\")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.layout.panes.focus(pane);
+                        this.split_pane_down(window, cx)
+                    })),
+            )
+            .child(div().pl(px(2.)).pr_1p5().child(self.pane_menu(
+                pane,
+                panel_open,
+                new_conversation,
+                cx,
+            )));
 
         let body = div().flex_1().min_h_0().w_full();
         let run_view = workspace_id.and_then(|id| self.run_view(id, shown));
@@ -379,6 +401,62 @@ impl HangarApp {
             )
             .child(tab_bar)
             .child(body)
+    }
+
+    /// Secondary pane actions: new conversation, right panel, close pane.
+    fn pane_menu(
+        &self,
+        pane: usize,
+        panel_open: bool,
+        new_conversation: Option<WorkspaceId>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let app = cx.entity().downgrade();
+        let can_close = self.layout.panes.count() > 1;
+        Button::new(("pane-menu", pane))
+            .ghost()
+            .small()
+            .icon(Lucide::Ellipsis)
+            .tooltip("More")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                if let Some(ws_id) = new_conversation {
+                    let app = app.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("New conversation")
+                            .icon(Lucide::Plus)
+                            .on_click(move |_, window, cx| {
+                                let _ = app.update(cx, |this, cx| {
+                                    this.start_agent_in(ws_id, false, window, cx)
+                                });
+                            }),
+                    );
+                }
+                let (toggle_app, close_app) = (app.clone(), app.clone());
+                menu.item(
+                    PopupMenuItem::new(if panel_open {
+                        "Hide right panel"
+                    } else {
+                        "Show right panel"
+                    })
+                    .icon(Lucide::PanelRight)
+                    .action(Box::new(ToggleChanges))
+                    .on_click(move |_, window, cx| {
+                        let _ = toggle_app
+                            .update(cx, |this, cx| this.toggle_panel_for(pane, window, cx));
+                    }),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new("Close pane")
+                        .icon(Lucide::X)
+                        .action(Box::new(ClosePane))
+                        .disabled(!can_close)
+                        .on_click(move |_, window, cx| {
+                            let _ =
+                                close_app.update(cx, |this, cx| this.close_pane(pane, window, cx));
+                        }),
+                )
+            })
     }
 
     /// Device, changes and files as tabs of one right panel of one width.
