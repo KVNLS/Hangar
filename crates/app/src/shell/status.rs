@@ -159,6 +159,9 @@ impl HangarApp {
     }
 
     pub(super) fn agent_state(&self, id: WorkspaceId, cx: &App) -> AgentState {
+        if self.queued_ahead(id).is_some() {
+            return AgentState::Idle;
+        }
         let live = self.live.sessions.get(&id);
         let has_changes = self.diff_counts(id, cx).is_some_and(|c| c.files > 0);
         match live.map(|l| &l.surface) {

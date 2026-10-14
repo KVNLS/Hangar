@@ -212,8 +212,10 @@ impl HangarApp {
             ws.branch,
             age_label(ws.created_at.as_millis(), Timestamp::now().as_millis())
         );
-        let last = live
-            .and_then(|l| l.activity.last_line.clone())
+        let queued = self.queued_ahead(id);
+        let last = queued
+            .map(|ahead| format!("Queued · {ahead} ahead · starts when an agent stops").into())
+            .or_else(|| live.and_then(|l| l.activity.last_line.clone()))
             .unwrap_or_else(|| {
                 if live.is_some() {
                     "No output yet.".into()
@@ -370,8 +372,12 @@ impl HangarApp {
         } else {
             String::new()
         };
+        let queued = match self.queued_count() {
+            0 => String::new(),
+            n => format!(" · {n} queued"),
+        };
         let summary = format!(
-            "{} agent{}{subagents} · {needs_you} need you · {to_review} to review",
+            "{} agent{}{subagents}{queued} · {needs_you} need you · {to_review} to review",
             workspaces.len(),
             if workspaces.len() == 1 { "" } else { "s" }
         );

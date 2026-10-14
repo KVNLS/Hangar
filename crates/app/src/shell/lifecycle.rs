@@ -5,9 +5,10 @@ use super::*;
 impl HangarApp {
     /// Creates the worktree and workspace off the main thread, assigns it `target` as its base
     /// device (else the default on first use), shows it in the focused pane and starts
-    /// `agent_id` in it. Resolves once the agent has started (or failed).
+    /// `agent_id` in it. Resolves once the agent has started, failed or been queued.
     /// `branches`: the base to start from and the new branch's name, each `None` for the
-    /// default (see [`ops::create_workspace_from`]).
+    /// default (see [`ops::create_workspace_from`]). `input` is typed into the agent once it
+    /// runs, which may be later if the start is queued.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn create_workspace(
         &mut self,
@@ -16,6 +17,7 @@ impl HangarApp {
         agent_id: String,
         target: Option<crate::device_panel::DeviceKey>,
         branches: (Option<String>, Option<String>),
+        input: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Option<WorkspaceId>> {
@@ -81,7 +83,12 @@ impl HangarApp {
                             }
                             this.layout.panes.show(id);
                             this.panes_changed(window, cx);
-                            Some((id, this.start_session(id, agent_id, false, window, cx)))
+                            let request = queue::StartRequest {
+                                agent: agent_id,
+                                resume: false,
+                                input,
+                            };
+                            Some((id, this.request_agent(id, request, window, cx)))
                         }
                         Err(err) => {
                             this.report(&err, window, cx);
@@ -97,9 +104,9 @@ impl HangarApp {
         })
     }
 
-    /// Spawns the agent off the main thread and attaches a terminal (or chat) view to it. With
+    /// Starts `agent_id` in the workspace, or queues it at "Max concurrent agents". With
     /// `resume`, a structured agent continues the workspace's saved conversation when it ran
-    /// with the same preset. Resolves to whether it started.
+    /// with the same preset. Resolves to whether it started now.
     pub(super) fn start_session(
         &mut self,
         workspace_id: WorkspaceId,
@@ -108,6 +115,28 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
+        let request = queue::StartRequest {
+            agent: agent_id,
+            resume,
+            input: None,
+        };
+        self.request_agent(workspace_id, request, window, cx)
+    }
+
+    /// Spawns the agent off the main thread, past the queue, and attaches a terminal (or chat)
+    /// view to it, then types the request's input. Resolves to whether it started.
+    pub(super) fn launch_session(
+        &mut self,
+        workspace_id: WorkspaceId,
+        request: queue::StartRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        let queue::StartRequest {
+            agent: agent_id,
+            resume,
+            input,
+        } = request;
         let prepared = (|| {
             let store = self
                 .store
@@ -147,6 +176,7 @@ impl HangarApp {
         let resume_id = resume
             .then(|| self.resumable_chat(workspace_id, &agent_id))
             .flatten();
+        self.live.starting.insert(workspace_id);
 
         cx.spawn_in(window, async move |this, cx| {
             let started = cx
@@ -175,19 +205,31 @@ impl HangarApp {
                     }
                 })
                 .await;
-            this.update_in(cx, |this, window, cx| match started {
-                Ok(Started::Terminal(started)) => {
-                    this.attach_session(started, agent_name, waker, window, cx);
-                    true
+            this.update_in(cx, |this, window, cx| {
+                let ok = match started {
+                    Ok(Started::Terminal(started)) => {
+                        this.attach_session(started, agent_name, waker, window, cx);
+                        true
+                    }
+                    Ok(Started::Chat(started)) => {
+                        this.attach_chat_session(started, agent_name, waker, window, cx);
+                        true
+                    }
+                    Err(err) => {
+                        this.report(&err, window, cx);
+                        false
+                    }
+                };
+                this.live.starting.remove(&workspace_id);
+                if let Some(input) = input.filter(|_| ok)
+                    && let Some(live) = this.live.sessions.get(&workspace_id)
+                    && let Err(err) = live.send_text(&input, cx)
+                {
+                    tracing::error!("could not send the task to the agent: {err:#}");
                 }
-                Ok(Started::Chat(started)) => {
-                    this.attach_chat_session(started, agent_name, waker, window, cx);
-                    true
-                }
-                Err(err) => {
-                    this.report(&err, window, cx);
-                    false
-                }
+                // A failed start, or one dropped by `keep_started`, frees its slot.
+                this.drain_agent_queue(window, cx);
+                ok
             })
             .unwrap_or(false)
         })
@@ -450,14 +492,17 @@ impl HangarApp {
         self.persist(window, cx, move |store| {
             ops::finish_session(store, session_id, &status).map(drop)
         });
+        self.drain_agent_queue(window, cx);
     }
 
-    /// Kills the workspace's agent, if any, and forgets its view. Returns the session to record
-    /// as stopped and a way to wait for the process.
+    /// Kills the workspace's agent, if any, and forgets its view; a queued start is dropped.
+    /// Returns the session to record as stopped and a way to wait for the process. Callers
+    /// drain the queue afterwards: a slot may have freed.
     pub(super) fn close_session(
         &mut self,
         workspace_id: WorkspaceId,
     ) -> (Option<hangar_core::SessionId>, Option<ExitWaiter>) {
+        self.live.agent_queue.remove(workspace_id);
         match self.live.sessions.remove(&workspace_id) {
             Some(live) => (live.stop(), Some(live.exit_waiter())),
             None => (None, None),
@@ -486,6 +531,7 @@ impl HangarApp {
             self.save_layout(window, cx);
         }
         self.work.busy.insert(workspace_id);
+        self.drain_agent_queue(window, cx);
         self.sync_diffs(cx);
         self.sync_device_focus(window, cx);
         let device = self
@@ -633,6 +679,7 @@ impl HangarApp {
             return Task::ready(false);
         }
         let (session, terminal) = self.close_session(workspace_id);
+        self.drain_agent_queue(window, cx);
         self.close_run(workspace_id);
         self.close_mcp(workspace_id);
         // Stop watching before the worktree disappears.
@@ -776,6 +823,7 @@ impl HangarApp {
                         if cleared {
                             this.save_layout(window, cx);
                         }
+                        this.drain_agent_queue(window, cx);
                         this.sync_diffs(cx);
                         if this
                             .work

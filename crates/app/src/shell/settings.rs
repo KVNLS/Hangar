@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::{Input, NumberInput};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Icon, Sizable as _};
 
@@ -109,6 +109,9 @@ pub(super) struct SettingsUi {
     /// The saved default approval level, once read.
     approval: Option<ApprovalLevel>,
     approval_started: Cell<bool>,
+    /// "Max concurrent agents" (see `queue.rs`).
+    pub(super) max_agents: Entity<InputState>,
+    _max_agents_sub: Subscription,
 }
 
 impl SettingsUi {
@@ -116,6 +119,7 @@ impl SettingsUi {
         let keys_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search actions or shortcuts"));
         let sub = cx.subscribe(&keys_filter, |_, _, _: &InputEvent, cx| cx.notify());
+        let (max_agents, max_agents_sub) = HangarApp::max_agents_input(window, cx);
         (
             Self {
                 keys_filter,
@@ -123,6 +127,8 @@ impl SettingsUi {
                 versions_started: Cell::new(false),
                 approval: None,
                 approval_started: Cell::new(false),
+                max_agents,
+                _max_agents_sub: max_agents_sub,
             },
             sub,
         )
@@ -392,6 +398,7 @@ impl HangarApp {
     fn render_permissions_card(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
         let approval = self.render_approval_mode_row(cx);
+        let max_agents = self.render_max_agents_row(cx);
         let row = |title: &'static str, hint: &'static str| {
             card(cx)
                 .flex_row()
@@ -412,6 +419,7 @@ impl HangarApp {
             .gap(px(10.))
             .child(div().type_body_strong().child("Permissions"))
             .child(approval)
+            .child(max_agents)
             .child(
                 row(
                     "Notify when an agent needs me",
@@ -427,6 +435,33 @@ impl HangarApp {
                         })),
                 ),
             )
+    }
+
+    /// "Max concurrent agents": starts beyond it queue (see `queue.rs`).
+    fn render_max_agents_row(&self, cx: &mut Context<Self>) -> Div {
+        let t = cx.tokens();
+        card(cx).child(
+            h_flex()
+                .px(px(14.))
+                .py_3()
+                .gap_3()
+                .items_center()
+                .justify_between()
+                .child(
+                    v_flex().gap_0p5().child("Max concurrent agents").child(
+                        div()
+                            .type_secondary()
+                            .text_color(t.tx3)
+                            .child("Extra workspaces queue as Idle."),
+                    ),
+                )
+                .child(
+                    NumberInput::new(&self.settings_ui.max_agents)
+                        .small()
+                        .flex_none()
+                        .w(px(96.)),
+                ),
+        )
     }
 
     /// Reads the saved approval level once, in the background.

@@ -326,6 +326,13 @@ impl HangarApp {
                 "{agents} agent{} running",
                 if agents == 1 { "" } else { "s" }
             ))
+            .when(self.queued_count() > 0, |this| {
+                this.child(
+                    div()
+                        .text_color(t.amb)
+                        .child(format!("{} queued", self.queued_count())),
+                )
+            })
             // Memory pressure is the only live host figure the pool tracks; RAM totals are a
             // launch-time snapshot and per-agent memory is not measured.
             .when_some(pressure, |this, pressure| {

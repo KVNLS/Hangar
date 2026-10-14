@@ -300,10 +300,11 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Overview cards get per-state actions and tints, plus a device chip.
   - Welcome shows agent paths and toolchain locations.
   - Settings show agent paths and versions, a Boot button on base devices, and a keybinding search.
-  - New workspace shows each base branch's tip and age (new port method `VersionControl::branch_tips`; owner to confirm).
-- **Still open** (owner calls or not backed):
-  - Several workspaces as tabs in one pane, plus "shell" and "+" tabs.
-  - Approval mode, max concurrent agents, notify / Dock badge.
+  - New workspace shows each base branch's tip and age (new port method `VersionControl::branch_tips`, kept by the owner).
+  - Settings › Permissions › Max concurrent agents (1–32, default 8): starts beyond it queue as Idle in FIFO order (pane: place, Start now, Cancel; status bar and overview: queued count) and start, with their agent and first task, when an agent ends. Lowering it never stops agents. Queue state is in memory only: a quit forgets it.
+  - Settings › Permissions › Default approval mode (see M7: ACP modes; Hangar allows read/search requests once at "Auto-approve reads").
+  - Settings › Permissions › Notify when an agent needs me (default on): the Dock badge counts workspaces in Approval/Input/Failed, and the Dock bounces once when one starts waiting while Hangar is in the background. Banner notifications need the .app bundle (unbundled, `UNUserNotificationCenter` throws and `NSUserNotificationCenter` is nil).
+- **Still open** (owner calls or not backed; pane tabs and ⌘R are decided, see owner decisions below):
   - Custom agent commands.
   - Recording keybindings.
   - Build progress and crash overlays.
@@ -315,7 +316,6 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Agent memory and system RAM in the status bar.
   - "Approve pending request" in the palette.
   - "Sandbox: worktree only": not shown, because agents are not sandboxed.
-  - ⌘R stays Run (the design uses it for Reload).
   - ⌘⏎ is missing from the Settings keybinding table.
   - The review title stays the workspace name, because workspaces store no task.
 - On-screen pass (2026-10-07, dark + light, `HANGAR_DEV_SHOW` on a scratch repo):

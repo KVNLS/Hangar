@@ -12,6 +12,7 @@ mod new_workspace;
 mod ollama;
 mod overview;
 mod palette;
+mod queue;
 mod run;
 mod settings;
 mod sidebar;
@@ -373,6 +374,10 @@ struct LiveState {
     pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
     /// Live diffs of active workspaces, started when first shown in a pane.
     diffs: HashMap<WorkspaceId, DiffEntry>,
+    /// "Max concurrent agents" and the workspaces waiting for a slot.
+    agent_queue: crate::agent_queue::AgentQueue<queue::StartRequest>,
+    /// Agents spawning off the main thread: they hold a slot before they have a session.
+    starting: HashSet<WorkspaceId>,
 }
 
 /// Projects and workspaces as loaded, and the operations in flight on them.
@@ -594,6 +599,8 @@ impl HangarApp {
                 runs: HashMap::new(),
                 pane_tabs: HashMap::new(),
                 diffs: HashMap::new(),
+                agent_queue: Default::default(),
+                starting: HashSet::new(),
             },
             work: WorkState {
                 projects: ProjectList::default(),
@@ -762,6 +769,12 @@ impl HangarApp {
                 }
                 if let Some(on) = loaded.notify_attention {
                     self.attention.enabled = on;
+                }
+                if let Some(limit) = loaded.max_agents {
+                    self.live
+                        .agent_queue
+                        .set_limit(crate::agent_queue::clamp_limit(limit));
+                    self.sync_max_agents_input(window, cx);
                 }
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
