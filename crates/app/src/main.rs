@@ -66,6 +66,7 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             hangar_app::terminal_view::init(cx);
+            hangar_app::device_view::init(cx);
             hangar_app::shell::init(cx);
             cx.on_window_closed(|cx, _| cx.quit()).detach();
 

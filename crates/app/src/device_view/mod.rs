@@ -15,11 +15,25 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_devices::{DeviceInfo, Frame, Input};
+use hangar_devices::{DeviceInfo, Frame, Input, Key};
 
 use geometry::{Gesture, Rect};
 use session::Outcome;
 pub use session::{DeviceSession, InputResult, TextResult};
+
+/// Key context of the device screen; bindings in it take precedence over app-wide ones.
+pub const KEY_CONTEXT: &str = "DeviceScreen";
+
+/// Registers key bindings the device screen needs. Call once after `gpui_kit::init`.
+///
+/// gpui-kit's Root binds Tab / Shift-Tab to focus navigation; on the device screen those keys
+/// belong to the simulated device.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("tab", NoAction {}, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-tab", NoAction {}, Some(KEY_CONTEXT)),
+    ]);
+}
 
 pub enum DeviceViewEvent {
     /// An input was delivered (or failed). Successful `TouchMove`s are not reported.
@@ -142,7 +156,10 @@ impl DeviceView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = key_text(&event.keystroke) {
+        if let Some(key) = named_key(&event.keystroke) {
+            self.send(Input::Key(key));
+            cx.stop_propagation();
+        } else if let Some(text) = key_text(&event.keystroke) {
             self.send_text(text);
             cx.stop_propagation();
         }
@@ -262,21 +279,38 @@ impl Drop for DeviceView {
     }
 }
 
-/// The text a key press types on the device. Shortcuts (Cmd, Ctrl) and keys without text
-/// (arrows, Escape) are not typed.
-fn key_text(keystroke: &Keystroke) -> Option<String> {
+fn is_shortcut(keystroke: &Keystroke) -> bool {
     let m = keystroke.modifiers;
-    if m.platform || m.control || m.function {
+    m.platform || m.control || m.function
+}
+
+/// The non-text key a key press stands for (Shift and Alt are ignored).
+fn named_key(keystroke: &Keystroke) -> Option<Key> {
+    if is_shortcut(keystroke) {
         return None;
     }
-    match keystroke.key.as_str() {
-        "enter" => Some("\n".to_owned()),
-        "backspace" => Some("\u{8}".to_owned()),
-        _ => keystroke
-            .key_char
-            .clone()
-            .filter(|text| !text.is_empty() && !text.chars().any(char::is_control)),
+    Some(match keystroke.key.as_str() {
+        "backspace" => Key::Backspace,
+        "enter" => Key::Enter,
+        "tab" => Key::Tab,
+        "escape" => Key::Escape,
+        "up" => Key::ArrowUp,
+        "down" => Key::ArrowDown,
+        "left" => Key::ArrowLeft,
+        "right" => Key::ArrowRight,
+        _ => return None,
+    })
+}
+
+/// The printable text a key press types on the device; named keys go through [`named_key`].
+fn key_text(keystroke: &Keystroke) -> Option<String> {
+    if is_shortcut(keystroke) {
+        return None;
     }
+    keystroke
+        .key_char
+        .clone()
+        .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
 }
 
 impl Focusable for DeviceView {
@@ -361,6 +395,7 @@ impl Render for DeviceView {
             .id("device-screen")
             .relative()
             .size_full()
+            .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(
@@ -533,8 +568,9 @@ impl Stats {
 
 #[cfg(test)]
 mod tests {
-    use super::key_text;
+    use super::{key_text, named_key};
     use gpui_kit::{Keystroke, Modifiers};
+    use hangar_devices::Key;
 
     fn key(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
         Keystroke {
@@ -554,14 +590,26 @@ mod tests {
             key_text(&key("space", Some(" "), none)).as_deref(),
             Some(" ")
         );
+        assert_eq!(key_text(&key("enter", Some("\n"), none)), None);
+        assert_eq!(key_text(&key("backspace", None, none)), None);
+    }
+
+    #[test]
+    fn named_keys_map_to_input_keys() {
+        let none = Modifiers::default();
+        let k = |name: &str| named_key(&key(name, None, none));
+        assert_eq!(k("backspace"), Some(Key::Backspace));
+        assert_eq!(k("enter"), Some(Key::Enter));
+        assert_eq!(k("tab"), Some(Key::Tab));
+        assert_eq!(k("escape"), Some(Key::Escape));
+        assert_eq!(k("up"), Some(Key::ArrowUp));
+        assert_eq!(k("right"), Some(Key::ArrowRight));
+        assert_eq!(k("a"), None);
         assert_eq!(
-            key_text(&key("enter", Some("\n"), none)).as_deref(),
-            Some("\n")
+            named_key(&key("tab", None, Modifiers::shift())),
+            Some(Key::Tab)
         );
-        assert_eq!(
-            key_text(&key("backspace", None, none)).as_deref(),
-            Some("\u{8}")
-        );
+        assert_eq!(named_key(&key("left", None, Modifiers::command())), None);
     }
 
     #[test]
