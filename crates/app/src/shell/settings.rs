@@ -436,6 +436,21 @@ impl HangarApp {
                         })),
                 ),
             )
+            .child(
+                row(
+                    "Let agents create and drive workspaces",
+                    "Agents get tools to start child workspaces, prompt them and read them.",
+                )
+                .child(
+                    Switch::new("orchestration")
+                        .small()
+                        .color(t.acc)
+                        .checked(self.agent_setup.orchestration)
+                        .on_click(cx.listener(|this, on: &bool, window, cx| {
+                            this.set_orchestration(*on, window, cx)
+                        })),
+                ),
+            )
     }
 
     /// "Max concurrent agents": starts beyond it queue (see `queue.rs`).

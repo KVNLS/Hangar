@@ -444,11 +444,14 @@ impl HangarApp {
             .project(ws.project_id)
             .map(|p| p.name.clone())
             .unwrap_or_default();
-        let meta = format!(
+        let mut meta = format!(
             "{project} · {} · {}",
             ws.branch,
             age_label(ws.created_at.as_millis(), Timestamp::now().as_millis())
         );
+        if let Some(parent) = self.parent_name(ws) {
+            meta.push_str(&format!(" · ↳ {parent}"));
+        }
         let queued = self.queued_ahead(id);
         // A request that can be allowed once is answered right on the card.
         let request = (state == AgentState::Approval)

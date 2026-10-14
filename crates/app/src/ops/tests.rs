@@ -628,6 +628,16 @@ fn settings_are_loaded_and_bad_ones_reported() {
 }
 
 #[test]
+fn orchestration_round_trips() {
+    let f = fixture();
+    assert_eq!(load(&f.store).unwrap().orchestration, None);
+    save_orchestration(&f.store, true).unwrap();
+    assert_eq!(load(&f.store).unwrap().orchestration, Some(true));
+    save_orchestration(&f.store, false).unwrap();
+    assert_eq!(load(&f.store).unwrap().orchestration, Some(false));
+}
+
+#[test]
 fn notify_attention_round_trips() {
     let f = fixture();
     assert_eq!(load(&f.store).unwrap().notify_attention, None);

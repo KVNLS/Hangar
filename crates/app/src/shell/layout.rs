@@ -67,6 +67,7 @@ impl HangarApp {
         let shown: Vec<WorkspaceId> = (0..self.layout.panes.count())
             .filter_map(|pane| self.layout.panes.slot(pane))
             .chain(self.compared_workspaces())
+            .chain(self.orchestrated_workspaces())
             .collect();
         for id in shown {
             if self.live.diffs.contains_key(&id) || self.work.busy.contains(&id) {

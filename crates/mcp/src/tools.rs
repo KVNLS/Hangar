@@ -1,4 +1,5 @@
-//! The device tools: typed calls parsed from `tools/call`, their JSON Schemas, and results.
+//! The device and orchestration tools: typed calls parsed from `tools/call`, their JSON Schemas,
+//! and results.
 
 use hangar_core::device::{Input, Key, LogLevel, Orientation, Platform};
 use serde_json::{Map, Value, json};
@@ -9,6 +10,8 @@ pub const DEFAULT_SWIPE_MS: u64 = 300;
 pub const MAX_SWIPE_MS: u64 = 10_000;
 pub const DEFAULT_LOG_LINES: usize = 200;
 pub const MAX_LOG_LINES: usize = 2000;
+pub const DEFAULT_TRANSCRIPT_MESSAGES: usize = 10;
+pub const MAX_TRANSCRIPT_MESSAGES: usize = 50;
 
 /// One validated tool call. Coordinates are device points, origin top-left of the display as
 /// currently oriented (the space of [`hangar_core::device::Input`]).
@@ -40,6 +43,24 @@ pub enum Tool {
     BuildAndRun,
     LaunchApp {
         app_id: String,
+    },
+    /// The workspaces the caller's agent created.
+    WorkspacesList,
+    WorkspaceCreate {
+        task: String,
+        name: Option<String>,
+        /// Agent preset id; `None` runs the caller's own agent.
+        agent: Option<String>,
+    },
+    AgentPrompt {
+        /// A child workspace's id or name.
+        workspace: String,
+        text: String,
+    },
+    AgentTranscript {
+        workspace: String,
+        /// 1..=[`MAX_TRANSCRIPT_MESSAGES`]: the most recent messages to return.
+        last: usize,
     },
 }
 
@@ -124,7 +145,16 @@ impl Tool {
             Self::Logs { .. } => "logs",
             Self::BuildAndRun => "build_and_run",
             Self::LaunchApp { .. } => "launch_app",
+            Self::WorkspacesList => "workspaces_list",
+            Self::WorkspaceCreate { .. } => "workspace_create",
+            Self::AgentPrompt { .. } => "agent_prompt",
+            Self::AgentTranscript { .. } => "agent_transcript",
         }
+    }
+
+    /// Tools that create and drive other workspaces (off unless the user turned them on).
+    pub fn is_orchestration_name(name: &str) -> bool {
+        ORCHESTRATION_TOOLS.contains(&name)
     }
 
     /// Parses `tools/call` params. A missing or `null` `arguments` counts as `{}`.
@@ -210,13 +240,45 @@ impl Tool {
                 }
                 Self::LaunchApp { app_id }
             }
+            "workspaces_list" => Self::WorkspacesList,
+            "workspace_create" => {
+                let task = a.required_string("task").map_err(invalid)?;
+                if task.trim().is_empty() {
+                    return Err(invalid("\"task\" must not be empty".into()));
+                }
+                let name = a.optional_string("name").map_err(invalid)?;
+                let agent = a.optional_string("agent").map_err(invalid)?;
+                if agent.as_deref().is_some_and(|a| a.trim().is_empty()) {
+                    return Err(invalid("\"agent\" must not be empty".into()));
+                }
+                Self::WorkspaceCreate {
+                    task,
+                    name: name.filter(|n| !n.trim().is_empty()),
+                    agent: agent.map(|a| a.trim().to_owned()),
+                }
+            }
+            "agent_prompt" => {
+                let workspace = a.workspace().map_err(invalid)?;
+                let text = a.required_string("text").map_err(invalid)?;
+                if text.trim().is_empty() {
+                    return Err(invalid("\"text\" must not be empty".into()));
+                }
+                Self::AgentPrompt { workspace, text }
+            }
+            "agent_transcript" => Self::AgentTranscript {
+                workspace: a.workspace().map_err(invalid)?,
+                last: a
+                    .integer("last", 1, MAX_TRANSCRIPT_MESSAGES as u64)
+                    .map_err(invalid)?
+                    .map_or(DEFAULT_TRANSCRIPT_MESSAGES, |n| n as usize),
+            },
             _ => return Err(ParseError::UnknownTool(name.to_owned())),
         };
         Ok(parsed)
     }
 }
 
-const TOOL_NAMES: [&str; 9] = [
+const TOOL_NAMES: [&str; 13] = [
     "device_info",
     "screenshot",
     "tap",
@@ -226,6 +288,17 @@ const TOOL_NAMES: [&str; 9] = [
     "logs",
     "build_and_run",
     "launch_app",
+    "workspaces_list",
+    "workspace_create",
+    "agent_prompt",
+    "agent_transcript",
+];
+
+const ORCHESTRATION_TOOLS: [&str; 4] = [
+    "workspaces_list",
+    "workspace_create",
+    "agent_prompt",
+    "agent_transcript",
 ];
 
 fn allowed_args(tool: &str) -> &'static [&'static str] {
@@ -236,6 +309,9 @@ fn allowed_args(tool: &str) -> &'static [&'static str] {
         "press" => &["button", "key"],
         "logs" => &["lines", "level", "process"],
         "launch_app" => &["app_id"],
+        "workspace_create" => &["task", "name", "agent"],
+        "agent_prompt" => &["workspace", "text"],
+        "agent_transcript" => &["workspace", "last"],
         _ => &[],
     }
 }
@@ -332,6 +408,14 @@ impl Args<'_> {
             .ok_or_else(|| format!("missing required string {name:?}"))
     }
 
+    fn workspace(&self) -> Result<String, String> {
+        let workspace = self.required_string("workspace")?;
+        if workspace.trim().is_empty() {
+            return Err("\"workspace\" must not be empty".into());
+        }
+        Ok(workspace.trim().to_owned())
+    }
+
     fn choice<T: Copy>(&self, name: &str, options: &[(&str, T)]) -> Result<Option<T>, String> {
         let Some(s) = self.optional_string(name)? else {
             return Ok(None);
@@ -357,8 +441,17 @@ fn point_schema(description: &str) -> Value {
     json!({ "type": "number", "minimum": 0, "description": description })
 }
 
-/// The `tools` array of a `tools/list` result.
-pub fn definitions() -> Vec<Value> {
+/// The `tools` array of a `tools/list` result: the device tools, then the orchestration tools
+/// when they are on.
+pub fn definitions(orchestration: bool) -> Vec<Value> {
+    let mut tools = device_definitions();
+    if orchestration {
+        tools.extend(orchestration_definitions());
+    }
+    tools
+}
+
+fn device_definitions() -> Vec<Value> {
     let no_args = json!({ "type": "object", "properties": {}, "additionalProperties": false });
     vec![
         json!({
@@ -491,6 +584,94 @@ pub fn definitions() -> Vec<Value> {
     ]
 }
 
+fn workspace_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "description": "The id (from workspaces_list or workspace_create) or exact name of a \
+            workspace this agent created.",
+    })
+}
+
+fn orchestration_definitions() -> Vec<Value> {
+    let no_args = json!({ "type": "object", "properties": {}, "additionalProperties": false });
+    vec![
+        json!({
+            "name": "workspaces_list",
+            "description": "List the Hangar workspaces this agent created with workspace_create \
+                (archived ones are left out): id, name, task, branch, agent, agent state, diff \
+                against the base branch when known, and whether the agent waits in the queue.",
+            "inputSchema": no_args,
+        }),
+        json!({
+            "name": "workspace_create",
+            "description": "Create a child Hangar workspace (its own git worktree and branch, from \
+                this workspace's base branch, in the same project) and start an agent in it with \
+                `task` as its first prompt. The agent starts now or waits in Hangar's queue when \
+                the maximum number of agents is running. Follow it with workspaces_list, \
+                agent_transcript and agent_prompt. The user sees every workspace created.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "What the new agent should do; self-contained, it does not \
+                            see this conversation.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Workspace name (default: the task's first line).",
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Hangar agent preset id, e.g. claude, claude-acp, codex-acp, \
+                            opencode-acp (default: the agent of this workspace).",
+                    },
+                },
+                "required": ["task"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "agent_prompt",
+            "description": "Send a message to the agent of a workspace this agent created, as if \
+                the user typed it. Fails while a structured agent is still working on its \
+                previous message, or when no agent runs there.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_schema(),
+                    "text": { "type": "string", "minLength": 1, "description": "The message." },
+                },
+                "required": ["workspace", "text"],
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "agent_transcript",
+            "description": "The last messages of the structured agent in a workspace this agent \
+                created: prompts, replies, tool calls with their status, permission requests. \
+                Terminal agents have no transcript.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": workspace_schema(),
+                    "last": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_TRANSCRIPT_MESSAGES,
+                        "default": DEFAULT_TRANSCRIPT_MESSAGES,
+                        "description": "How many of the most recent messages to return.",
+                    },
+                },
+                "required": ["workspace"],
+                "additionalProperties": false,
+            },
+        }),
+    ]
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Content {
     Text(String),
@@ -606,8 +787,124 @@ mod tests {
     }
 
     #[test]
+    fn orchestration_tools_are_listed_only_when_on() {
+        let names = |on| -> Vec<String> {
+            definitions(on)
+                .iter()
+                .map(|d| d["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(names(false), TOOL_NAMES[..9]);
+        assert_eq!(names(true), TOOL_NAMES);
+        for name in TOOL_NAMES {
+            assert_eq!(
+                Tool::is_orchestration_name(name),
+                ORCHESTRATION_TOOLS.contains(&name)
+            );
+        }
+    }
+
+    #[test]
+    fn parses_orchestration_tools() {
+        assert_eq!(
+            parse("workspaces_list", json!({})),
+            Ok(Tool::WorkspacesList)
+        );
+        assert_eq!(
+            parse("workspace_create", json!({"task": "Fix login"})),
+            Ok(Tool::WorkspaceCreate {
+                task: "Fix login".into(),
+                name: None,
+                agent: None
+            })
+        );
+        assert_eq!(
+            parse(
+                "workspace_create",
+                json!({"task": "Fix", "name": " ", "agent": " codex-acp "})
+            ),
+            Ok(Tool::WorkspaceCreate {
+                task: "Fix".into(),
+                name: None,
+                agent: Some("codex-acp".into())
+            })
+        );
+        assert_eq!(
+            parse(
+                "agent_prompt",
+                json!({"workspace": " Login ", "text": "go on"})
+            ),
+            Ok(Tool::AgentPrompt {
+                workspace: "Login".into(),
+                text: "go on".into()
+            })
+        );
+        assert_eq!(
+            parse("agent_transcript", json!({"workspace": "Login"})),
+            Ok(Tool::AgentTranscript {
+                workspace: "Login".into(),
+                last: DEFAULT_TRANSCRIPT_MESSAGES
+            })
+        );
+        assert_eq!(
+            parse(
+                "agent_transcript",
+                json!({"workspace": "Login", "last": 50})
+            ),
+            Ok(Tool::AgentTranscript {
+                workspace: "Login".into(),
+                last: 50
+            })
+        );
+        assert_eq!(
+            message(parse("workspace_create", json!({"task": "  "}))),
+            "\"task\" must not be empty"
+        );
+        assert_eq!(
+            message(parse("workspace_create", json!({}))),
+            "missing required string \"task\""
+        );
+        assert_eq!(
+            message(parse("workspace_create", json!({"task": "x", "agent": ""}))),
+            "\"agent\" must not be empty"
+        );
+        assert_eq!(
+            message(parse(
+                "agent_prompt",
+                json!({"workspace": "x", "text": " "})
+            )),
+            "\"text\" must not be empty"
+        );
+        assert_eq!(
+            message(parse(
+                "agent_prompt",
+                json!({"workspace": "", "text": "hi"})
+            )),
+            "\"workspace\" must not be empty"
+        );
+        assert!(
+            message(parse(
+                "agent_transcript",
+                json!({"workspace": "x", "last": 51})
+            ))
+            .contains("between 1 and 50")
+        );
+        assert!(
+            message(parse(
+                "agent_transcript",
+                json!({"workspace": "x", "last": 0})
+            ))
+            .contains("between 1 and 50")
+        );
+        assert_eq!(
+            message(parse("workspaces_list", json!({"all": true}))),
+            "unknown argument(s) all; this tool takes no arguments"
+        );
+    }
+
+    #[test]
     fn every_definition_parses_its_name() {
-        let defs = definitions();
+        let defs = definitions(true);
         assert_eq!(defs.len(), TOOL_NAMES.len());
         for (def, name) in defs.iter().zip(TOOL_NAMES) {
             assert_eq!(def["name"], name);

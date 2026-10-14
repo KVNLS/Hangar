@@ -68,16 +68,18 @@ pub fn children<'a>(
     list
 }
 
-/// Whether the agent of `caller` may create one more child.
+/// Whether the agent of `caller` may create one more child, with `in_flight` of its children
+/// still being created.
 pub fn check_create<'a>(
     all: impl IntoIterator<Item = &'a Workspace> + Clone,
     caller: WorkspaceId,
+    in_flight: usize,
 ) -> Result<(), Refusal> {
     let depth = depth(all.clone(), caller);
     if depth >= MAX_DEPTH {
         return Err(Refusal::TooDeep { depth });
     }
-    if children(all, caller).len() >= MAX_LIVE_CHILDREN {
+    if children(all, caller).len() + in_flight >= MAX_LIVE_CHILDREN {
         return Err(Refusal::TooManyChildren);
     }
     Ok(())
@@ -205,10 +207,10 @@ mod tests {
         let child = ws("Child", Some(&lead), 2);
         let grandchild = ws("Grandchild", Some(&child), 3);
         let all = [lead.clone(), child.clone(), grandchild.clone()];
-        assert_eq!(check_create(&all, lead.id), Ok(()));
-        assert_eq!(check_create(&all, child.id), Ok(()));
+        assert_eq!(check_create(&all, lead.id, 0), Ok(()));
+        assert_eq!(check_create(&all, child.id, 0), Ok(()));
         assert_eq!(
-            check_create(&all, grandchild.id),
+            check_create(&all, grandchild.id, 0),
             Err(Refusal::TooDeep { depth: 2 })
         );
     }
@@ -220,9 +222,17 @@ mod tests {
         for i in 1..=MAX_LIVE_CHILDREN as i64 {
             all.push(ws(&format!("C{i}"), Some(&lead), i));
         }
-        assert_eq!(check_create(&all, lead.id), Err(Refusal::TooManyChildren));
+        assert_eq!(
+            check_create(&all, lead.id, 0),
+            Err(Refusal::TooManyChildren)
+        );
         all[1].status = WorkspaceStatus::Archived;
-        assert_eq!(check_create(&all, lead.id), Ok(()));
+        assert_eq!(check_create(&all, lead.id, 0), Ok(()));
+        // Creates still running count too.
+        assert_eq!(
+            check_create(&all, lead.id, 1),
+            Err(Refusal::TooManyChildren)
+        );
         assert_eq!(children(&all, lead.id).len(), MAX_LIVE_CHILDREN - 1);
     }
 

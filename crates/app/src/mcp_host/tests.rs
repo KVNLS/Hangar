@@ -7,12 +7,27 @@ use std::time::Instant;
 type Log = Arc<Mutex<Vec<String>>>;
 
 fn host(timeouts: Timeouts) -> (McpHost, Sessions, mpsc::UnboundedReceiver<McpRequest>) {
+    let (host, sessions, rx, _) = orchestration_host(timeouts);
+    (host, sessions, rx)
+}
+
+/// As [`host`], with the switch of the orchestration tools (off).
+fn orchestration_host(
+    timeouts: Timeouts,
+) -> (
+    McpHost,
+    Sessions,
+    mpsc::UnboundedReceiver<McpRequest>,
+    Arc<AtomicBool>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let sessions = Sessions::default();
+    let on = Arc::new(AtomicBool::new(false));
     (
-        McpHost::new(sessions.clone(), tx, timeouts).unwrap(),
+        McpHost::new(sessions.clone(), tx, timeouts, Arc::clone(&on)).unwrap(),
         sessions,
         rx,
+        on,
     )
 }
 
@@ -20,6 +35,7 @@ fn short() -> Timeouts {
     Timeouts {
         call: Duration::from_millis(200),
         build_and_run: Duration::from_millis(800),
+        create: Duration::from_millis(800),
     }
 }
 
@@ -110,6 +126,67 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                     } else {
                         let _ = reply.send(Err(anyhow::anyhow!("not installed")));
                     }
+                }
+                McpRequest::Children { reply, .. } => {
+                    record("children".into());
+                    let _ = reply.send(Ok(vec![ChildWorkspace {
+                        id: "c1".into(),
+                        name: "Login".into(),
+                        task: Some("Fix login".into()),
+                        branch: "hangar/login".into(),
+                        agent: Some("Codex".into()),
+                        state: "Working".into(),
+                        diff: None,
+                        queued: false,
+                    }]));
+                }
+                McpRequest::CreateChild {
+                    task,
+                    name,
+                    agent,
+                    reply,
+                    ..
+                } => {
+                    record(format!("create {task} {name:?} {agent:?}"));
+                    // Longer than a plain call: creates have their own timeout.
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(400));
+                        let _ = reply.send(Ok(CreatedWorkspace {
+                            id: "c2".into(),
+                            name: "Docs".into(),
+                            branch: "hangar/docs".into(),
+                            agent: "Claude Code".into(),
+                            start: hangar_mcp::StartOutcome::Queued { ahead: 1 },
+                        }));
+                    });
+                }
+                McpRequest::PromptChild {
+                    child, text, reply, ..
+                } => {
+                    record(format!("prompt {child} {text}"));
+                    let _ = reply.send(match child.as_str() {
+                        "Login" => Ok("Login".into()),
+                        _ => Err(anyhow::Error::new(ToolError::Failed(format!(
+                            "no workspace {child:?}"
+                        )))),
+                    });
+                }
+                McpRequest::Transcript {
+                    child, last, reply, ..
+                } => {
+                    record(format!("transcript {child} {last}"));
+                    let _ = reply.send(match child.as_str() {
+                        "Login" => Ok((
+                            "Login".into(),
+                            vec![
+                                TranscriptEntry::User("Fix login".into()),
+                                TranscriptEntry::Agent("Done.".into()),
+                            ],
+                        )),
+                        _ => Err(anyhow::Error::new(ToolError::Unsupported(
+                            "transcripts of terminal agents".into(),
+                        ))),
+                    });
                 }
             }
         }
@@ -369,5 +446,107 @@ fn agent_signals_go_to_the_workspace_without_waiting() {
     assert_eq!(
         host.agent_signal("nope", hangar_core::AgentSignal::Working),
         Err(ToolError::UnknownSession)
+    );
+}
+
+#[test]
+fn orchestration_tools_are_refused_while_off() {
+    let (host, sessions, mut rx, on) = orchestration_host(short());
+    let s = sessions.register(WorkspaceId::new());
+    assert!(!host.orchestration_enabled(&s));
+    assert!(matches!(
+        host.call(&s, Tool::WorkspacesList),
+        Err(ToolError::Failed(m)) if m.contains("off")
+    ));
+    assert!(rx.try_recv().is_err());
+    on.store(true, Ordering::Relaxed);
+    assert!(host.orchestration_enabled(&s));
+    assert!(!host.orchestration_enabled("stranger"));
+}
+
+#[test]
+fn orchestration_tools_map_to_requests() {
+    let (host, sessions, rx, on) = orchestration_host(short());
+    on.store(true, Ordering::Relaxed);
+    let log = Log::default();
+    fake_consumer(rx, log.clone());
+    let ws = WorkspaceId::new();
+    let s = sessions.register(ws);
+
+    let out = host.call(&s, Tool::WorkspacesList).unwrap();
+    let listed: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
+    assert_eq!(listed["workspaces"][0]["name"], "Login");
+    assert_eq!(listed["workspaces"][0]["state"], "Working");
+
+    let out = host
+        .call(
+            &s,
+            Tool::WorkspaceCreate {
+                task: "Write docs".into(),
+                name: None,
+                agent: Some("claude".into()),
+            },
+        )
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
+    assert_eq!(created["id"], "c2");
+    assert_eq!(created["agent_start"], "queued");
+    assert_eq!(created["queued_behind"], 1);
+
+    let out = host
+        .call(
+            &s,
+            Tool::AgentPrompt {
+                workspace: "Login".into(),
+                text: "Add a test".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(text(&out), "Sent to the agent of “Login”.");
+    assert_eq!(
+        host.call(
+            &s,
+            Tool::AgentPrompt {
+                workspace: "Other".into(),
+                text: "hi".into(),
+            },
+        ),
+        Err(ToolError::Failed("no workspace \"Other\"".into()))
+    );
+
+    let out = host
+        .call(
+            &s,
+            Tool::AgentTranscript {
+                workspace: "Login".into(),
+                last: 3,
+            },
+        )
+        .unwrap();
+    assert_eq!(text(&out), "[user]\nFix login\n\n[agent]\nDone.");
+    assert_eq!(
+        host.call(
+            &s,
+            Tool::AgentTranscript {
+                workspace: "Shell".into(),
+                last: 10,
+            },
+        ),
+        Err(ToolError::Unsupported(
+            "transcripts of terminal agents".into()
+        ))
+    );
+
+    let log = log.lock().unwrap();
+    assert_eq!(
+        *log,
+        vec![
+            format!("{ws} children"),
+            format!("{ws} create Write docs None Some(\"claude\")"),
+            format!("{ws} prompt Login Add a test"),
+            format!("{ws} prompt Other hi"),
+            format!("{ws} transcript Login 3"),
+            format!("{ws} transcript Shell 10"),
+        ]
     );
 }

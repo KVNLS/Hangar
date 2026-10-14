@@ -270,6 +270,42 @@ impl ChatView {
         })
     }
 
+    /// The agent's own last `last` messages, oldest first, for another agent to read
+    /// (`agent_transcript`). Thoughts, plans and subagent items are left out.
+    pub fn transcript(&self, last: usize) -> Vec<hangar_mcp::TranscriptEntry> {
+        use hangar_agents::acp::protocol::ToolStatus;
+        use hangar_mcp::TranscriptEntry;
+        let mut entries: Vec<TranscriptEntry> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.owner(*i).is_none())
+            .filter_map(|(_, item)| match item {
+                Item::User(text) => Some(TranscriptEntry::User(text.to_string())),
+                Item::Agent { text, .. } => Some(TranscriptEntry::Agent(text.clone())),
+                Item::Tool(call) => Some(TranscriptEntry::Tool {
+                    title: call.title.clone(),
+                    status: match call.status {
+                        ToolStatus::Pending => "pending",
+                        ToolStatus::InProgress => "in_progress",
+                        ToolStatus::Completed => "completed",
+                        ToolStatus::Failed => "failed",
+                    }
+                    .to_owned(),
+                }),
+                Item::Permission { title, outcome, .. } => Some(TranscriptEntry::Permission {
+                    title: title.to_string(),
+                    answer: outcome.as_ref().map(|o| o.label.to_string()),
+                }),
+                Item::Notice { text, .. } => Some(TranscriptEntry::Notice(text.to_string())),
+                Item::Thought { .. } | Item::Plan(_) => None,
+            })
+            .collect();
+        let skip = entries.len().saturating_sub(last);
+        entries.drain(..skip);
+        entries
+    }
+
     /// The subagents launched in the current (or last) turn.
     pub fn subagents(&self) -> Vec<Subagent> {
         let pending = self.pending();

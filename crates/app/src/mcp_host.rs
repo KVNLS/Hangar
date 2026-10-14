@@ -1,11 +1,12 @@
-//! App side of the MCP device tools: resolves bridge sessions to workspaces and turns each tool
-//! call into an [`McpRequest`] for the GPUI side, which owns the workspace devices.
+//! App side of the MCP tools: resolves bridge sessions to workspaces and turns each tool call
+//! into an [`McpRequest`] for the GPUI side, which owns the workspace devices and agents.
 //!
 //! Tool calls run on `hangar_mcp`'s worker threads (one per message) and block there until the
 //! GPUI side replies or the request times out; nothing here runs on the UI thread.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -13,8 +14,8 @@ use anyhow::Context as _;
 use hangar_core::{AgentSignal, WorkspaceId};
 use hangar_devices::{Frame, Input, LogEntry, LogLevel};
 use hangar_mcp::{
-    DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost, ToolOutput, encode_screenshot,
-    new_session_secret,
+    ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost,
+    ToolOutput, TranscriptEntry, encode_screenshot, new_session_secret,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -77,6 +78,33 @@ pub enum McpRequest {
         ws: WorkspaceId,
         signal: AgentSignal,
     },
+    /// The workspaces `ws`'s agent created (orchestration tools, like the three below).
+    Children {
+        ws: WorkspaceId,
+        reply: Reply<Vec<ChildWorkspace>>,
+    },
+    /// Creates a child of `ws` and starts (or queues) its agent with `task` as first input.
+    CreateChild {
+        ws: WorkspaceId,
+        task: String,
+        name: Option<String>,
+        agent: Option<String>,
+        reply: Reply<CreatedWorkspace>,
+    },
+    /// Sends `text` to the agent of `ws`'s child `child` (id or name). Replies with its name.
+    PromptChild {
+        ws: WorkspaceId,
+        child: String,
+        text: String,
+        reply: Reply<String>,
+    },
+    /// The last `last` messages of `ws`'s child's structured agent, with the child's name.
+    Transcript {
+        ws: WorkspaceId,
+        child: String,
+        last: usize,
+        reply: Reply<(String, Vec<TranscriptEntry>)>,
+    },
 }
 
 impl McpRequest {
@@ -89,7 +117,11 @@ impl McpRequest {
             | Self::Logs { ws, .. }
             | Self::BuildAndRun { ws, .. }
             | Self::Launch { ws, .. }
-            | Self::Signal { ws, .. } => *ws,
+            | Self::Signal { ws, .. }
+            | Self::Children { ws, .. }
+            | Self::CreateChild { ws, .. }
+            | Self::PromptChild { ws, .. }
+            | Self::Transcript { ws, .. } => *ws,
         }
     }
 }
@@ -99,6 +131,8 @@ impl McpRequest {
 pub struct Timeouts {
     pub call: Duration,
     pub build_and_run: Duration,
+    /// `workspace_create`: a worktree checkout and the agent's start.
+    pub create: Duration,
 }
 
 impl Default for Timeouts {
@@ -106,6 +140,7 @@ impl Default for Timeouts {
         Self {
             call: Duration::from_secs(30),
             build_and_run: Duration::from_secs(20 * 60),
+            create: Duration::from_secs(3 * 60),
         }
     }
 }
@@ -231,6 +266,8 @@ pub struct McpHost {
     sessions: Sessions,
     requests: mpsc::UnboundedSender<McpRequest>,
     timeouts: Timeouts,
+    /// "Let agents create and drive workspaces", set from the GPUI side.
+    orchestration: Arc<AtomicBool>,
     // Only drives the reply timeouts: worker threads block on it, never on the UI thread.
     timer: tokio::runtime::Runtime,
 }
@@ -240,6 +277,7 @@ impl McpHost {
         sessions: Sessions,
         requests: mpsc::UnboundedSender<McpRequest>,
         timeouts: Timeouts,
+        orchestration: Arc<AtomicBool>,
     ) -> anyhow::Result<Self> {
         let timer = tokio::runtime::Builder::new_current_thread()
             .enable_time()
@@ -249,6 +287,7 @@ impl McpHost {
             sessions,
             requests,
             timeouts,
+            orchestration,
             timer,
         })
     }
@@ -325,6 +364,10 @@ impl ToolHost for McpHost {
         self.sessions.resolve(session).is_some()
     }
 
+    fn orchestration_enabled(&self, session: &str) -> bool {
+        self.orchestration.load(Ordering::Relaxed) && self.knows_session(session)
+    }
+
     fn agent_signal(&self, session: &str, signal: AgentSignal) -> Result<(), ToolError> {
         let ws = self
             .sessions
@@ -341,6 +384,11 @@ impl ToolHost for McpHost {
             .resolve(session)
             .ok_or(ToolError::UnknownSession)?;
         let call = self.timeouts.call;
+        if Tool::is_orchestration_name(tool.name()) && !self.orchestration.load(Ordering::Relaxed) {
+            return Err(ToolError::Failed(
+                "orchestration tools are off in Hangar's settings".into(),
+            ));
+        }
         match tool {
             Tool::DeviceInfo => {
                 let status = self.ask("device_info", call, |reply| McpRequest::Status {
@@ -418,6 +466,44 @@ impl ToolHost for McpHost {
                 })?;
                 Ok(ToolOutput::text(format!("Launched {label}.")))
             }
+            Tool::WorkspacesList => {
+                let children = self.ask("workspaces_list", call, |reply| McpRequest::Children {
+                    ws,
+                    reply,
+                })?;
+                Ok(ToolOutput::workspaces(&children))
+            }
+            Tool::WorkspaceCreate { task, name, agent } => {
+                let created = self.ask("workspace_create", self.timeouts.create, |reply| {
+                    McpRequest::CreateChild {
+                        ws,
+                        task,
+                        name,
+                        agent,
+                        reply,
+                    }
+                })?;
+                Ok(ToolOutput::created(&created))
+            }
+            Tool::AgentPrompt { workspace, text } => {
+                let name = self.ask("agent_prompt", call, |reply| McpRequest::PromptChild {
+                    ws,
+                    child: workspace,
+                    text,
+                    reply,
+                })?;
+                Ok(ToolOutput::text(format!("Sent to the agent of “{name}”.")))
+            }
+            Tool::AgentTranscript { workspace, last } => {
+                let (name, entries) =
+                    self.ask("agent_transcript", call, |reply| McpRequest::Transcript {
+                        ws,
+                        child: workspace,
+                        last,
+                        reply,
+                    })?;
+                Ok(ToolOutput::transcript(&name, &entries))
+            }
         }
     }
 }
@@ -451,6 +537,7 @@ fn human(d: Duration) -> String {
 pub struct McpHandle {
     socket: PathBuf,
     sessions: Sessions,
+    orchestration: Arc<AtomicBool>,
 }
 
 impl McpHandle {
@@ -463,6 +550,12 @@ impl McpHandle {
     /// Revokes the workspace's secret: its agent's calls fail with an unknown-session error.
     pub fn unregister(&self, ws: WorkspaceId) {
         self.sessions.unregister(ws);
+    }
+
+    /// Lists and allows the orchestration tools for every agent ("Let agents create and drive
+    /// workspaces"). Agents that already listed the tools see the change on their next list.
+    pub fn set_orchestration(&self, on: bool) {
+        self.orchestration.store(on, Ordering::Relaxed);
     }
 
     /// Hand it to agents as `HANGAR_MCP_SOCKET`.
@@ -496,11 +589,18 @@ pub fn start_with(
         .with_context(|| format!("cannot listen on {}", socket.display()))?;
     let (tx, rx) = mpsc::unbounded_channel();
     let sessions = Sessions::default();
-    let host: Arc<dyn ToolHost> = Arc::new(McpHost::new(sessions.clone(), tx, timeouts)?);
+    let orchestration = Arc::new(AtomicBool::new(false));
+    let host: Arc<dyn ToolHost> = Arc::new(McpHost::new(
+        sessions.clone(),
+        tx,
+        timeouts,
+        Arc::clone(&orchestration),
+    )?);
     // The handle owns the socket file from here on, so a failed spawn still removes it.
     let handle = McpHandle {
         socket: socket.to_owned(),
         sessions,
+        orchestration,
     };
     std::thread::Builder::new()
         .name("mcp-serve".into())

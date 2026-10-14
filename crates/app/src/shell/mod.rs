@@ -12,6 +12,7 @@ mod lifecycle;
 mod mcp;
 mod new_workspace;
 mod ollama;
+mod orchestration;
 mod overview;
 mod palette;
 mod queue;
@@ -366,6 +367,8 @@ struct AgentSetup {
     /// Agent presets with their install state (all assumed installed until the PATH is known).
     agent_choices: Vec<AgentChoice>,
     ollama: ollama::OllamaState,
+    /// "Let agents create and drive workspaces" (the MCP orchestration tools).
+    orchestration: bool,
 }
 
 /// What runs per workspace: agent sessions, build and dev-server tabs, live diffs.
@@ -402,6 +405,8 @@ struct WorkState {
     busy: HashSet<WorkspaceId>,
     /// "Compare attempts", when open.
     compare: Option<compare::CompareAttempts>,
+    /// Child workspaces each agent is creating through the orchestration tools.
+    child_creates: HashMap<WorkspaceId, usize>,
 }
 
 pub struct HangarApp {
@@ -605,6 +610,7 @@ impl HangarApp {
                 agent_chosen_by_user: false,
                 agent_choices: initial_choices,
                 ollama,
+                orchestration: false,
             },
             live: LiveState {
                 sessions: HashMap::new(),
@@ -624,6 +630,7 @@ impl HangarApp {
                 load_error: None,
                 new_workspace: None,
                 compare: None,
+                child_creates: HashMap::new(),
                 creating: HashSet::new(),
                 busy: HashSet::new(),
             },
@@ -794,6 +801,9 @@ impl HangarApp {
                 }
                 if let Some(on) = loaded.notify_attention {
                     self.attention.enabled = on;
+                }
+                if let Some(on) = loaded.orchestration {
+                    self.apply_orchestration(on);
                 }
                 if let Some(limit) = loaded.max_agents {
                     self.live
