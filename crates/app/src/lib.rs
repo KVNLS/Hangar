@@ -7,6 +7,7 @@ pub mod device_panel;
 pub mod device_view;
 pub mod files_view;
 pub mod login_env;
+pub mod mcp_host;
 pub mod ops;
 pub mod paths;
 pub mod shell;
