@@ -102,6 +102,10 @@ pub fn rgba_to_bgra_in_place(buf: &mut [u8]) {
 pub mod keys {
     pub const HOME: &str = "GoHome";
     pub const BACK: &str = "GoBack";
+    pub const POWER: &str = "Power";
+    pub const VOLUME_UP: &str = "AudioVolumeUp";
+    pub const VOLUME_DOWN: &str = "AudioVolumeDown";
+    pub const APP_SWITCH: &str = "AppSwitch";
 }
 
 pub(crate) fn key_press(key: &str) -> proto::KeyboardEvent {

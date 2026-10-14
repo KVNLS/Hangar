@@ -21,7 +21,9 @@ fn main() -> anyhow::Result<()> {
     let mut backend = Backend::Private;
     let mut udid: Option<String> = None;
     let mut bench: Option<u64> = None;
-    let mut one_input: Option<hangar_devices::Input> = None;
+    let mut one_input: Option<bench::Action> = None;
+    let mut lifecycle: Vec<(String, String)> = Vec::new();
+    let mut list = false;
     let mut out = std::env::temp_dir().join("hangar-spike-b");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -38,21 +40,101 @@ fn main() -> anyhow::Result<()> {
             "--tap" => {
                 let v = args.next().context("--tap needs X,Y (points)")?;
                 let (x, y) = v.split_once(',').context("--tap needs X,Y")?;
-                one_input = Some(hangar_devices::Input::Tap {
+                one_input = Some(bench::Action::Input(hangar_devices::Input::Tap {
                     x: x.trim().parse()?,
                     y: y.trim().parse()?,
-                });
+                }));
             }
-            "--home" => one_input = Some(hangar_devices::Input::Home),
+            "--lock" => one_input = Some(bench::Action::Input(hangar_devices::Input::Lock)),
+            "--volume-up" => {
+                one_input = Some(bench::Action::Input(hangar_devices::Input::VolumeUp))
+            }
+            "--volume-down" => {
+                one_input = Some(bench::Action::Input(hangar_devices::Input::VolumeDown))
+            }
+            "--home" => one_input = Some(bench::Action::Input(hangar_devices::Input::Home)),
+            "--rotate" => {
+                use hangar_devices::Orientation as O;
+                let v = args.next().context(
+                    "--rotate needs portrait|upside-down|landscape-left|landscape-right",
+                )?;
+                one_input = Some(bench::Action::Rotate(match v.as_str() {
+                    "portrait" => O::Portrait,
+                    "upside-down" => O::PortraitUpsideDown,
+                    "landscape-left" => O::LandscapeLeft,
+                    "landscape-right" => O::LandscapeRight,
+                    other => bail!("unknown orientation {other:?}"),
+                }));
+            }
+            "--text" => {
+                one_input = Some(bench::Action::Text(
+                    args.next().context("--text needs a string")?,
+                ));
+            }
+            "--list" => list = true,
+            "--boot" | "--shutdown" | "--install" | "--launch" => {
+                let v = args.next().with_context(|| format!("{a} needs a value"))?;
+                lifecycle.push((a.clone(), v));
+            }
             "--out" => out = args.next().context("--out needs a directory")?.into(),
             "-h" | "--help" => {
                 println!(
-                    "spike_sim [--backend private|simctl] [--udid UDID] [--bench SECS | --tap X,Y | --home] [--out DIR]"
+                    "spike_sim [--backend private|simctl] [--udid UDID] [--out DIR]\n  [--bench SECS | --tap X,Y | --home | --lock | --volume-up | --volume-down | --text STR | --rotate ORIENTATION]\n  spike_sim --list | [--udid UDID] [--boot UDID|-] [--shutdown UDID|-] [--install APP] [--launch BUNDLE_ID]"
                 );
                 return Ok(());
             }
             other => bail!("unknown argument {other:?}"),
         }
+    }
+
+    if list {
+        for d in hangar_devices::simctl::list_all()? {
+            let screen = d.screen.map_or_else(
+                || "?".to_owned(),
+                |s| {
+                    format!(
+                        "{}x{}@{}x ({}x{} pt)",
+                        s.width_px,
+                        s.height_px,
+                        s.scale,
+                        s.width_pt(),
+                        s.height_pt()
+                    )
+                },
+            );
+            println!(
+                "{}  {:<14} {:<26} {}  {screen}",
+                d.udid, d.state, d.name, d.runtime
+            );
+        }
+        return Ok(());
+    }
+    // Lifecycle commands act on --udid (or the first booted simulator for install/launch).
+    if !lifecycle.is_empty() {
+        let target = match &udid {
+            Some(u) => u.clone(),
+            None => hangar_devices::simctl::list_booted()?
+                .into_iter()
+                .next()
+                .map(|d| d.udid)
+                .context("--udid needed (no booted simulator)")?,
+        };
+        for (flag, value) in &lifecycle {
+            let t0 = std::time::Instant::now();
+            match flag.as_str() {
+                "--boot" => ios::boot(if value == "-" { &target } else { value })?,
+                "--shutdown" => ios::shutdown(if value == "-" { &target } else { value })?,
+                "--install" => {
+                    hangar_devices::simctl::install(&target, std::path::Path::new(value))?
+                }
+                _ => {
+                    let pid = hangar_devices::simctl::launch(&target, value)?;
+                    println!("pid {pid:?}");
+                }
+            }
+            println!("{flag} {value}: ok in {:.1}s", t0.elapsed().as_secs_f64());
+        }
+        return Ok(());
     }
 
     let booted = hangar_devices::simctl::list_booted()?;

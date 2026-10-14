@@ -106,6 +106,15 @@ fn probe_selectors(out: &mut String, obj: &AnyObject) {
         sel!(defaultHeightForDisplay),
         sel!(defaultPixelFormat),
         sel!(displayScale),
+        sel!(uiOrientation),
+        sel!(setUiOrientation:),
+        sel!(orientation),
+        sel!(setOrientation:),
+        sel!(deviceOrientation),
+        sel!(rotation),
+        sel!(nativeOrientation),
+        sel!(setDeviceRotation:),
+        sel!(deviceRotation),
     ];
     for s in candidates {
         let _ = writeln!(

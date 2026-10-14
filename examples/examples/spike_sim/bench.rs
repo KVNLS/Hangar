@@ -255,14 +255,19 @@ fn tap_latency(device: &dyn Device, out_dir: &Path, run: u32) -> Result<()> {
 }
 
 /// One input, with before/after frames saved and the change reported (manual verification).
-pub fn input_once(device: &dyn Device, input: Input, out_dir: &Path) -> Result<()> {
+pub fn input_once(device: &dyn Device, action: Action, out_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(out_dir)?;
     let mut rx = device.frames();
     let before = wait_stable(&mut rx, Duration::from_millis(500), Duration::from_secs(3))?;
     before.save_png(&out_dir.join("input_before.png"))?;
     let t0 = Instant::now();
-    device.send_input(input).context("send_input")?;
-    println!("{input:?} sent in {:.1} ms", ms(t0.elapsed()));
+    match &action {
+        Action::Input(input) => device.send_input(*input),
+        Action::Text(text) => device.send_text(text),
+        Action::Rotate(o) => device.set_orientation(*o),
+    }
+    .context("send")?;
+    println!("{action:?} sent in {:.1} ms", ms(t0.elapsed()));
     std::thread::sleep(Duration::from_millis(1500));
     let after = latest(&mut rx).context("no frame")?;
     after.save_png(&out_dir.join("input_after.png"))?;
@@ -276,4 +281,12 @@ pub fn input_once(device: &dyn Device, input: Input, out_dir: &Path) -> Result<(
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
+}
+
+/// One-shot action for `input_once`.
+#[derive(Debug)]
+pub enum Action {
+    Input(Input),
+    Text(String),
+    Rotate(hangar_devices::Orientation),
 }

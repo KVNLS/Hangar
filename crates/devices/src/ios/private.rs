@@ -17,6 +17,7 @@ use objc2_foundation::{NSArray, NSError, NSUUID};
 use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
 
 use super::dispatch;
+use super::keymap;
 use super::runtime::{self, raw, responds};
 use crate::{
     Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Result, geometry,
@@ -47,6 +48,16 @@ type MouseEventFn =
 /// `IndigoHIDMessageForButton(source, direction, target)`; three 32-bit values stored verbatim.
 type ButtonFn = unsafe extern "C" fn(u32, u32, u32) -> *mut c_void;
 const BUTTON_HOME: u32 = 0;
+const BUTTON_LOCK: u32 = 1;
+/// `IndigoHIDMessageForHIDArbitrary(target, usage_page, usage, direction)`; found by
+/// disassembly on Xcode 27 (event type 0x2711, fields stored verbatim). Directions as for buttons.
+type HidArbitraryFn = unsafe extern "C" fn(u32, u32, u32, u32) -> *mut c_void;
+const USAGE_PAGE_CONSUMER: u32 = 0x0c;
+const USAGE_VOLUME_UP: u32 = 0xe9;
+const USAGE_VOLUME_DOWN: u32 = 0xea;
+/// `IndigoHIDMessageForKeyboardArbitrary(usage, direction)`: keyboard-page usage, same directions.
+type KeyboardFn = unsafe extern "C" fn(u32, u32) -> *mut c_void;
+const KEY_HOLD: Duration = Duration::from_millis(12);
 const BUTTON_DOWN: u32 = 1;
 const BUTTON_UP: u32 = 2;
 const BUTTON_TARGET: u32 = 0x33;
@@ -95,8 +106,13 @@ enum CaptureEvent {
     Stop,
 }
 
+enum HidAction {
+    Input(Input),
+    Text(String),
+}
+
 struct HidCommand {
-    input: Input,
+    action: HidAction,
     reply: Sender<Result<()>>,
 }
 
@@ -142,6 +158,17 @@ impl PrivateSimulator {
     }
 }
 
+impl PrivateSimulator {
+    fn hid(&self, action: HidAction) -> Result<()> {
+        let (reply, rx) = mpsc::channel();
+        self.hid_cmd
+            .send(HidCommand { action, reply })
+            .map_err(|_| Error::PrivateApi("HID thread stopped".into()))?;
+        rx.recv()
+            .map_err(|_| Error::PrivateApi("HID thread stopped".into()))?
+    }
+}
+
 fn recv_ready(rx: &Receiver<Result<()>>) -> Result<()> {
     rx.recv_timeout(Duration::from_secs(10))
         .map_err(|_| Error::PrivateApi("backend thread did not start".into()))?
@@ -166,12 +193,28 @@ impl Device for PrivateSimulator {
 
     /// Blocks until the HID messages were delivered to the simulator (a tap holds ~60 ms).
     fn send_input(&self, input: Input) -> Result<()> {
-        let (reply, rx) = mpsc::channel();
-        self.hid_cmd
-            .send(HidCommand { input, reply })
-            .map_err(|_| Error::PrivateApi("HID thread stopped".into()))?;
-        rx.recv()
-            .map_err(|_| Error::PrivateApi("HID thread stopped".into()))?
+        self.hid(HidAction::Input(input))
+    }
+
+    /// Types printable ASCII (plus newline and tab) through Indigo keyboard events.
+    fn send_text(&self, text: &str) -> Result<()> {
+        self.hid(HidAction::Text(text.to_owned()))
+    }
+
+    fn boot(&self) -> Result<()> {
+        crate::simctl::boot(&self.info.udid)
+    }
+
+    fn shutdown(&self) -> Result<()> {
+        crate::simctl::shutdown(&self.info.udid)
+    }
+
+    fn install(&self, app_path: &std::path::Path) -> Result<()> {
+        crate::simctl::install(&self.info.udid, app_path)
+    }
+
+    fn launch(&self, bundle_id: &str) -> Result<()> {
+        crate::simctl::launch(&self.info.udid, bundle_id).map(|_| ())
     }
 }
 
@@ -441,6 +484,8 @@ struct Hid {
     queue: Retained<AnyObject>,
     mouse_event: MouseEventFn,
     button: ButtonFn,
+    hid_arbitrary: HidArbitraryFn,
+    keyboard: KeyboardFn,
     screen_pt: (f64, f64),
 }
 
@@ -461,7 +506,10 @@ fn hid_thread(
         }
     };
     while let Ok(cmd) = commands.recv() {
-        let result = autoreleasepool(|_| hid.handle(cmd.input));
+        let result = autoreleasepool(|_| match cmd.action {
+            HidAction::Input(input) => hid.handle(input),
+            HidAction::Text(text) => hid.type_text(&text),
+        });
         let _ = cmd.reply.send(result);
     }
 }
@@ -488,6 +536,15 @@ impl Hid {
         let sym = runtime::symbol(Some(fw.simulator_kit), "IndigoHIDMessageForButton")?;
         // SAFETY: signature documented on `ButtonFn`.
         let button: ButtonFn = unsafe { std::mem::transmute(sym) };
+        let sym = runtime::symbol(Some(fw.simulator_kit), "IndigoHIDMessageForHIDArbitrary")?;
+        // SAFETY: signature documented on `HidArbitraryFn`.
+        let hid_arbitrary: HidArbitraryFn = unsafe { std::mem::transmute(sym) };
+        let sym = runtime::symbol(
+            Some(fw.simulator_kit),
+            "IndigoHIDMessageForKeyboardArbitrary",
+        )?;
+        // SAFETY: signature documented on `KeyboardFn`.
+        let keyboard: KeyboardFn = unsafe { std::mem::transmute(sym) };
         let queue = dispatch::serial_queue(c"dev.hangar.sim.hid")
             .ok_or_else(|| Error::PrivateApi("dispatch_queue_create failed".into()))?;
         Ok(Self {
@@ -495,6 +552,8 @@ impl Hid {
             queue,
             mouse_event,
             button,
+            hid_arbitrary,
+            keyboard,
             screen_pt,
         })
     }
@@ -515,7 +574,70 @@ impl Hid {
                 self.press(BUTTON_HOME, BUTTON_UP)
             }
             Input::Back => Err(Error::Unsupported("Back button on iOS")),
+            Input::AppSwitch => Err(Error::Unsupported("app switcher button on iOS")),
+            Input::Lock => self.click_button(BUTTON_LOCK),
+            Input::VolumeUp => self.click_usage(USAGE_PAGE_CONSUMER, USAGE_VOLUME_UP),
+            Input::VolumeDown => self.click_usage(USAGE_PAGE_CONSUMER, USAGE_VOLUME_DOWN),
         }
+    }
+
+    /// Press and release a HID usage (consumer-page keys such as the volume rocker).
+    fn click_usage(&self, page: u32, usage: u32) -> Result<()> {
+        self.usage(page, usage, BUTTON_DOWN)?;
+        std::thread::sleep(TAP_HOLD);
+        self.usage(page, usage, BUTTON_UP)
+    }
+
+    fn usage(&self, page: u32, usage: u32, direction: u32) -> Result<()> {
+        // SAFETY: returns a malloc'd message.
+        let msg = unsafe { (self.hid_arbitrary)(BUTTON_TARGET, page, usage, direction) };
+        if msg.is_null() {
+            return Err(Error::PrivateApi(
+                "IndigoHIDMessageForHIDArbitrary returned NULL".into(),
+            ));
+        }
+        self.send(msg)
+    }
+
+    fn key(&self, usage: u32, direction: u32) -> Result<()> {
+        // SAFETY: returns a malloc'd message.
+        let msg = unsafe { (self.keyboard)(usage, direction) };
+        if msg.is_null() {
+            return Err(Error::PrivateApi(
+                "IndigoHIDMessageForKeyboardArbitrary returned NULL".into(),
+            ));
+        }
+        self.send(msg)
+    }
+
+    /// Types `text` as US-layout key presses. Fails before sending anything if a character has
+    /// no key.
+    fn type_text(&self, text: &str) -> Result<()> {
+        let keys = text
+            .chars()
+            .map(keymap::usage_for)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(Error::Unsupported(
+                "text with characters that have no US-keyboard key (only printable ASCII, \\n and \\t)",
+            ))?;
+        for (usage, shift) in keys {
+            if shift {
+                self.key(keymap::USAGE_LEFT_SHIFT, BUTTON_DOWN)?;
+            }
+            self.key(usage, BUTTON_DOWN)?;
+            std::thread::sleep(KEY_HOLD);
+            self.key(usage, BUTTON_UP)?;
+            if shift {
+                self.key(keymap::USAGE_LEFT_SHIFT, BUTTON_UP)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn click_button(&self, source: u32) -> Result<()> {
+        self.press(source, BUTTON_DOWN)?;
+        std::thread::sleep(TAP_HOLD);
+        self.press(source, BUTTON_UP)
     }
 
     fn press(&self, source: u32, direction: u32) -> Result<()> {

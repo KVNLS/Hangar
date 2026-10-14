@@ -169,6 +169,10 @@ pub fn input_command(input: Input, px: impl Fn(f64, f64) -> (i32, i32)) -> Strin
         }
         Input::Home => "input keyevent KEYCODE_HOME".to_owned(),
         Input::Back => "input keyevent KEYCODE_BACK".to_owned(),
+        Input::Lock => "input keyevent KEYCODE_POWER".to_owned(),
+        Input::VolumeUp => "input keyevent KEYCODE_VOLUME_UP".to_owned(),
+        Input::VolumeDown => "input keyevent KEYCODE_VOLUME_DOWN".to_owned(),
+        Input::AppSwitch => "input keyevent KEYCODE_APP_SWITCH".to_owned(),
     }
 }
 

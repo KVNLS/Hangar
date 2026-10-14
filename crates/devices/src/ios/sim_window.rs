@@ -80,6 +80,11 @@ pub(crate) fn click(info: &DeviceInfo, input: Input) -> Result<()> {
             post_key(KEY_H, true)?;
             post_key(KEY_H, false)
         }
+        Input::Lock | Input::VolumeUp | Input::VolumeDown | Input::AppSwitch => {
+            Err(Error::Unsupported(
+                "this hardware button through the simctl backend (use the private backend)",
+            ))
+        }
         Input::Back => Err(Error::Unsupported("Back button on iOS")),
     }
 }

@@ -281,11 +281,19 @@ impl Device for GrpcEmulator {
                 self.call(touch(&mut c, x, y, true))
             }
             Input::TouchUp { x, y } => self.call(touch(&mut c, x, y, false)),
-            Input::Home | Input::Back => {
-                let code = if input == Input::Home {
-                    keys::HOME
-                } else {
-                    keys::BACK
+            Input::Home
+            | Input::Back
+            | Input::Lock
+            | Input::VolumeUp
+            | Input::VolumeDown
+            | Input::AppSwitch => {
+                let code = match input {
+                    Input::Home => keys::HOME,
+                    Input::Back => keys::BACK,
+                    Input::Lock => keys::POWER,
+                    Input::VolumeUp => keys::VOLUME_UP,
+                    Input::VolumeDown => keys::VOLUME_DOWN,
+                    _ => keys::APP_SWITCH,
                 };
                 self.call(async move {
                     c.send_key(grpc::key_press(code))
