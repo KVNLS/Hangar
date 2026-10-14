@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::ops::RangeInclusive;
 
 use hangar_core::WorkspaceId;
+use serde::{Deserialize, Serialize};
 
 /// The limit until the user picks one.
 pub const DEFAULT_MAX_AGENTS: u32 = 8;
@@ -15,6 +16,17 @@ pub const MAX_AGENTS_RANGE: RangeInclusive<u32> = 1..=32;
 /// `n` moved into [`MAX_AGENTS_RANGE`].
 pub fn clamp_limit(n: u32) -> u32 {
     n.clamp(*MAX_AGENTS_RANGE.start(), *MAX_AGENTS_RANGE.end())
+}
+
+/// What to start in a workspace, kept while it waits for a slot (and across launches).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartRequest {
+    /// Agent preset id.
+    pub agent: String,
+    /// Continue the workspace's saved structured conversation.
+    pub resume: bool,
+    /// Typed into the agent once it runs (the New workspace task).
+    pub input: Option<String>,
 }
 
 /// What happened to a start request.
@@ -93,6 +105,21 @@ impl<T> AgentQueue<T> {
     /// How many workspaces wait before `id`, if it is queued.
     pub fn ahead(&self, id: WorkspaceId) -> Option<usize> {
         self.index(id)
+    }
+
+    /// The queued workspaces with their requests, first to start first.
+    pub fn waiting(&self) -> impl Iterator<Item = (WorkspaceId, &T)> {
+        self.waiting.iter().map(|(id, request)| (*id, request))
+    }
+
+    /// Puts back starts saved by an earlier run, after any already queued; a workspace already
+    /// queued keeps its place and request.
+    pub fn restore(&mut self, saved: impl IntoIterator<Item = (WorkspaceId, T)>) {
+        for (id, request) in saved {
+            if self.index(id).is_none() {
+                self.waiting.push_back((id, request));
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -193,6 +220,30 @@ mod tests {
         queue.admit(b, 2, ());
         queue.set_limit(3);
         assert_eq!(queue.next(2).map(|(id, _)| id), Some(b));
+    }
+
+    #[test]
+    fn restore_appends_in_order_and_skips_queued_workspaces() {
+        let [a, b, c] = ids();
+        let mut queue = AgentQueue::new(1);
+        queue.admit(a, 1, "live");
+        queue.restore([(b, "b"), (a, "saved"), (c, "c")]);
+        let waiting: Vec<_> = queue.waiting().map(|(id, r)| (id, *r)).collect();
+        assert_eq!(waiting, [(a, "live"), (b, "b"), (c, "c")]);
+    }
+
+    #[test]
+    fn a_start_request_round_trips_through_json() {
+        let request = StartRequest {
+            agent: "claude-acp".into(),
+            resume: false,
+            input: Some("Fix the login".into()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            serde_json::from_str::<StartRequest>(&json).unwrap(),
+            request
+        );
     }
 
     #[test]

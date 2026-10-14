@@ -61,6 +61,9 @@ CREATE TABLE settings (
     value TEXT NOT NULL
 );
 "#,
+    r#"
+ALTER TABLE workspaces ADD COLUMN task TEXT;
+"#,
 ];
 
 /// Latest schema version this build understands.
@@ -191,8 +194,8 @@ impl Store {
         self.conn()
             .execute(
                 "INSERT INTO workspaces
-                 (id, project_id, name, slug, branch, base, worktree_path, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (id, project_id, name, slug, branch, base, worktree_path, status, created_at, task)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     workspace.id.0.to_string(),
                     workspace.project_id.0.to_string(),
@@ -203,6 +206,7 @@ impl Store {
                     worktree_path,
                     workspace.status.as_str(),
                     workspace.created_at.0,
+                    workspace.task,
                 ],
             )
             .map_err(|e| {
@@ -223,7 +227,8 @@ impl Store {
     pub fn list_workspaces(&self, project_id: ProjectId) -> Result<Vec<Workspace>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at
+            "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at,
+                    task
              FROM workspaces WHERE project_id = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([project_id.0.to_string()], workspace_from_row)?;
@@ -233,7 +238,8 @@ impl Store {
     pub fn get_workspace(&self, id: WorkspaceId) -> Result<Workspace> {
         self.conn()
             .query_row(
-                "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at
+                "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at,
+                    task
                  FROM workspaces WHERE id = ?1",
                 [id.0.to_string()],
                 workspace_from_row,
@@ -511,6 +517,7 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
         worktree_path: PathBuf::from(row.get::<_, String>(6)?),
         status,
         created_at: Timestamp(row.get(8)?),
+        task: row.get(9)?,
     })
 }
 

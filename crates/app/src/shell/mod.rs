@@ -376,6 +376,8 @@ struct LiveState {
     diffs: HashMap<WorkspaceId, DiffEntry>,
     /// "Max concurrent agents" and the workspaces waiting for a slot.
     agent_queue: hangar_usecases::agents::AgentQueue<queue::StartRequest>,
+    /// The queue as last saved, to write it only when it changed.
+    saved_queue: Vec<(WorkspaceId, queue::StartRequest)>,
     /// Agents spawning off the main thread: they hold a slot before they have a session.
     starting: HashSet<WorkspaceId>,
 }
@@ -600,6 +602,7 @@ impl HangarApp {
                 pane_tabs: HashMap::new(),
                 diffs: HashMap::new(),
                 agent_queue: Default::default(),
+                saved_queue: Vec::new(),
                 starting: HashSet::new(),
             },
             work: WorkState {
@@ -776,6 +779,7 @@ impl HangarApp {
                         .set_limit(hangar_usecases::agents::clamp_limit(limit));
                     self.sync_max_agents_input(window, cx);
                 }
+                self.restore_agent_queue(loaded.agent_queue, window, cx);
                 // One right panel, one tab: layouts saved before the merge may have both open.
                 if self.layout.device.open {
                     self.layout.changes.open = false;
@@ -823,6 +827,10 @@ impl HangarApp {
         // find_program stats files; cheap enough for five presets but keep it off this thread.
         let value = path.value.clone();
         self.agent_setup.path = Some(path);
+        // Starts restored from the last run waited for the PATH their agents are found on.
+        if !self.work.loading {
+            self.drain_agent_queue(window, cx);
+        }
         cx.spawn_in(window, async move |this, cx| {
             let choices = cx
                 .background_executor()

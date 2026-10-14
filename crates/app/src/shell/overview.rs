@@ -269,6 +269,15 @@ impl HangarApp {
                     )
                     .children(live.map(|l| AgentMark::new(l.session.agent.monogram()))),
             )
+            .when(ws.title() != ws.name, |this| {
+                this.child(
+                    div()
+                        .type_secondary()
+                        .text_color(t.tx2)
+                        .truncate()
+                        .child(ws.title().to_owned()),
+                )
+            })
             .child(
                 div()
                     .type_mono_small()

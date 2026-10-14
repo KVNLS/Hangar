@@ -2,6 +2,7 @@
 //! are part of the saved data: renaming one loses what users saved under it.
 
 use hangar_core::{Setting, WorkspaceId};
+use hangar_usecases::agents::StartRequest;
 
 use crate::device_panel::{DeviceKey, Platform};
 use crate::device_pool::policy::{Assignment, Limit};
@@ -26,6 +27,8 @@ pub const NOTIFY_ATTENTION: Setting<bool> = Setting::new("permissions:notify_att
 pub const APPROVAL_LEVEL: Setting<String> = Setting::new("permissions:approval_level");
 /// "Max concurrent agents": starts beyond it queue (see [`hangar_usecases::agents::AgentQueue`]).
 pub const MAX_AGENTS: Setting<u32> = Setting::new("agents:max_concurrent");
+/// Starts waiting for a slot, first to start first; they start again after a relaunch.
+pub const AGENT_QUEUE: Setting<Vec<(WorkspaceId, StartRequest)>> = Setting::new("agents:queue");
 
 pub const DEVICE_LIMIT: Setting<Limit> = Setting::new("device_pool:limit");
 pub const SINGLE_DEVICE_ALERT_SHOWN: Setting<bool> = Setting::new("device_pool:single_alert_shown");
@@ -83,6 +86,7 @@ mod tests {
         assert_eq!(APPROVAL_LEVEL.key(), "permissions:approval_level");
         assert_eq!(workspace_mode(ws).key(), format!("mode:{ws}"));
         assert_eq!(MAX_AGENTS.key(), "agents:max_concurrent");
+        assert_eq!(AGENT_QUEUE.key(), "agents:queue");
         assert_eq!(DEVICE_LIMIT.key(), "device_pool:limit");
         assert_eq!(
             SINGLE_DEVICE_ALERT_SHOWN.key(),

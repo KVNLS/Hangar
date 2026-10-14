@@ -128,6 +128,19 @@ pub struct Workspace {
     pub worktree_path: PathBuf,
     pub status: WorkspaceStatus,
     pub created_at: Timestamp,
+    /// What the agent was asked to do (the New workspace task), if anything.
+    #[serde(default)]
+    pub task: Option<String>,
+}
+
+impl Workspace {
+    /// The task's first line, else the workspace name: what review, commit and PR titles start from.
+    pub fn title(&self) -> &str {
+        self.task
+            .as_deref()
+            .and_then(|task| task.lines().map(str::trim).find(|line| !line.is_empty()))
+            .unwrap_or(&self.name)
+    }
 }
 
 /// A coding agent (or plain shell) that can run in a workspace.
@@ -224,6 +237,27 @@ mod tests {
         assert_ne!(a, ProjectId::new());
         let json = serde_json::to_string(&a).unwrap();
         assert_eq!(json, format!("\"{}\"", a.0));
+    }
+
+    #[test]
+    fn title_is_the_tasks_first_line_else_the_name() {
+        let mut ws = Workspace {
+            id: WorkspaceId::new(),
+            project_id: ProjectId::new(),
+            name: "Login".into(),
+            slug: "login".into(),
+            branch: "hangar/login".into(),
+            base: "main".into(),
+            worktree_path: PathBuf::from("/wt/login"),
+            status: WorkspaceStatus::Active,
+            created_at: Timestamp::now(),
+            task: None,
+        };
+        assert_eq!(ws.title(), "Login");
+        ws.task = Some("\n  Fix the login crash \nwith a test".into());
+        assert_eq!(ws.title(), "Fix the login crash");
+        ws.task = Some(" \n ".into());
+        assert_eq!(ws.title(), "Login");
     }
 
     #[test]

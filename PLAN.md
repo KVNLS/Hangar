@@ -304,7 +304,7 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Welcome shows agent paths and toolchain locations.
   - Settings show agent paths and versions, a Boot button on base devices, and a keybinding search.
   - New workspace shows each base branch's tip and age (new port method `VersionControl::branch_tips`, kept by the owner).
-  - Settings › Permissions › Max concurrent agents (1–32, default 8): starts beyond it queue as Idle in FIFO order (pane: place, Start now, Cancel; status bar and overview: queued count) and start, with their agent and first task, when an agent ends. Lowering it never stops agents. Queue state is in memory only: a quit forgets it.
+  - Settings › Permissions › Max concurrent agents (1–32, default 8): starts beyond it queue as Idle in FIFO order (pane: place, Start now, Cancel; status bar and overview: queued count) and start, with their agent and first task, when an agent ends. Lowering it never stops agents. The queue is saved (`agents:queue`) and comes back after a relaunch: restored starts run once the login PATH is known (see M9).
   - Settings › Permissions › Default approval mode (see M7: ACP modes; Hangar allows read/search requests once at "Auto-approve reads").
   - Settings › Permissions › Notify when an agent needs me (default on): the Dock badge counts workspaces in Approval/Input/Failed, and the Dock bounces once when one starts waiting while Hangar is in the background. Banner notifications need the .app bundle (unbundled, `UNUserNotificationCenter` throws and `NSUserNotificationCenter` is nil).
 - **Still open** (owner calls or not backed; pane tabs and ⌘R are decided, see owner decisions below):
@@ -320,7 +320,6 @@ Git access is the `git` CLI with porcelain output, not a library.
   - "Approve pending request" in the palette.
   - "Sandbox: worktree only": not shown, because agents are not sandboxed.
   - ⌘⏎ is missing from the Settings keybinding table.
-  - The review title stays the workspace name, because workspaces store no task.
 - On-screen pass (2026-10-07, dark + light, `HANGAR_DEV_SHOW` on a scratch repo):
   - Seen: workspace, review, overview, palette, new-workspace sheet, Settings › Agents / Devices / Keybindings, Device tab.
   - Fixed after the pass:
@@ -412,7 +411,15 @@ Git access is the `git` CLI with porcelain output, not a library.
   terminal agents (`--settings`, nothing written in the worktree).
 - Done: `hangar_usecases::agents` holds the max-concurrent-agents queue (`AgentQueue`) and the attention policy
   (`Attention`), moved out of `app` unchanged. The `AgentRuntime` port comes with its first caller (MCP tools).
-- Next, in order: workspace task + persisted queue; batch create and best-of-N with a compare view;
+- Done: workspaces store their task (`Workspace.task`, schema v3, `ALTER TABLE workspaces ADD COLUMN task`;
+  older rows read `None`). `Workspace::title` (the task's first line, else the name) prefills the commit
+  subject and the PR title, follows "Review ·" in the title bar, and shows under the name on overview cards.
+  Queued starts (`StartRequest`, now in `usecases::agents`) are saved on every change and restored on launch
+  for active workspaces. Checked live (scratch repo, limit 1, two workspaces): task saved and shown on the
+  cards, second start queued and saved; after quit and relaunch it started and the saved queue emptied.
+  Not shown in the sidebar (rows stay one line). A restored start begins without a click: it was asked for
+  before the quit.
+- Next, in order: batch create and best-of-N with a compare view;
   approvals inbox and palette "Approve pending request"; Claude Code hooks for terminal agents (`Input` state);
   MCP orchestration tools; typed `usage_update`; session history; transcript virtualization.
 

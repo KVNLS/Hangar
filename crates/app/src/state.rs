@@ -584,6 +584,7 @@ mod tests {
             worktree_path: format!("/wt/{name}").into(),
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
+            task: None,
         }
     }
 

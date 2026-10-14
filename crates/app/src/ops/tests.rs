@@ -84,10 +84,12 @@ fn create_workspace_from_a_base_on_a_chosen_branch() {
         &project,
         "Hotfix",
         root.path(),
-        Some("release"),
-        Some("fix/crash"),
+        (Some("release"), Some("fix/crash")),
+        Some("  Fix the crash  "),
     )
     .unwrap();
+    assert_eq!(ws.task.as_deref(), Some("Fix the crash"));
+    assert_eq!(store.get_workspace(ws.id).unwrap().task, ws.task);
     assert_eq!(
         (ws.slug.as_str(), ws.branch.as_str()),
         ("hotfix", "fix/crash")
@@ -100,20 +102,35 @@ fn create_workspace_from_a_base_on_a_chosen_branch() {
         &project,
         "again",
         root.path(),
+        (None, Some("fix/crash")),
         None,
-        Some("fix/crash"),
     );
     assert!(taken.unwrap_err().to_string().contains("already exists"));
-    let bad = create_workspace_from(&store, &project, "x", root.path(), None, Some("a..b"));
+    let bad = create_workspace_from(
+        &store,
+        &project,
+        "x",
+        root.path(),
+        (None, Some("a..b")),
+        None,
+    );
     assert!(
         bad.unwrap_err()
             .to_string()
             .contains("not a valid branch name")
     );
     // Blank fields fall back to the defaults.
-    let ws =
-        create_workspace_from(&store, &project, "plain", root.path(), Some(" "), Some("")).unwrap();
+    let ws = create_workspace_from(
+        &store,
+        &project,
+        "plain",
+        root.path(),
+        (Some(" "), Some("")),
+        Some(" "),
+    )
+    .unwrap();
     assert_eq!(ws.branch, "hangar/plain");
+    assert_eq!(ws.task, None);
     assert_eq!(ws.base, project.default_base);
 }
 
@@ -492,6 +509,7 @@ fn delete_refuses_paths_that_are_not_linked_worktrees() {
             worktree_path: path.clone(),
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
+            task: None,
         };
         f.store.insert_workspace(&ws).unwrap();
         let force = DeleteOptions {
@@ -783,4 +801,30 @@ fn workspace_mode_wins_for_its_agent_only() {
             mode: "plan".into()
         })
     );
+}
+
+#[test]
+fn queued_starts_are_saved_and_loaded_in_order() {
+    let store = Store::open_in_memory().unwrap();
+    assert!(load(&store).unwrap().agent_queue.is_empty());
+    let queue = vec![
+        (
+            WorkspaceId::new(),
+            StartRequest {
+                agent: "claude-acp".into(),
+                resume: false,
+                input: Some("Fix the login".into()),
+            },
+        ),
+        (
+            WorkspaceId::new(),
+            StartRequest {
+                agent: "codex".into(),
+                resume: true,
+                input: None,
+            },
+        ),
+    ];
+    save_agent_queue(&store, &queue).unwrap();
+    assert_eq!(load(&store).unwrap().agent_queue, queue);
 }

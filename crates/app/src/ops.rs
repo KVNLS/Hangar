@@ -12,6 +12,7 @@ use hangar_agents::acp::approval::ApprovalLevel;
 use hangar_agents::acp::protocol::SessionMode;
 use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext, UpdateHook};
+use hangar_usecases::agents::StartRequest;
 
 use crate::pty::{self, AgentHandle};
 use hangar_core::ports::Store;
@@ -50,6 +51,8 @@ pub struct Loaded {
     pub notify_attention: Option<bool>,
     /// "Max concurrent agents".
     pub max_agents: Option<u32>,
+    /// Starts that were waiting for a slot when Hangar quit.
+    pub agent_queue: Vec<(WorkspaceId, StartRequest)>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -264,6 +267,16 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
             None
         }
     };
+    let agent_queue = match store
+        .get_setting(&setting_keys::AGENT_QUEUE)
+        .context("failed to read the queued agent starts")
+    {
+        Ok(queue) => queue.unwrap_or_default(),
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            Vec::new()
+        }
+    };
     Ok(Loaded {
         entries,
         chats,
@@ -275,6 +288,7 @@ pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
         ollama,
         notify_attention,
         max_agents,
+        agent_queue,
         settings_error,
     })
 }
@@ -321,6 +335,15 @@ pub fn save_max_agents(store: &dyn Store, limit: u32) -> anyhow::Result<()> {
         .context("failed to save the max concurrent agents")
 }
 
+pub fn save_agent_queue(
+    store: &dyn Store,
+    queue: &[(WorkspaceId, StartRequest)],
+) -> anyhow::Result<()> {
+    store
+        .set_setting(&setting_keys::AGENT_QUEUE, &queue.to_vec())
+        .context("failed to save the queued agent starts")
+}
+
 pub fn save_agent(store: &dyn Store, agent: &str) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::AGENT, &agent.to_owned())
@@ -340,21 +363,21 @@ pub fn create_workspace(
     name: &str,
     worktrees_root: &Path,
 ) -> anyhow::Result<Workspace> {
-    create_workspace_from(store, project, name, worktrees_root, None, None)
+    create_workspace_from(store, project, name, worktrees_root, (None, None), None)
 }
 
 /// As [`create_workspace`], starting from `base` (default: the project's default base) on a
 /// branch named `branch` (default: `hangar/<slug>`, suffixed until free). A given branch name is
-/// used as is and must not exist yet.
+/// used as is and must not exist yet. `task` is saved with the workspace.
 pub fn create_workspace_from(
     store: &dyn Store,
     project: &Project,
     name: &str,
     worktrees_root: &Path,
-    base: Option<&str>,
-    branch: Option<&str>,
+    branches: (Option<&str>, Option<&str>),
+    task: Option<&str>,
 ) -> anyhow::Result<Workspace> {
-    Ok(workspaces(store).create(project, name, worktrees_root, base, branch)?)
+    Ok(workspaces(store).create(project, name, worktrees_root, branches, task)?)
 }
 
 pub struct StartedSession {

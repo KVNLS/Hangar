@@ -6,17 +6,8 @@ use gpui_kit::assets::IconName as Lucide;
 use super::toast::ToastKind;
 use super::*;
 use crate::ui::components::{EmptyState, UiButton};
+pub(super) use hangar_usecases::agents::StartRequest;
 use hangar_usecases::agents::{Admission, DEFAULT_MAX_AGENTS, MAX_AGENTS_RANGE, clamp_limit};
-
-/// What to start in a workspace, kept while it waits for a slot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct StartRequest {
-    pub agent: String,
-    /// Continue the saved structured conversation (see [`HangarApp::resumable_chat`]).
-    pub resume: bool,
-    /// Typed into the agent once it runs (the New workspace sheet's task, `HANGAR_DEV_INPUT`).
-    pub input: Option<String>,
-}
 
 impl HangarApp {
     /// Live agents that hold a slot: sessions not yet ended, plus those still spawning.
@@ -52,6 +43,7 @@ impl HangarApp {
                     .map(|ws| ws.name.clone())
                     .unwrap_or_default();
                 tracing::info!(workspace = %id, ahead, running, "agent start queued");
+                self.save_agent_queue(window, cx);
                 let limit = self.live.agent_queue.limit();
                 self.show_toast(
                     ToastKind::Info,
@@ -66,8 +58,13 @@ impl HangarApp {
         }
     }
 
-    /// Starts queued workspaces while slots are free, oldest first.
+    /// Starts queued workspaces while slots are free, oldest first, then saves what still
+    /// waits. Waits for the login PATH, without which agents may not be found.
     pub(super) fn drain_agent_queue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agent_setup.path.is_none() {
+            self.save_agent_queue(window, cx);
+            return;
+        }
         while let Some((id, request)) = self.live.agent_queue.next(self.running_agents()) {
             if !self.work.projects.is_active(id) || self.work.busy.contains(&id) {
                 continue;
@@ -75,7 +72,45 @@ impl HangarApp {
             tracing::info!(workspace = %id, "starting queued agent");
             self.launch_session(id, request, window, cx).detach();
         }
+        self.save_agent_queue(window, cx);
         cx.notify();
+    }
+
+    /// Puts back the starts that waited when Hangar quit (workspaces still active only) and
+    /// starts those that fit.
+    pub(super) fn restore_agent_queue(
+        &mut self,
+        saved: Vec<(WorkspaceId, StartRequest)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.live.saved_queue = saved.clone();
+        let saved: Vec<_> = saved
+            .into_iter()
+            .filter(|(id, _)| self.work.projects.is_active(*id))
+            .collect();
+        if !saved.is_empty() {
+            tracing::info!(count = saved.len(), "restoring queued agent starts");
+        }
+        self.live.agent_queue.restore(saved);
+        self.drain_agent_queue(window, cx);
+    }
+
+    /// Saves the queue when it differs from the last saved one.
+    fn save_agent_queue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let queue: Vec<(WorkspaceId, StartRequest)> = self
+            .live
+            .agent_queue
+            .waiting()
+            .map(|(id, request)| (id, request.clone()))
+            .collect();
+        if queue == self.live.saved_queue {
+            return;
+        }
+        self.live.saved_queue = queue.clone();
+        self.persist(window, cx, move |store| {
+            ops::save_agent_queue(store, &queue)
+        });
     }
 
     /// How many workspaces wait before `id`, if it is queued.
@@ -92,11 +127,13 @@ impl HangarApp {
         if let Some(request) = self.live.agent_queue.remove(id) {
             self.launch_session(id, request, window, cx).detach();
         }
+        self.save_agent_queue(window, cx);
         cx.notify();
     }
 
-    fn cancel_queued(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
+    fn cancel_queued(&mut self, id: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) {
         self.live.agent_queue.remove(id);
+        self.save_agent_queue(window, cx);
         cx.notify();
     }
 
@@ -185,7 +222,9 @@ impl HangarApp {
                     .label("Cancel")
                     .ghost()
                     .small()
-                    .on_click(cx.listener(move |this, _, _, cx| this.cancel_queued(id, cx))),
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.cancel_queued(id, window, cx)),
+                    ),
             )
     }
 }

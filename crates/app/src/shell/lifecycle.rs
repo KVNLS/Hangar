@@ -46,6 +46,7 @@ impl HangarApp {
         self.work.creating.insert(project_id);
         cx.notify();
 
+        let task = input.clone();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -56,8 +57,8 @@ impl HangarApp {
                         &project,
                         &name,
                         &root,
-                        base.as_deref(),
-                        branch.as_deref(),
+                        (base.as_deref(), branch.as_deref()),
+                        task.as_deref(),
                     )
                 })
                 .await;

@@ -182,15 +182,17 @@ impl<'a> Workspaces<'a> {
     /// Creates the branch, the worktree and the workspace row, starting from `base` (default:
     /// the project's default base) on a branch named `branch` (default: `hangar/<slug>`,
     /// suffixed until free). The slug gets a numeric suffix when the name, branch or directory
-    /// is already taken; a given branch name is used as is and must not exist yet.
+    /// is already taken; a given branch name is used as is and must not exist yet. `task` is what
+    /// the agent is asked to do, saved with the workspace.
     pub fn create(
         &self,
         project: &Project,
         name: &str,
         worktrees_root: &Path,
-        base: Option<&str>,
-        branch: Option<&str>,
+        (base, branch): (Option<&str>, Option<&str>),
+        task: Option<&str>,
     ) -> Result<Workspace> {
+        let task = task.map(str::trim).filter(|t| !t.is_empty());
         let name = name.trim();
         if name.is_empty() {
             return Err(WorkspaceError::EmptyName);
@@ -264,6 +266,7 @@ impl<'a> Workspaces<'a> {
             worktree_path: created,
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
+            task: task.map(str::to_owned),
         };
         if let Err(err) = self.store.insert_workspace(&workspace) {
             self.rollback(repo, &path, &workspace.branch);
@@ -441,7 +444,7 @@ mod tests {
         );
         let project = project(&store);
         let ws = Workspaces::new(&store, &git)
-            .create(&project, " Fix login ", &root(), None, None)
+            .create(&project, " Fix login ", &root(), (None, None), None)
             .unwrap();
         assert_eq!(
             (ws.name.as_str(), ws.slug.as_str()),
@@ -462,7 +465,7 @@ mod tests {
         let git = FakeGit::default();
         let project = project(&store);
         let err = Workspaces::new(&store, &git)
-            .create(&project, "Fix", &root(), Some("develop"), None)
+            .create(&project, "Fix", &root(), (Some("develop"), None), None)
             .unwrap_err();
         assert!(matches!(err, WorkspaceError::SaveWorkspace(_)), "{err}");
         let path = root().join("my-app/fix");
@@ -483,15 +486,15 @@ mod tests {
         let project = project(&store);
         let workspaces = Workspaces::new(&store, &git);
         let err = workspaces
-            .create(&project, "x", &root(), None, Some("bad name"))
+            .create(&project, "x", &root(), (None, Some("bad name")), None)
             .unwrap_err();
         assert_eq!(err.to_string(), "`bad name` is not a valid branch name");
         let err = workspaces
-            .create(&project, "x", &root(), None, Some("taken"))
+            .create(&project, "x", &root(), (None, Some("taken")), None)
             .unwrap_err();
         assert_eq!(err.to_string(), "branch `taken` already exists");
         let err = workspaces
-            .create(&project, "  ", &root(), None, None)
+            .create(&project, "  ", &root(), (None, None), None)
             .unwrap_err();
         assert_eq!(err.to_string(), "workspace name is empty");
         assert!(git.calls().is_empty());
@@ -520,6 +523,7 @@ mod tests {
             worktree_path: main.clone(),
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
+            task: None,
         };
         store.insert_workspace(&ws).unwrap();
         let err = Workspaces::new(&store, &git)
@@ -536,7 +540,7 @@ mod tests {
         let project = project(&store);
         let workspaces = Workspaces::new(&store, &git);
         workspaces
-            .create(&project, "One", &root(), None, None)
+            .create(&project, "One", &root(), (None, None), None)
             .unwrap();
         let err = workspaces.remove_project(project.id).unwrap_err();
         assert_eq!(

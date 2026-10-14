@@ -100,7 +100,7 @@ impl HangarApp {
                 let project = self.work.projects.project(ws.project_id)?;
                 Some(PanelSource {
                     workspace: id,
-                    name: SharedString::from(ws.name.clone()),
+                    name: SharedString::from(ws.title().to_owned()),
                     diff: entry.diff.clone(),
                     target: ReviewTarget {
                         workspace: ws.clone(),

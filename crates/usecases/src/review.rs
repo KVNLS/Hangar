@@ -253,6 +253,7 @@ mod tests {
                 worktree_path: "/wt/x".into(),
                 status: WorkspaceStatus::Active,
                 created_at: Timestamp::now(),
+                task: None,
             },
             repo: "/repo".into(),
         }
