@@ -53,6 +53,19 @@ fn main() -> anyhow::Result<()> {
                 one_input = Some(bench::Action::Input(hangar_devices::Input::VolumeDown))
             }
             "--home" => one_input = Some(bench::Action::Input(hangar_devices::Input::Home)),
+            "--rotate" => {
+                use hangar_devices::Orientation as O;
+                let v = args.next().context(
+                    "--rotate needs portrait|upside-down|landscape-left|landscape-right",
+                )?;
+                one_input = Some(bench::Action::Rotate(match v.as_str() {
+                    "portrait" => O::Portrait,
+                    "upside-down" => O::PortraitUpsideDown,
+                    "landscape-left" => O::LandscapeLeft,
+                    "landscape-right" => O::LandscapeRight,
+                    other => bail!("unknown orientation {other:?}"),
+                }));
+            }
             "--text" => {
                 one_input = Some(bench::Action::Text(
                     args.next().context("--text needs a string")?,
@@ -66,7 +79,7 @@ fn main() -> anyhow::Result<()> {
             "--out" => out = args.next().context("--out needs a directory")?.into(),
             "-h" | "--help" => {
                 println!(
-                    "spike_sim [--backend private|simctl] [--udid UDID] [--bench SECS | --tap X,Y | --home] [--out DIR]"
+                    "spike_sim [--backend private|simctl] [--udid UDID] [--out DIR]\n  [--bench SECS | --tap X,Y | --home | --lock | --volume-up | --volume-down | --text STR | --rotate ORIENTATION]\n  spike_sim --list | [--udid UDID] [--boot UDID|-] [--shutdown UDID|-] [--install APP] [--launch BUNDLE_ID]"
                 );
                 return Ok(());
             }

@@ -264,6 +264,7 @@ pub fn input_once(device: &dyn Device, action: Action, out_dir: &Path) -> Result
     match &action {
         Action::Input(input) => device.send_input(*input),
         Action::Text(text) => device.send_text(text),
+        Action::Rotate(o) => device.set_orientation(*o),
     }
     .context("send")?;
     println!("{action:?} sent in {:.1} ms", ms(t0.elapsed()));
@@ -287,4 +288,5 @@ fn ms(d: Duration) -> f64 {
 pub enum Action {
     Input(Input),
     Text(String),
+    Rotate(hangar_devices::Orientation),
 }

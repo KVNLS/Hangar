@@ -56,7 +56,9 @@ Git access is the `git` CLI with porcelain output, not a library.
 10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
 
 ## Explicitly unimplemented (return `Unsupported`)
-- `devices`: `boot`, `install`, `launch`, `logs`; simctl backend input on Xcode 27.
+- `devices`: `logs`; `set_orientation` (iOS: no working route on Xcode 27, see spikes/m5-ios-notes.md);
+  simctl backend: input on Xcode 27 (Device Hub), `send_text`, `Lock`/volume buttons (private backend only);
+  iOS `AppSwitch`/`Back`; text beyond printable ASCII + `\n`/`\t` on the private backend.
 
 ## What M1 taught us
 - GPUI comes through `gpui-kit` (same repo/rev as gpui-component). gpui-kit's Root binds Tab/Shift-Tab for
@@ -88,6 +90,10 @@ Git access is the `git` CLI with porcelain output, not a library.
 - M3 review actions: stage/commit (hooks respected), push (never forced; workspace branches created with
   `--no-track` so push never lands on base), PR via `gh` (status, create, link), merge into base (NoFf/Squash)
   only in a clean checkout of base, pre-checked with `git merge-tree`.
+
+- M5 headless (iOS): `simctl::list_all`, `ios::boot/shutdown`, `Device::{boot,shutdown,install,launch}` on both
+  backends, private-backend `Lock`/`VolumeUp`/`VolumeDown` and `send_text` through Indigo HID
+  (spikes/m5-ios-notes.md).
 
 ## Remaining gaps
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.

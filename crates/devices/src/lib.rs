@@ -154,6 +154,16 @@ pub enum Input {
     AppSwitch,
 }
 
+/// Physical orientation of the device (UIDeviceOrientation naming: the side the home indicator
+/// or top edge points to).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientation {
+    Portrait,
+    PortraitUpsideDown,
+    LandscapeLeft,
+    LandscapeRight,
+}
+
 /// Latest-frame channel: receivers always see the most recent frame; slow consumers skip frames.
 pub type FrameReceiver = tokio::sync::watch::Receiver<Option<Frame>>;
 pub type FrameSender = tokio::sync::watch::Sender<Option<Frame>>;
@@ -175,6 +185,12 @@ pub trait Device: Send + Sync {
     /// Types text into the focused field.
     fn send_text(&self, _text: &str) -> Result<()> {
         Err(Error::Unsupported("text input"))
+    }
+
+    /// Rotates the device. Unsupported on iOS (no public or reverse-engineered route works on
+    /// Xcode 27, see spikes/m5-ios-notes.md); not implemented for Android yet.
+    fn set_orientation(&self, _orientation: Orientation) -> Result<()> {
+        Err(Error::Unsupported("set_orientation"))
     }
 
     fn boot(&self) -> Result<()> {
