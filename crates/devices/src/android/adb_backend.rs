@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use super::adb::{Adb, escape_input_text};
 use crate::geometry::device_to_pixels;
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Orientation, Platform,
-    Result, ScreenSpec,
+    Device, DeviceInfo, Error, Frame, FramePixels, FrameReceiver, FrameSender, Input, Orientation,
+    Platform, Result, ScreenSpec,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -121,8 +121,10 @@ pub fn screenshot(adb: &Adb, serial: &str, capture: Capture) -> Result<Frame> {
     Ok(Frame {
         width,
         height,
-        stride: width as usize * 4,
-        bgra: Arc::from(bgra),
+        pixels: FramePixels::Bgra {
+            stride: width as usize * 4,
+            data: Arc::from(bgra),
+        },
         // The capture happens somewhere inside the round trip; the start bounds the latency.
         captured_at: started,
         seq: 0,

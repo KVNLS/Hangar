@@ -172,31 +172,88 @@ pub struct DeviceInfo {
     pub screen: Option<ScreenSpec>,
 }
 
-/// One captured frame, tightly packed BGRA (`stride == width * 4` unless stated otherwise).
+/// One frame of a device screen, `width` x `height` BGRA pixels.
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub stride: usize,
-    pub bgra: Arc<[u8]>,
+    pub pixels: FramePixels,
     pub captured_at: Instant,
     pub seq: u64,
 }
 
+#[derive(Debug, Clone)]
+pub enum FramePixels {
+    /// Captured bytes, `stride` bytes per row.
+    Bgra { stride: usize, data: Arc<[u8]> },
+    /// A surface the backend keeps drawing into, shared with the GPU so the UI can show it without
+    /// copying. Its contents are those of "now", not of the frame's `seq`.
+    Live(Arc<dyn LiveSurface>),
+}
+
+pub trait LiveSurface: Send + Sync + std::fmt::Debug + std::any::Any {
+    /// Copies the current contents as tightly packed BGRA (`width * 4` bytes per row), or `None`
+    /// if the surface cannot be read.
+    fn snapshot(&self) -> Option<Vec<u8>>;
+}
+
 impl Frame {
-    /// Fraction (0..=1) of sampled pixels that differ between two frames; 1.0 if sizes differ.
+    /// A frame of captured bytes.
+    pub fn bgra(width: u32, height: u32, stride: usize, data: Arc<[u8]>, seq: u64) -> Self {
+        Self {
+            width,
+            height,
+            pixels: FramePixels::Bgra { stride, data },
+            captured_at: Instant::now(),
+            seq,
+        }
+    }
+
+    /// The captured bytes and their stride; `None` for a live surface (see [`Frame::snapshot`]).
+    pub fn bytes(&self) -> Option<(usize, &[u8])> {
+        match &self.pixels {
+            FramePixels::Bgra { stride, data } => Some((*stride, data)),
+            FramePixels::Live(_) => None,
+        }
+    }
+
+    /// This frame with its pixels frozen: a copy of a live surface's current contents, or a cheap
+    /// clone of captured bytes. `None` if the surface cannot be read.
+    pub fn snapshot(&self) -> Option<Frame> {
+        let FramePixels::Live(surface) = &self.pixels else {
+            return Some(self.clone());
+        };
+        let stride = self.width as usize * 4;
+        let data = surface.snapshot()?;
+        if data.len() < stride * self.height as usize {
+            return None;
+        }
+        Some(Frame {
+            pixels: FramePixels::Bgra {
+                stride,
+                data: Arc::from(data),
+            },
+            ..self.clone()
+        })
+    }
+
+    /// Fraction (0..=1) of sampled pixels that differ between two frames; 1.0 if sizes differ or
+    /// either side is a live surface (snapshot both first).
     pub fn diff_ratio(&self, other: &Frame) -> f64 {
         if self.width != other.width || self.height != other.height {
             return 1.0;
         }
+        let (Some((sa, a_px)), Some((sb, b_px))) = (self.bytes(), other.bytes()) else {
+            return 1.0;
+        };
         const STEP: usize = 7; // sample every 7th pixel in both directions
         let (mut total, mut changed) = (0u64, 0u64);
         for y in (0..self.height as usize).step_by(STEP) {
             for x in (0..self.width as usize).step_by(STEP) {
-                let a = y * self.stride + x * 4;
-                let b = y * other.stride + x * 4;
+                let a = y * sa + x * 4;
+                let b = y * sb + x * 4;
                 total += 1;
-                if self.bgra.get(a..a + 3) != other.bgra.get(b..b + 3) {
+                if a_px.get(a..a + 3) != b_px.get(b..b + 3) {
                     changed += 1;
                 }
             }
@@ -376,5 +433,53 @@ mod tests {
         ] {
             assert!(Capabilities::ALL.accepts(&input), "{input:?}");
         }
+    }
+
+    #[derive(Debug)]
+    struct Surface(std::sync::Mutex<u8>);
+
+    impl LiveSurface for Surface {
+        fn snapshot(&self) -> Option<Vec<u8>> {
+            let fill = *self.0.lock().ok()?;
+            Some(vec![fill; 4 * 4 * 2])
+        }
+    }
+
+    fn live(surface: &Arc<Surface>) -> Frame {
+        Frame {
+            pixels: FramePixels::Live(surface.clone()),
+            ..Frame::bgra(4, 2, 16, Arc::from(vec![0u8; 32]), 1)
+        }
+    }
+
+    #[test]
+    fn snapshot_freezes_live_surfaces() {
+        let surface = Arc::new(Surface(std::sync::Mutex::new(7)));
+        let frame = live(&surface);
+        assert!(frame.bytes().is_none());
+        let before = frame.snapshot().unwrap();
+        assert_eq!(before.bytes().unwrap(), (16, &[7u8; 32][..]));
+        *surface.0.lock().unwrap() = 9;
+        let after = frame.snapshot().unwrap();
+        assert_eq!(after.diff_ratio(&before), 1.0);
+        assert_eq!(after.diff_ratio(&after.clone()), 0.0);
+        assert_eq!(before.bytes().unwrap().1[0], 7);
+    }
+
+    #[test]
+    fn diff_ratio_refuses_live_frames() {
+        let surface = Arc::new(Surface(std::sync::Mutex::new(0)));
+        let frame = live(&surface);
+        assert_eq!(frame.diff_ratio(&frame), 1.0);
+    }
+
+    #[test]
+    fn short_snapshots_are_rejected() {
+        let surface = Arc::new(Surface(std::sync::Mutex::new(0)));
+        let frame = Frame {
+            width: 100,
+            ..live(&surface)
+        };
+        assert!(frame.snapshot().is_none());
     }
 }

@@ -31,7 +31,8 @@ fn wait_frame(device: &dyn Device) -> TestResult<Frame> {
 fn check_frame(info: &DeviceInfo, f: &Frame) -> TestResult {
     let screen = info.screen.ok_or("no screen spec")?;
     assert_eq!((f.width, f.height), (screen.width_px, screen.height_px));
-    assert_eq!(f.bgra.len(), f.stride * f.height as usize);
+    let (stride, bytes) = f.bytes().ok_or("adb frames carry bytes")?;
+    assert_eq!(bytes.len(), stride * f.height as usize);
     Ok(())
 }
 

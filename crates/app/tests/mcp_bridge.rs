@@ -6,7 +6,7 @@
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use hangar_app::mcp_host::{McpRequest, ScreenFrame, Timeouts, start_with};
 use hangar_core::WorkspaceId;
@@ -19,14 +19,8 @@ fn fake_gpui_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>) {
             match req {
                 McpRequest::Frame { reply, .. } => {
                     let (w, h) = (1206u32, 2622u32);
-                    let frame = Frame {
-                        width: w,
-                        height: h,
-                        stride: w as usize * 4,
-                        bgra: Arc::from(vec![128u8; w as usize * h as usize * 4]),
-                        captured_at: Instant::now(),
-                        seq: 1,
-                    };
+                    let bgra = Arc::from(vec![128u8; w as usize * h as usize * 4]);
+                    let frame = Frame::bgra(w, h, w as usize * 4, bgra, 1);
                     let _ = reply.send(Ok(ScreenFrame {
                         frame,
                         width_pt: 402.0,

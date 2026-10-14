@@ -2497,8 +2497,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-apple"
 version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00053551517815ab169fda28fff78dbebf2712722593c7671c511785cb3f79d5"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -2990,6 +2988,8 @@ name = "hangar-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "core-foundation 0.10.1",
+ "core-video",
  "gpui-kit",
  "hangar-agents",
  "hangar-core",
@@ -3005,7 +3005,9 @@ dependencies = [
  "libc",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-io-surface",
  "serde",
  "serde_json",
  "tempfile",

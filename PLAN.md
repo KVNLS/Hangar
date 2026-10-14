@@ -73,8 +73,16 @@ What each milestone shipped and how it was checked: docs/HISTORY.md.
    (only in `hangar-app::paths::worktrees_root`) vs `<repo>/../.hangar-worktrees/<slug>`.
 2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (SPIKES.md).
    Keep `sim_probe` to re-check each Xcode release.
-3. Frame transport into GPUI: today BGRA copied twice (~12.6 MB/frame). Zero-copy via GPUI `paint_surface`
-   needs a CoreVideo binding (new dependency, needs approval).
+3. ~~Frame transport into GPUI~~ — resolved (2026-10-08, branch `zero-copy-frames`): the private iOS backend
+   publishes the simulator's framebuffer IOSurface itself (`FramePixels::Live`), and `device_view` paints it
+   through a `CVPixelBuffer` with `paint_surface`. No CPU copy, no atlas upload. GPUI's renderer only drew NV12
+   surfaces, so `third_party/gpui-pre-apple` carries a port of zed PR #61291 (BGRA surfaces, linear sampling)
+   until our gpui-component pin ships it (see its `HANGAR_PATCH.md`). Screenshots, PNGs and dev-hook diffs
+   snapshot the surface on demand. Measured (debug build, same app-switching workload): Hangar CPU 35% → 23%
+   of a core, capture→paint about 9 ms → 7 ms. Rejected: VideoToolbox BGRA→NV12 (extra GPU pass, 4:2:0 chroma
+   blurs text colour); a native `CALayer` showing the IOSurface (sits above GPUI's Metal layer, so popovers and
+   menus would draw under it). simctl and Android frames still go through `RenderImage` (one decode copy plus
+   the atlas upload); gRPC frames could later be written into an IOSurface-backed buffer.
 4. Android frames: emulator gRPC console vs scrcpy protocol.
 5. ~~Per-worktree ports for Metro/Expo~~ — resolved (M6): 8100–8199 per workspace, saved in `settings`, must bind
    on localhost; passed as `--port` and `RCT_METRO_PORT`, `adb reverse` on Android (spikes/m6-run-notes.md).
@@ -113,8 +121,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   Claude Code.
 
 ## Known gaps
-- **Devices:** frames copied twice (question 3); log lines from several processes can arrive a few ms out
-  of order; logs: no multi-line merging, level filter client-side (low lines still fill the ring buffer),
+- **Devices:** simctl and Android frames still copied into the atlas (question 3); log lines from several
+  processes can arrive a few ms out of order; logs: no multi-line merging, level filter client-side (low lines still fill the ring buffer),
   follow-tail ignores scrollbar drags (no scrollbar); emulators started outside Hangar keep Gboard's stylus
   sheet; iOS `logs` tool only returns a ~1.5 s capture; `AvdCost` can understate RAM; no queue position in
   single-device mode; `HANGAR_DEVICE_ID`/`ANDROID_SERIAL` empty when the agent starts before its device;

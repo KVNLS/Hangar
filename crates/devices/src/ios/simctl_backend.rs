@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use crate::{Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Result};
+use crate::{
+    Device, DeviceInfo, Error, Frame, FramePixels, FrameReceiver, FrameSender, Input, Result,
+};
 
 pub struct SimctlSimulator {
     info: DeviceInfo,
@@ -82,8 +84,10 @@ pub fn screenshot(udid: &str) -> Result<Frame> {
     Ok(Frame {
         width,
         height,
-        stride: width as usize * 4,
-        bgra: Arc::from(bgra),
+        pixels: FramePixels::Bgra {
+            stride: width as usize * 4,
+            data: Arc::from(bgra),
+        },
         // simctl captures somewhere inside this window; the start time bounds the latency.
         captured_at: started,
         seq: 0,
