@@ -267,19 +267,25 @@ Git access is the `git` CLI with porcelain output, not a library.
 
 ## Remaining gaps
 - UI vs mockup: New workspace sheet has no base-branch / new-branch fields (branch shown in the footer only);
-  Settings › Agents keeps a disabled "Make default" on the default row; the device panel shows a
-  `backend: …` status line the mockup does not have; the overview card's last line is often the shell prompt.
-- Archived rows: click does nothing (restore via menu). Layout saved without debounce.
+  the device panel shows a `backend: …` status line the mockup does not have.
 - Terminal: no block selection, right-click menu, middle-click paste.
-- Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
-- Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
+- Review: no pull/rebase after a rejected push; merged base not pushed.
 - Agents: if Hangar crashes or is killed, codex-acp (ignores a closed stdin) keeps running; the Files code
   viewer (gpui-component editor) still draws Geist Mono's `--` ligatures.
 - Devices: logs pane fixed height, no horizontal scroll (long lines cut), lines from several processes can
-  arrive a few ms out of order; the device picker shows the base model ("iPhone 17 Pro · iOS 26.5") while the
-  panel runs the workspace's clone. Android boot stage text not seen yet: the only AVD (Pixel_10_Pro) was
-  already running outside Hangar (the pool refuses a second instance, and offers "Shut down … and retry").
-  Emulators started outside Hangar keep Gboard's stylus sheet until `stylus_handwriting_enabled` is turned off.
+  arrive a few ms out of order. The device picker names the base model ("iPhone 17 Pro · iOS 26.5") the
+  workspace's clone is made from (by design for now; the backend line names the clone). Android boot stage
+  text not seen yet: the only AVD (Pixel_10_Pro) was already running outside Hangar (the pool refuses a
+  second instance, and offers "Shut down … and retry"). Emulators started outside Hangar keep Gboard's stylus
+  sheet until `stylus_handwriting_enabled` is turned off.
+
+## Closed gaps (2026-10-05, unit-tested, not checked on screen)
+- Push: git runs in its own session (no terminal for ssh prompts) and push gives up after 120 s
+  (`Error::Timeout`, git's process group killed).
+- Diff: untracked files go through one `git diff -M` via a scratch index (intent-to-add) and scratch object
+  store in the temp dir; plain `mv` shows as a rename; nothing is written in the git directory (watchers).
+- Pane layout saves are debounced (flushed on quit); Settings › Agents shows "Default" on the default row;
+  clicking an archived workspace restores and opens it; the overview's last line skips a waiting prompt.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a
