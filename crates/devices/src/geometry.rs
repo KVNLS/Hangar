@@ -76,6 +76,27 @@ pub fn device_to_pixels(x: f64, y: f64, screen: &crate::ScreenSpec) -> (i32, i32
     (clamp(x, screen.width_px), clamp(y, screen.height_px))
 }
 
+/// Pixel of the oriented display (the frame's space) → pixel of the natural portrait panel.
+/// The Android emulator's `sendTouch` takes panel coordinates even though its screenshots are
+/// rotated upright. `panel` is the portrait spec; results are clamped to it.
+pub fn panel_pixels(
+    x: i32,
+    y: i32,
+    panel: &crate::ScreenSpec,
+    orientation: crate::Orientation,
+) -> (i32, i32) {
+    use crate::Orientation::{LandscapeLeft, LandscapeRight, Portrait, PortraitUpsideDown};
+    let spec = panel.oriented(false);
+    let (w, h) = (spec.width_px as i32 - 1, spec.height_px as i32 - 1);
+    let (px, py) = match orientation {
+        Portrait => (x, y),
+        LandscapeLeft => (w - y, x),
+        PortraitUpsideDown => (w - x, h - y),
+        LandscapeRight => (y, h - x),
+    };
+    (px.clamp(0, w), py.clamp(0, h))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +173,49 @@ mod tests {
     fn unit_is_clamped() {
         assert_eq!(device_to_unit(201.0, 437.0, 402.0, 874.0), (0.5, 0.5));
         assert_eq!(device_to_unit(-5.0, 2000.0, 402.0, 874.0), (0.0, 1.0));
+    }
+
+    #[test]
+    fn panel_mapping_per_orientation() {
+        use crate::Orientation::*;
+        let s = crate::ScreenSpec {
+            width_px: 1280,
+            height_px: 2856,
+            scale: 3.0,
+        };
+        // Verified on the emulator: the Settings search bar at frame px (1430, 286) in
+        // landscape-left is hit by panel touch (993, 1430).
+        assert_eq!(panel_pixels(1430, 286, &s, LandscapeLeft), (993, 1430));
+        assert_eq!(
+            panel_pixels(1430, 286, &s, LandscapeRight),
+            (286, 2855 - 1430)
+        );
+        assert_eq!(panel_pixels(100, 200, &s, Portrait), (100, 200));
+        assert_eq!(panel_pixels(100, 200, &s, PortraitUpsideDown), (1179, 2655));
+        // Frame corners land on panel corners; out-of-range input is clamped.
+        assert_eq!(panel_pixels(0, 0, &s, LandscapeLeft), (1279, 0));
+        assert_eq!(panel_pixels(2855, 1279, &s, LandscapeLeft), (0, 2855));
+        assert_eq!(panel_pixels(5000, -5, &s, LandscapeRight), (0, 0));
+    }
+
+    #[test]
+    fn oriented_screen_spec_and_pixels() {
+        let s = crate::ScreenSpec {
+            width_px: 1280,
+            height_px: 2856,
+            scale: 3.0,
+        };
+        let l = s.oriented(true);
+        assert_eq!((l.width_px, l.height_px), (2856, 1280));
+        assert_eq!(l.oriented(true), l);
+        assert_eq!(l.oriented(false), s);
+        assert_eq!(
+            device_to_pixels(l.width_pt(), l.height_pt(), &l),
+            (2855, 1279)
+        );
+        // A frame-space click in a half-size letterboxed landscape view.
+        let (x, y) =
+            view_to_device(1000.0, 200.0, 2000.0, 896.0, l.width_pt(), l.height_pt()).unwrap();
+        assert_eq!(device_to_pixels(x, y, &l), (1428, 286));
     }
 }

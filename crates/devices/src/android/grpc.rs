@@ -124,6 +124,28 @@ pub(crate) fn text_event(text: &str) -> proto::KeyboardEvent {
     }
 }
 
+/// Sensor angles in degrees `[x, y, z]` that make Android pick `orientation` (z is the turn in
+/// the screen plane, positive counter-clockwise).
+pub(crate) fn rotation_angles(orientation: crate::Orientation) -> [f32; 3] {
+    let z = match orientation {
+        crate::Orientation::Portrait => 0.0,
+        crate::Orientation::LandscapeLeft => 90.0,
+        crate::Orientation::PortraitUpsideDown => 180.0,
+        crate::Orientation::LandscapeRight => -90.0,
+    };
+    [0.0, 0.0, z]
+}
+
+pub(crate) fn rotation_model(x: f32, y: f32, z: f32) -> proto::PhysicalModelValue {
+    proto::PhysicalModelValue {
+        target: proto::physical_model_value::PhysicalType::Rotation as i32,
+        status: 0,
+        value: Some(proto::ParameterValue {
+            data: vec![x, y, z],
+        }),
+    }
+}
+
 /// Pressure and contact size the emulator itself uses when it turns a mouse click into a touch
 /// (seen with `getevent`), so injected touches look like ordinary finger contacts.
 const PRESSURE: i32 = 0x400;

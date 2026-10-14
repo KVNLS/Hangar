@@ -1,6 +1,7 @@
 //! Primary Android backend: frames via `streamScreenshot`, input via `sendTouch`/`sendKey`.
 //! Owns its tokio runtime so callers need none.
 
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -9,10 +10,10 @@ use tokio::runtime::Runtime;
 use super::emulator::{self, BootOptions, RunningEmulator};
 use super::grpc::{self, Client, keys, proto};
 use super::sdk::AndroidSdk;
-use crate::geometry::device_to_pixels;
+use crate::geometry::{device_to_pixels, panel_pixels};
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Platform, Result,
-    ScreenSpec,
+    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Orientation, Platform,
+    Result, ScreenSpec,
 };
 
 /// Requested frame size; the emulator keeps the aspect ratio and never upscales.
@@ -37,6 +38,9 @@ pub struct GrpcEmulator {
     boot_options: BootOptions,
     conn: Arc<RwLock<Option<Conn>>>,
     frames: Arc<FrameSender>,
+    /// Shape of the display the input space follows; kept from the latest frame.
+    landscape: Arc<AtomicBool>,
+    rotation: AtomicU8,
     rt: Option<Runtime>,
 }
 
@@ -60,7 +64,13 @@ impl GrpcEmulator {
             client,
             running: running.clone(),
         })));
-        rt.spawn(stream_frames(conn.clone(), frames.clone(), size));
+        let landscape = Arc::new(AtomicBool::new(false));
+        rt.spawn(stream_frames(
+            conn.clone(),
+            frames.clone(),
+            size,
+            landscape.clone(),
+        ));
         Ok(Self {
             info: running.info.clone(),
             screen,
@@ -69,6 +79,8 @@ impl GrpcEmulator {
             boot_options: BootOptions::default(),
             conn,
             frames,
+            landscape,
+            rotation: AtomicU8::new(0),
             rt: Some(rt),
         })
     }
@@ -115,7 +127,33 @@ impl GrpcEmulator {
     }
 
     fn px(&self, x: f64, y: f64) -> (i32, i32) {
-        device_to_pixels(x, y, &self.screen)
+        let screen = self.screen.oriented(self.landscape.load(Ordering::Relaxed));
+        let (fx, fy) = device_to_pixels(x, y, &screen);
+        panel_pixels(fx, fy, &self.screen, self.rotation())
+    }
+
+    /// Guest orientation for input mapping. Cached from [`Device::set_orientation`]; refreshed
+    /// from adb when the frame shape disagrees (rotated by someone else). Portrait and
+    /// upside-down share a frame shape, so a foreign 180 degree turn goes unnoticed.
+    fn rotation(&self) -> Orientation {
+        let landscape = self.landscape.load(Ordering::Relaxed);
+        let cached = Orientation::from_android_rotation(self.rotation.load(Ordering::Relaxed))
+            .unwrap_or(Orientation::Portrait);
+        if cached.is_landscape() == landscape {
+            return cached;
+        }
+        let fresh = super::adb::Adb::new(self.sdk.adb.clone())
+            .orientation(&self.serial())
+            .ok()
+            .filter(|o| o.is_landscape() == landscape)
+            .unwrap_or(if landscape {
+                Orientation::LandscapeLeft
+            } else {
+                Orientation::Portrait
+            });
+        self.rotation
+            .store(fresh.android_rotation(), Ordering::Relaxed);
+        fresh
     }
 
     pub fn status(&self) -> Result<proto::EmulatorStatus> {
@@ -145,7 +183,12 @@ fn connect(rt: &Runtime, running: &RunningEmulator) -> Result<Client> {
 
 /// Streams only while someone holds a receiver from [`Device::frames`]: an unwatched device costs
 /// no emulator encoding, copies or conversion.
-async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: Arc<FrameSender>, size: FrameSize) {
+async fn stream_frames(
+    conn: Arc<RwLock<Option<Conn>>>,
+    tx: Arc<FrameSender>,
+    size: FrameSize,
+    landscape: Arc<AtomicBool>,
+) {
     let mut seq = 0u64;
     loop {
         let client = conn
@@ -194,6 +237,7 @@ async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: Arc<FrameSender>, si
                         tracing::warn!("short frame: {got} bytes for {w}x{h}");
                         continue;
                     };
+                    landscape.store(w > h, Ordering::Relaxed);
                     seq += 1;
                     tx.send_replace(Some(Frame {
                         width: w,
@@ -314,6 +358,44 @@ impl Device for GrpcEmulator {
                 .map(|_| ())
                 .map_err(|s| grpc::status_err("sendKey(text)", &s))
         })
+    }
+
+    /// Turns the emulator's virtual sensor (`setPhysicalModel(ROTATION)`) with auto-rotate on, so
+    /// the guest rotates and the emulator hands out upright landscape frames and maps touches
+    /// itself. The adb `user_rotation` lock would rotate the guest but leave `streamScreenshot`
+    /// in panel space (sideways content, no rotation info), see spikes/m4-android-notes.md.
+    /// Apps that ignore the sensor (the Pixel launcher) stay portrait: an error after 5 s.
+    fn set_orientation(&self, orientation: Orientation) -> Result<()> {
+        let adb = super::adb::Adb::new(self.sdk.adb.clone());
+        let serial = self.serial();
+        adb.shell(&serial, "settings put system accelerometer_rotation 1")?;
+        let mut c = self.client()?;
+        let [x, y, z] = grpc::rotation_angles(orientation);
+        self.call(async move {
+            c.set_physical_model(grpc::rotation_model(x, y, z))
+                .await
+                .map(|_| ())
+                .map_err(|s| grpc::status_err("setPhysicalModel", &s))
+        })?;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if adb.orientation(&serial).ok() == Some(orientation) {
+                super::adb::settle();
+                self.landscape
+                    .store(orientation.is_landscape(), Ordering::Relaxed);
+                self.rotation
+                    .store(orientation.android_rotation(), Ordering::Relaxed);
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Err(Error::Command(format!(
+            "{serial} did not rotate to {orientation:?} within 5 s (the foreground app may ignore the sensor, e.g. the Pixel launcher; upside-down is off by default on phones)"
+        )))
+    }
+
+    fn orientation(&self) -> Result<Orientation> {
+        super::adb::Adb::new(self.sdk.adb.clone()).orientation(&self.serial())
     }
 
     /// Relaunches the AVD if it was shut down; a running emulator is left alone.

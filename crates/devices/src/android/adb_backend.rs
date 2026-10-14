@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use super::adb::{Adb, escape_input_text};
 use crate::geometry::device_to_pixels;
 use crate::{
-    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Platform, Result,
-    ScreenSpec,
+    Device, DeviceInfo, Error, Frame, FrameReceiver, FrameSender, Input, Orientation, Platform,
+    Result, ScreenSpec,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -28,6 +28,8 @@ pub struct AdbDevice {
     screen: ScreenSpec,
     adb: Adb,
     frames: Arc<FrameSender>,
+    /// Shape of the display the input space follows; kept from the latest frame.
+    landscape: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     poller: Option<JoinHandle<()>>,
 }
@@ -38,6 +40,7 @@ impl AdbDevice {
             .screen
             .ok_or_else(|| Error::NotFound(format!("screen size of {}", info.udid)))?;
         let first = screenshot(&adb, &info.udid, capture)?;
+        let landscape = Arc::new(AtomicBool::new(first.width > first.height));
         let frames = Arc::new(tokio::sync::watch::Sender::new(Some(Frame {
             seq: 1,
             ..first
@@ -45,15 +48,26 @@ impl AdbDevice {
         let tx = frames.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let poll_stop = stop.clone();
+        let poll_landscape = landscape.clone();
         let (poll_adb, serial) = (adb.clone(), info.udid.clone());
         let poller = std::thread::Builder::new()
             .name("adb-screencap".into())
-            .spawn(move || poll(&poll_adb, &serial, capture, &tx, &poll_stop))?;
+            .spawn(move || {
+                poll(
+                    &poll_adb,
+                    &serial,
+                    capture,
+                    &tx,
+                    &poll_stop,
+                    &poll_landscape,
+                )
+            })?;
         Ok(Self {
             info,
             screen,
             adb,
             frames,
+            landscape,
             stop,
             poller: Some(poller),
         })
@@ -62,10 +76,21 @@ impl AdbDevice {
     fn shell(&self, cmd: &str) -> Result<()> {
         self.adb.shell(&self.info.udid, cmd).map(|_| ())
     }
+
+    fn screen(&self) -> ScreenSpec {
+        self.screen.oriented(self.landscape.load(Ordering::Relaxed))
+    }
 }
 
 /// Polls only while someone holds a receiver from [`Device::frames`].
-fn poll(adb: &Adb, serial: &str, capture: Capture, tx: &FrameSender, stop: &AtomicBool) {
+fn poll(
+    adb: &Adb,
+    serial: &str,
+    capture: Capture,
+    tx: &FrameSender,
+    stop: &AtomicBool,
+    landscape: &AtomicBool,
+) {
     let mut seq = 1;
     while !stop.load(Ordering::Relaxed) {
         if tx.receiver_count() == 0 {
@@ -74,6 +99,7 @@ fn poll(adb: &Adb, serial: &str, capture: Capture, tx: &FrameSender, stop: &Atom
         }
         match screenshot(adb, serial, capture) {
             Ok(frame) => {
+                landscape.store(frame.width > frame.height, Ordering::Relaxed);
                 seq += 1;
                 tx.send_replace(Some(Frame { seq, ..frame }));
             }
@@ -200,8 +226,9 @@ impl Device for AdbDevice {
     }
 
     fn send_input(&self, input: Input) -> Result<()> {
+        let screen = self.screen();
         self.shell(&input_command(input, |x, y| {
-            device_to_pixels(x, y, &self.screen)
+            device_to_pixels(x, y, &screen)
         }))
     }
 
@@ -210,6 +237,19 @@ impl Device for AdbDevice {
             return Ok(());
         }
         self.shell(&format!("input text {}", escape_input_text(text)))
+    }
+
+    /// `accelerometer_rotation 0` + `user_rotation N`; works on emulators and physical devices.
+    /// Auto-rotate stays off afterwards.
+    fn set_orientation(&self, orientation: Orientation) -> Result<()> {
+        self.adb.set_orientation(&self.info.udid, orientation)?;
+        self.landscape
+            .store(orientation.is_landscape(), Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn orientation(&self) -> Result<Orientation> {
+        self.adb.orientation(&self.info.udid)
     }
 
     /// Emulators only (`adb emu kill`); waits until adb no longer lists the serial.
