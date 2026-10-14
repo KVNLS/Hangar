@@ -294,8 +294,14 @@ impl HangarApp {
         let exit = cx.subscribe_in(
             &view,
             window,
-            move |this, _, event: &ChatEvent, window, cx| match event {
-                ChatEvent::StateChanged => cx.notify(),
+            move |this, view, event: &ChatEvent, window, cx| match event {
+                ChatEvent::StateChanged => {
+                    if let Some(entry) = this.live.diffs.get(&workspace_id) {
+                        let diff = entry.diff.clone();
+                        view.update(cx, |chat, cx| chat.set_diff(diff, cx));
+                    }
+                    cx.notify()
+                }
                 ChatEvent::Exited { code, stderr_tail } => {
                     if !stderr_tail.is_empty() {
                         tracing::info!(workspace = %workspace_id, "agent stderr: {stderr_tail}");
