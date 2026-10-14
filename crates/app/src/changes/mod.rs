@@ -2,4 +2,9 @@
 
 pub mod highlight;
 pub mod language;
+pub mod live;
 pub mod model;
+mod view;
+
+pub use live::WorkspaceDiff;
+pub use view::{ChangesEvent, ChangesPanel};

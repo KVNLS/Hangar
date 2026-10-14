@@ -28,11 +28,13 @@ use hangar_core::{
 use hangar_terminal::ExitInfo;
 
 use crate::agents::{self, AgentChoice};
+use crate::changes::{ChangesEvent, ChangesPanel, WorkspaceDiff};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
 use crate::state::{
-    PANE_COUNT, PaneLayout, Panes, ProjectList, sanitize_split, split_ratio, status_label,
+    CHANGES_WIDTH_RANGE, ChangesLayout, PANE_COUNT, PaneLayout, Panes, ProjectList, changes_width,
+    sanitize_split, split_ratio, status_label,
 };
 use crate::terminal_view::{TerminalEvent, TerminalView, TerminalViewOptions, TerminalWaker};
 use dialogs::DeleteWorkspaceDialog;
@@ -42,6 +44,16 @@ use sidebar::{ProjectSection, WorkspaceRow};
 const SIDEBAR_WIDTH: f32 = 260.;
 /// How long a killed agent gets to exit before its worktree is removed.
 const KILL_GRACE: Duration = Duration::from_secs(3);
+/// The panes keep at least this much width when the changes panel is dragged wider.
+const MIN_PANES_WIDTH: f32 = 320.;
+/// Quiet time after a panel resize before the width is saved.
+const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
+
+actions!(hangar, [ToggleChanges]);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("cmd-shift-d", ToggleChanges, None)]);
+}
 
 /// Debug/automation hooks, read once at startup (documented in `main.rs`).
 #[derive(Clone, Debug, Default)]
@@ -56,6 +68,7 @@ pub struct DevOptions {
     pub delete_branch: bool,
     pub delete_force: bool,
     pub remove_project: Option<PathBuf>,
+    pub changes: bool,
 }
 
 impl DevOptions {
@@ -73,6 +86,7 @@ impl DevOptions {
             delete_branch: flag("HANGAR_DEV_DELETE_BRANCH"),
             delete_force: flag("HANGAR_DEV_DELETE_FORCE"),
             remove_project: var("HANGAR_DEV_REMOVE_PROJECT").map(PathBuf::from),
+            changes: flag("HANGAR_DEV_CHANGES"),
         }
     }
 }
@@ -119,6 +133,20 @@ impl LiveSession {
     }
 }
 
+struct DiffEntry {
+    diff: Entity<WorkspaceDiff>,
+    _observe: Subscription,
+}
+
+/// Drag payload of the changes panel's resize handle.
+struct ChangesResize;
+
+impl Render for ChangesResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 struct NewWorkspaceInput {
     project_id: ProjectId,
     input: Entity<InputState>,
@@ -143,6 +171,12 @@ pub struct HangarApp {
     creating: HashSet<ProjectId>,
     /// Workspaces with an archive, restore or delete in flight.
     busy: HashSet<WorkspaceId>,
+    /// Live diffs of active workspaces, started when first shown in a pane.
+    diffs: HashMap<WorkspaceId, DiffEntry>,
+    changes: ChangesLayout,
+    changes_panel: Entity<ChangesPanel>,
+    save_changes: Option<Task<()>>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -197,6 +231,17 @@ impl HangarApp {
             },
         );
 
+        let changes_panel = cx.new(ChangesPanel::new);
+        let changes_sub = cx.subscribe_in(
+            &changes_panel,
+            window,
+            |this, _, event: &ChangesEvent, window, cx| match event {
+                ChangesEvent::Close => this.set_changes_open(false, window, cx),
+            },
+        );
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+
         let db = paths::db_path();
         cx.spawn_in(window, async move |this, cx| {
             let executor = cx.background_executor().clone();
@@ -241,7 +286,12 @@ impl HangarApp {
             new_workspace: None,
             creating: HashSet::new(),
             busy: HashSet::new(),
-            _subscriptions: vec![select_sub, resize_sub],
+            diffs: HashMap::new(),
+            changes: ChangesLayout::default(),
+            changes_panel,
+            save_changes: None,
+            focus,
+            _subscriptions: vec![select_sub, resize_sub, changes_sub],
         }
     }
 
@@ -277,6 +327,98 @@ impl HangarApp {
         self.persist(window, cx, move |store| ops::save_layout(store, &layout));
     }
 
+    /// Saves the pane layout and starts/stops live diffs to match what the panes show.
+    fn panes_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_layout(window, cx);
+        self.sync_diffs(cx);
+    }
+
+    /// Starts a live diff for every active workspace on screen, stops those of workspaces
+    /// that are gone, archived or being removed, and points the changes panel at the focused
+    /// pane's workspace.
+    fn sync_diffs(&mut self, cx: &mut Context<Self>) {
+        let projects = &self.projects;
+        let busy = &self.busy;
+        self.diffs
+            .retain(|id, _| projects.is_active(*id) && !busy.contains(id));
+        for pane in 0..PANE_COUNT {
+            let Some(id) = self.panes.slot(pane) else {
+                continue;
+            };
+            if self.diffs.contains_key(&id) || self.busy.contains(&id) {
+                continue;
+            }
+            let Some(ws) = self
+                .projects
+                .workspace(id)
+                .filter(|_| self.projects.is_active(id))
+            else {
+                continue;
+            };
+            let (path, base) = (ws.worktree_path.clone(), ws.base.clone());
+            let diff = cx.new(|cx| WorkspaceDiff::start(id, path, base, cx));
+            let observe = cx.observe(&diff, |_, _, cx| cx.notify());
+            self.diffs.insert(
+                id,
+                DiffEntry {
+                    diff,
+                    _observe: observe,
+                },
+            );
+        }
+        let source = self.panes.slot(self.panes.focused()).and_then(|id| {
+            let entry = self.diffs.get(&id)?;
+            let ws = self.projects.workspace(id)?;
+            Some((id, SharedString::from(ws.name.clone()), entry.diff.clone()))
+        });
+        self.changes_panel
+            .update(cx, |panel, cx| panel.set_source(source, cx));
+    }
+
+    fn set_changes_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.changes.open != open {
+            self.changes.open = open;
+            tracing::info!(open, "changes panel");
+            self.save_changes_layout(window, cx);
+            cx.notify();
+        }
+    }
+
+    fn toggle_changes(&mut self, _: &ToggleChanges, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_changes_open(!self.changes.open, window, cx);
+    }
+
+    /// The pane header button: opens the panel on this pane, or closes it if it already
+    /// shows this pane.
+    fn toggle_changes_for(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let showing_this = self.changes.open && self.panes.focused() == pane;
+        self.focus_pane(pane, window, cx);
+        self.set_changes_open(!showing_this, window, cx);
+    }
+
+    fn save_changes_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let changes = self.changes;
+        self.persist(window, cx, move |store| ops::save_changes(store, &changes));
+    }
+
+    fn resize_changes(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let max = (window.viewport_size().width.as_f32() - SIDEBAR_WIDTH - MIN_PANES_WIDTH)
+            .max(CHANGES_WIDTH_RANGE.0);
+        let Some(width) = changes_width(width.min(max)) else {
+            return;
+        };
+        if (width - self.changes.width).abs() < 0.5 {
+            return;
+        }
+        self.changes.width = width;
+        cx.notify();
+        // Dropping the previous task cancels it: only the last width is written.
+        self.save_changes = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(SAVE_DEBOUNCE).await;
+            let _ = this.update_in(cx, |this, window, cx| this.save_changes_layout(window, cx));
+        }));
+    }
+
     fn save_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agent = self.agent.to_string();
         self.persist(window, cx, move |store| ops::save_agent(store, &agent));
@@ -296,6 +438,10 @@ impl HangarApp {
                 if let Some(layout) = loaded.layout {
                     self.restore_layout(&layout, window, cx);
                 }
+                if let Some(changes) = loaded.changes {
+                    self.changes = changes.sanitized();
+                }
+                self.sync_diffs(cx);
                 if let Some(agent) = loaded.agent.filter(|a| agents::preset(a).is_some()) {
                     self.agent = agent.into();
                     self.agent_chosen_by_user = true;
@@ -549,7 +695,7 @@ impl HangarApp {
                             let id = workspace.id;
                             this.projects.upsert_workspace(workspace);
                             this.panes.show(id);
-                            this.save_layout(window, cx);
+                            this.panes_changed(window, cx);
                             Some((id, this.start_session(id, agent_id, window, cx)))
                         }
                         Err(err) => {
@@ -745,6 +891,7 @@ impl HangarApp {
             self.save_layout(window, cx);
         }
         self.busy.insert(workspace_id);
+        self.sync_diffs(cx);
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -793,7 +940,7 @@ impl HangarApp {
                         this.projects
                             .set_status(workspace_id, WorkspaceStatus::Active);
                         this.panes.show(workspace_id);
-                        this.save_layout(window, cx);
+                        this.panes_changed(window, cx);
                     }
                     Err(err) => this.report(&err, window, cx),
                 }
@@ -879,6 +1026,8 @@ impl HangarApp {
             return Task::ready(false);
         }
         let (session, terminal) = self.close_session(workspace_id);
+        // Stop watching before the worktree disappears.
+        self.sync_diffs(cx);
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -908,7 +1057,7 @@ impl HangarApp {
                         );
                         this.projects.remove_workspace(workspace_id);
                         if this.panes.clear(workspace_id) {
-                            this.save_layout(window, cx);
+                            this.panes_changed(window, cx);
                         }
                         if let Some(message) = outcome.branch_error {
                             window.push_notification(Notification::warning(message), cx);
@@ -916,6 +1065,7 @@ impl HangarApp {
                         true
                     }
                     Err(err) => {
+                        this.sync_diffs(cx);
                         this.report(&err, window, cx);
                         false
                     }
@@ -1007,6 +1157,7 @@ impl HangarApp {
                         if cleared {
                             this.save_layout(window, cx);
                         }
+                        this.sync_diffs(cx);
                         if this
                             .new_workspace
                             .as_ref()
@@ -1030,7 +1181,7 @@ impl HangarApp {
     ) {
         self.panes.show(workspace_id);
         self.focus_terminal(window, cx);
-        self.save_layout(window, cx);
+        self.panes_changed(window, cx);
         cx.notify();
     }
 
@@ -1038,7 +1189,7 @@ impl HangarApp {
         if self.panes.focused() != pane {
             self.panes.focus(pane);
             self.focus_terminal(window, cx);
-            self.save_layout(window, cx);
+            self.panes_changed(window, cx);
             cx.notify();
         }
     }
@@ -1077,6 +1228,11 @@ impl HangarApp {
                     .get(&ws.id)
                     .map(|live| short_status(&live.session.status).into())
             },
+            changes: self
+                .diffs
+                .get(&ws.id)
+                .and_then(|entry| entry.diff.read(cx).badge())
+                .map(SharedString::from),
             active: focused_workspace == Some(ws.id),
             busy: self.busy.contains(&ws.id),
         };
@@ -1167,8 +1323,25 @@ impl HangarApp {
             .border_color(theme.border)
             .when(focused, |this| this.bg(theme.secondary))
             .text_color(theme.muted_foreground);
+        let changes_open = self.changes.open && focused;
+        let toggle = Button::new(("changes-toggle", pane))
+            .ghost()
+            .xsmall()
+            .icon(if changes_open {
+                IconName::PanelRightClose
+            } else {
+                IconName::PanelRightOpen
+            })
+            .tooltip(if changes_open {
+                "Hide changes (⌘⇧D)"
+            } else {
+                "Show changes (⌘⇧D)"
+            })
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.toggle_changes_for(pane, window, cx)),
+            );
         let header = match workspace {
-            None => header.child("Empty pane"),
+            None => header.child("Empty pane").child(div().flex_1()),
             Some(ws) => {
                 let (agent, status, color) = match live {
                     Some(live) => (
@@ -1211,13 +1384,14 @@ impl HangarApp {
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     let agent = this.agent.to_string();
                                     this.panes.show(ws_id);
-                                    this.save_layout(window, cx);
+                                    this.panes_changed(window, cx);
                                     this.start_session(ws_id, agent, window, cx).detach();
                                 })),
                         )
                     })
             }
         };
+        let header = header.child(toggle);
 
         let body = div().flex_1().min_h_0().w_full();
         let body = match live {
@@ -1291,6 +1465,12 @@ impl HangarApp {
 
 /// Runs the `HANGAR_DEV_*` hooks in order: open, archive, restore, delete, remove project.
 async fn run_dev_hooks(this: WeakEntity<HangarApp>, dev: DevOptions, cx: &mut AsyncWindowContext) {
+    if dev.changes {
+        tracing::info!("HANGAR_DEV_CHANGES");
+        let _ = this.update_in(cx, |this, window, cx| {
+            this.set_changes_open(true, window, cx)
+        });
+    }
     if let Some(repo) = dev.open.clone() {
         let open = dev.clone();
         if let Ok(task) =
@@ -1368,12 +1548,44 @@ impl Render for HangarApp {
         for pane in 0..PANE_COUNT {
             panes = panes.child(resizable_panel().child(self.render_pane(pane, cx)));
         }
+        let changes = self.changes.open.then(|| {
+            div()
+                .relative()
+                .h_full()
+                .w(px(self.changes.width))
+                .flex_shrink_0()
+                .border_l_1()
+                .border_color(cx.theme().border)
+                .child(self.changes_panel.clone())
+                .child(
+                    div()
+                        .id("changes-resize")
+                        .absolute()
+                        .left(px(-3.))
+                        .top_0()
+                        .h_full()
+                        .w(px(6.))
+                        .cursor_col_resize()
+                        .on_drag(ChangesResize, |_, _, _, cx| cx.new(|_| ChangesResize)),
+                )
+        });
         h_flex()
+            .id("hangar")
+            .key_context("Hangar")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::toggle_changes))
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<ChangesResize>, window, cx| {
+                    let width = event.bounds.right() - event.event.position.x;
+                    this.resize_changes(width.as_f32(), window, cx);
+                }),
+            )
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.render_sidebar(cx))
             .child(div().flex_1().min_w_0().h_full().child(panes))
+            .children(changes)
     }
 }
 

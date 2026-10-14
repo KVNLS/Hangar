@@ -18,6 +18,8 @@
 //!   `HANGAR_DEV_DELETE_FORCE=1` discards uncommitted/untracked files.
 //! - `HANGAR_DEV_REMOVE_PROJECT=<repo>` — forget the project (refused while it has active
 //!   workspaces). Never touches the repository.
+//!
+//! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run.
 
 use gpui_kit::*;
 use hangar_app::shell::{DevOptions, HangarApp};
@@ -37,6 +39,7 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             hangar_app::terminal_view::init(cx);
+            hangar_app::shell::init(cx);
             cx.on_window_closed(|cx, _| cx.quit()).detach();
 
             let options = WindowOptions {
