@@ -300,7 +300,7 @@ Git access is the `git` CLI with porcelain output, not a library.
   - An "In use by another workspace" overlay offers "Use <device> instead" (single-device mode only).
 - **Shell:**
   - Sidebar state-count strip and a PROJECTS label.
-  - The status bar lists every booted device, plus "builds idle" and memory pressure.
+  - The status bar counts the devices the pool runs (names in a tooltip); builds show only while running or failed, memory only under pressure.
   - Design toast for info messages (2.8 s, bottom right, as in the mockup).
   - Palette groups: Needs you / Workspaces / Actions / Device / App.
   - Overview cards get per-state actions and tints, plus a device chip.
