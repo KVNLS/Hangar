@@ -213,8 +213,18 @@ impl HangarApp {
             age_label(ws.created_at.as_millis(), Timestamp::now().as_millis())
         );
         let queued = self.queued_ahead(id);
+        // A request that can be allowed once is answered right on the card.
+        let request = (state == AgentState::Approval)
+            .then(|| self.pending_request(id, cx))
+            .flatten()
+            .filter(|r| r.can_allow);
         let last = queued
             .map(|ahead| super::queue::queued_label(ahead).into())
+            .or_else(|| {
+                request
+                    .as_ref()
+                    .map(|r| format!("Permission: {}", r.title).into())
+            })
             .or_else(|| live.and_then(|l| l.activity.last_line.clone()))
             .unwrap_or_else(|| {
                 if live.is_some() {
@@ -230,6 +240,7 @@ impl HangarApp {
             .unwrap_or_default();
         let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
         let attempts = self.attempts_of(id);
+        let allow_inline = request.is_some();
         let (action_label, action) =
             card_action(state, live.is_some_and(|l| !l.session.status.is_terminal()));
         let (action_fg, action_bg, action_border) = if card_action_tinted(state) {
@@ -334,6 +345,18 @@ impl HangarApp {
                                 })),
                         )
                     })
+                    .when(request.is_some(), |this| {
+                        this.child(
+                            UiButton::new(SharedString::from(format!("overview-deny-{id}")))
+                                .label("Deny")
+                                .ghost()
+                                .small()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.answer_request(id, false, cx);
+                                })),
+                        )
+                    })
                     .child(
                         div()
                             .id(SharedString::from(format!("overview-action-{id}")))
@@ -351,10 +374,18 @@ impl HangarApp {
                             .font_weight(FontWeight::MEDIUM)
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.85))
-                            .child(action_label)
+                            .child(if request.is_some() {
+                                "Allow once"
+                            } else {
+                                action_label
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.run_card_action(id, action, window, cx);
+                                if allow_inline {
+                                    this.answer_request(id, true, cx);
+                                } else {
+                                    this.run_card_action(id, action, window, cx);
+                                }
                             })),
                     ),
             )

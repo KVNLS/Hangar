@@ -1,5 +1,6 @@
 //! The main window: project sidebar and tiled terminal panes (one by default, split on demand).
 
+mod approvals;
 mod attention;
 mod chrome;
 mod compare;

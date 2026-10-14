@@ -45,6 +45,8 @@
 //! `sheet` (New workspace) or `device` (device panel), for screenshots.
 //! `HANGAR_DEV_SCREENSHOT=1` then waits for the workspace device's first frame and takes the
 //! device panel's ⌘S screenshot for the agent.
+//! `HANGAR_DEV_APPROVE=<seconds>` then waits for a structured agent's permission request and
+//! allows it once that many seconds later, through the overview's and palette's path.
 //!
 //! Device pool (one device per workspace):
 //! - `HANGAR_DEV_WORKSPACES=a,b` — `HANGAR_DEV_OPEN` creates these workspaces instead of

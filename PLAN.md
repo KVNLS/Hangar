@@ -317,7 +317,6 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Clone repository.
   - Composer "@" attachments and context.
   - Agent memory and system RAM in the status bar.
-  - "Approve pending request" in the palette.
   - "Sandbox: worktree only": not shown, because agents are not sandboxed.
   - ⌘⏎ is missing from the Settings keybinding table.
 - On-screen pass (2026-10-07, dark + light, `HANGAR_DEV_SHOW` on a scratch repo):
@@ -430,7 +429,15 @@ Git access is the `git` CLI with porcelain output, not a library.
   overlay with two shell attempts and their diffs. Not seen: the sheet with several agents picked, Keep
   (unit-tested: `batch::others_to_archive`). Gap: Resume/Retry on a card starts the global agent, not the
   attempt's own (open question 10).
-- Next, in order: approvals inbox and palette "Approve pending request"; Claude Code hooks for terminal agents (`Input` state);
+- Done: permission requests answered without opening the pane. `ChatView::pending_request` /
+  `answer_pending` (allow once, else reject once or outright). Overview cards in Approval show
+  "Permission: <title>" with Deny and Allow once; the palette's "Approve" group (after Needs you) lists
+  "Allow <workspace>: <title>" for every structured agent waiting with an allow-once option.
+  `HANGAR_DEV_APPROVE=<s>` allows the first request through the same path. Live (Claude Code structured,
+  scratch repo): `echo done > note.txt` asked, the card showed Deny / Allow once, the hook allowed it, the
+  file was written (diff +1 240 ms later). Not seen on screen: the palette group. Claude Code runs
+  read-only commands such as `date` without asking. Terminal agents have no request to answer here.
+- Next, in order: Claude Code hooks for terminal agents (`Input` state);
   MCP orchestration tools; typed `usage_update`; session history; transcript virtualization.
 
 ## Next

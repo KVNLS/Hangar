@@ -32,6 +32,15 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(8);
 
 actions!(chat_view, [ChatEscape]);
 
+/// A permission request a structured agent waits on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingRequest {
+    /// What the agent wants to do (the tool call's title).
+    pub title: SharedString,
+    /// The agent offers "allow once" (some only offer always / reject).
+    pub can_allow: bool,
+}
+
 pub fn init(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("escape", ChatEscape, Some(CONTEXT))]);
 }
@@ -494,6 +503,38 @@ impl ChatView {
         }
         cx.emit(ChatEvent::StateChanged);
         cx.notify();
+    }
+
+    /// The request the agent waits on, for answering it outside the pane (overview, palette).
+    pub fn pending_request(&self) -> Option<PendingRequest> {
+        let index = self.pending_permission()?;
+        let Some(Item::Permission { title, .. }) = self.items.get(index) else {
+            return None;
+        };
+        Some(PendingRequest {
+            title: title.clone(),
+            can_allow: self
+                .first_option(index, |k| k == PermissionKind::AllowOnce)
+                .is_some(),
+        })
+    }
+
+    /// Answers the pending request: allow once, or reject (once when offered, else outright).
+    /// Returns whether a request was answered.
+    pub fn answer_pending(&mut self, allow: bool, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.pending_permission() else {
+            return false;
+        };
+        let option = if allow {
+            match self.first_option(index, |k| k == PermissionKind::AllowOnce) {
+                Some(option) => Some(option),
+                None => return false,
+            }
+        } else {
+            self.first_option(index, |k| k == PermissionKind::RejectOnce)
+        };
+        self.answer(index, option, cx);
+        true
     }
 
     /// Adds a one-line note to the transcript (resumed, could not resume, …).

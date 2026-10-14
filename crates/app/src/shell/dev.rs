@@ -107,6 +107,9 @@ pub struct DevOptions {
     pub show: Option<String>,
     /// After `show`: wait for the workspace device's first frame, then take the ⌘S screenshot.
     pub screenshot: bool,
+    /// After `show`: wait for a permission request, then allow it once after this many seconds
+    /// (as the overview card and the palette do).
+    pub approve: Option<u64>,
     /// Build and run on their devices: `1` = the workspaces `HANGAR_DEV_OPEN` created (else the
     /// focused one), or comma-separated slugs.
     pub run: Option<String>,
@@ -245,6 +248,7 @@ impl DevOptions {
             appearance: var("HANGAR_DEV_APPEARANCE"),
             show: var("HANGAR_DEV_SHOW"),
             screenshot: flag("HANGAR_DEV_SCREENSHOT"),
+            approve: var("HANGAR_DEV_APPROVE").and_then(|v| v.parse().ok()),
             run: var("HANGAR_DEV_RUN"),
             select: var("HANGAR_DEV_SELECT"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
@@ -488,6 +492,41 @@ pub(super) async fn run_dev_hooks(
     if dev.screenshot {
         dev_screenshot(&this, cx).await;
     }
+    if let Some(delay) = dev.approve {
+        dev_approve(&this, Duration::from_secs(delay), cx).await;
+    }
+}
+
+/// `HANGAR_DEV_APPROVE=<seconds>`: allows the first pending permission request once.
+async fn dev_approve(this: &WeakEntity<HangarApp>, delay: Duration, cx: &mut AsyncWindowContext) {
+    let deadline = std::time::Instant::now() + DEV_BOOT_TIMEOUT;
+    let pending = loop {
+        let first = this
+            .update(cx, |this, cx| {
+                this.pending_approvals(cx)
+                    .into_iter()
+                    .next()
+                    .map(|(id, _, request)| (id, request.title))
+            })
+            .ok()
+            .flatten();
+        if let Some(first) = first {
+            break first;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::error!("HANGAR_DEV_APPROVE: no permission request");
+            return;
+        }
+        cx.background_executor().timer(DEV_POLL).await;
+    };
+    let (id, title) = pending;
+    tracing::info!(workspace = %id, %title, "HANGAR_DEV_APPROVE waiting");
+    cx.background_executor().timer(delay).await;
+    let _ = this.update(cx, |this, cx| this.answer_request(id, true, cx));
+    let left = this
+        .update(cx, |this, cx| this.pending_request(id, cx).is_some())
+        .unwrap_or(true);
+    tracing::info!(workspace = %id, still_pending = left, "HANGAR_DEV_APPROVE answered");
 }
 
 /// `HANGAR_DEV_SCREENSHOT=1`: the device panel's ⌘S once the workspace device paints a frame.
