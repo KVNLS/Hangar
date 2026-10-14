@@ -138,8 +138,8 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Deferred until backed (not rendered, no placeholders): chat stream, tool-call cards, permission prompts and
   the Approval/Input states (M7); build progress, crash and "in use" device overlays, Run/Reload (M6); status bar
   build/RAM; per-workspace target device; Clone repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
-- Owner's first visual pass applied (f23471f); Claude has no screen capture, so later visual changes still
-  need the owner's eye.
+- Owner's first visual pass covered only the workspace screen with no agents running (fixes in f23471f).
+  Every other screen, in dark and light, still needs a check against design/Hangar.dc.html.
 
 ## Remaining gaps
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.
@@ -151,4 +151,4 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Manual pass over the device panel (both platforms), then M6 mobile run loop.
+- Visual pass over every UI v0.1 screen and the device panel (both platforms), then M6 mobile run loop.
