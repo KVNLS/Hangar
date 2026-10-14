@@ -1079,6 +1079,29 @@ impl DevicePool {
                     )));
                 }
                 tracing::info!(target: "device_pool", ?key, "booting");
+                let mut target = target;
+                if matches!(target, Target::IosOwn { .. }) {
+                    set_stage("creating the simulator");
+                    let create_target = target.clone();
+                    let created = cx
+                        .background_executor()
+                        .spawn(async move { backend::create_if_missing(&create_target) })
+                        .await
+                        .map_err(failed)?;
+                    if let (Some(udid), Target::IosOwn { udid: own, .. }) = (created, &mut target) {
+                        *own = Some(udid.clone());
+                        let recorded = target.clone();
+                        this.update(cx, |pool, cx| {
+                            if let Some(d) = pool.devices.get_mut(key) {
+                                d.target = recorded;
+                            }
+                            if let PoolKey::Own(ws) = key {
+                                pool.record_own(*ws, Some(udid.clone()), udid, cx);
+                            }
+                        })
+                        .map_err(gone)?;
+                    }
+                }
                 let boot_target = target.clone();
                 let progress_stage = stage.clone();
                 let booted = cx

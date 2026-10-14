@@ -125,6 +125,20 @@ pub fn probe(target: &Target) -> anyhow::Result<Option<Running>> {
     }
 }
 
+/// Creates the workspace's simulator when it does not exist (yet, or any more); returns the
+/// new UDID. Done before the boot so the clone is recorded even if Hangar quits mid-boot.
+pub fn create_if_missing(target: &Target) -> anyhow::Result<Option<String>> {
+    let Target::IosOwn { udid, base, name } = target else {
+        return Ok(None);
+    };
+    if let Some(udid) = udid
+        && ios_find(udid)?.is_some()
+    {
+        return Ok(None);
+    }
+    create_ios(base, name).map(Some)
+}
+
 /// Boots the device (creating the simulator first for a new [`Target::IosOwn`]). Android instances
 /// are always read-only: the emulator only runs several instances of one AVD when each is.
 pub fn boot(target: &Target, progress: &dyn Fn(String)) -> anyhow::Result<Running> {
