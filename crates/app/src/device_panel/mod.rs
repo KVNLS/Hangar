@@ -744,7 +744,7 @@ impl DevicePanel {
         let buttons = key.platform.controls().iter().map(|control| {
             let input = control.input;
             Button::new(SharedString::from(format!("device-control-{}", control.id)))
-                .small()
+                .xsmall()
                 .label(control.label)
                 .tooltip(control.tooltip)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -764,25 +764,32 @@ impl DevicePanel {
                 .child(s.text.clone())
         });
         Some(
-            h_flex()
+            v_flex()
                 .px_2()
                 .py_1()
-                .gap_2()
+                .gap_1()
                 .flex_shrink_0()
-                .items_center()
                 .border_t_1()
                 .border_color(theme.border)
-                .children(buttons)
-                .when(can_shutdown, |this| {
-                    this.child(
-                        Button::new("device-shutdown")
-                            .small()
-                            .label("Shutdown")
-                            .loading(self.shutting_down)
-                            .tooltip("Shut the emulator down")
-                            .on_click(cx.listener(|this, _, _, cx| this.shutdown_device(cx))),
-                    )
-                })
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .items_center()
+                        .children(buttons)
+                        .when(can_shutdown, |this| {
+                            this.child(
+                                Button::new("device-shutdown")
+                                    .xsmall()
+                                    .label("Shutdown")
+                                    .loading(self.shutting_down)
+                                    .tooltip("Shut the device down")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.shutdown_device(cx)),
+                                    ),
+                            )
+                        }),
+                )
                 .children(status)
                 .into_any_element(),
         )
@@ -832,8 +839,11 @@ fn input_status(result: &InputResult) -> InputStatus {
         Input::TouchUp { x, y } => format!("Touch up ({x:.0}, {y:.0})"),
         Input::Home => "Home".to_owned(),
         Input::Back => "Back".to_owned(),
-        #[allow(unreachable_patterns)]
-        other => format!("{other:?}"),
+        Input::Lock => "Lock".to_owned(),
+        Input::VolumeUp => "Volume up".to_owned(),
+        Input::VolumeDown => "Volume down".to_owned(),
+        Input::AppSwitch => "App switch".to_owned(),
+        Input::Key(key) => format!("Key {key:?}"),
     };
     match &result.result {
         Ok(()) => InputStatus {

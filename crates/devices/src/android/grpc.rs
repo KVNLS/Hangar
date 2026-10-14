@@ -185,7 +185,10 @@ mod tests {
         assert_eq!(t.touches[0].pressure, PRESSURE);
         assert_eq!(touch(10, 20, false).touches[0].pressure, 0);
         assert_eq!(key_press(keys::BACK).key, "GoBack");
-        assert_eq!(key_press(keys::named(crate::Key::Backspace)).key, "Backspace");
+        assert_eq!(
+            key_press(keys::named(crate::Key::Backspace)).key,
+            "Backspace"
+        );
         assert_eq!(text_event("hi").text, "hi");
     }
 }

@@ -21,12 +21,38 @@ pub struct Control {
     pub input: Input,
 }
 
-const IOS_CONTROLS: &[Control] = &[Control {
+const HOME: Control = Control {
     id: "home",
     label: "Home",
     tooltip: "Home button",
     input: Input::Home,
-}];
+};
+
+const VOLUME_UP: Control = Control {
+    id: "volume-up",
+    label: "Vol +",
+    tooltip: "Volume up",
+    input: Input::VolumeUp,
+};
+
+const VOLUME_DOWN: Control = Control {
+    id: "volume-down",
+    label: "Vol \u{2212}",
+    tooltip: "Volume down",
+    input: Input::VolumeDown,
+};
+
+const IOS_CONTROLS: &[Control] = &[
+    HOME,
+    Control {
+        id: "lock",
+        label: "Lock",
+        tooltip: "Side button: lock the screen",
+        input: Input::Lock,
+    },
+    VOLUME_UP,
+    VOLUME_DOWN,
+];
 
 const ANDROID_CONTROLS: &[Control] = &[
     Control {
@@ -35,12 +61,21 @@ const ANDROID_CONTROLS: &[Control] = &[
         tooltip: "Back button",
         input: Input::Back,
     },
+    HOME,
     Control {
-        id: "home",
-        label: "Home",
-        tooltip: "Home button",
-        input: Input::Home,
+        id: "app-switch",
+        label: "Apps",
+        tooltip: "App switcher (recents)",
+        input: Input::AppSwitch,
     },
+    Control {
+        id: "lock",
+        label: "Power",
+        tooltip: "Power button: toggle the screen",
+        input: Input::Lock,
+    },
+    VOLUME_UP,
+    VOLUME_DOWN,
 ];
 
 /// A device opened by [`Platform::open`].
@@ -98,26 +133,31 @@ impl Platform {
         }
     }
 
-    /// Whether Hangar can boot this listed device: Android AVDs that are not running.
+    /// Whether Hangar can boot this listed device: shut-down iOS simulators and Android AVDs
+    /// that are not running.
     pub fn can_boot(self, info: &DeviceInfo) -> bool {
-        matches!(self, Self::Android) && info.state == hangar_devices::android::state::SHUTDOWN
-    }
-
-    /// Whether an opened device of this platform can be shut down from Hangar: emulators only
-    /// (adb serials `emulator-<port>`); physical devices cannot be powered off over adb.
-    pub fn can_shutdown(self, info: &DeviceInfo) -> bool {
-        matches!(self, Self::Android) && info.udid.starts_with("emulator-")
-    }
-
-    /// Shown when no device of this platform is ready. iOS boot is not available from Hangar
-    /// yet (`Device::boot` returns `Unsupported`, and only booted simulators are listed).
-    pub fn not_ready_hint(self) -> String {
-        let unsupported = hangar_devices::Error::Unsupported("boot");
         match self {
-            Self::Ios => format!(
-                "Booting from Hangar is not available ({unsupported}). Boot a simulator with \
-                 `xcrun simctl boot <UDID>`, then refresh."
-            ),
+            Self::Ios => info.state == IOS_SHUTDOWN,
+            Self::Android => info.state == hangar_devices::android::state::SHUTDOWN,
+        }
+    }
+
+    /// Whether an opened device of this platform can be shut down from Hangar: every iOS
+    /// simulator, and Android emulators only (adb serials `emulator-<port>`); physical devices
+    /// cannot be powered off over adb.
+    pub fn can_shutdown(self, info: &DeviceInfo) -> bool {
+        match self {
+            Self::Ios => true,
+            Self::Android => info.udid.starts_with("emulator-"),
+        }
+    }
+
+    /// Shown when no device of this platform is ready.
+    pub fn not_ready_hint(self) -> String {
+        match self {
+            Self::Ios => "Select a simulator and press Boot to start it from Hangar, or boot \
+                 one yourself (`xcrun simctl boot <UDID>`), then refresh."
+                .to_owned(),
             Self::Android => "Select an AVD and press Boot to start it from Hangar, or start an \
                  emulator or attach a device yourself, then refresh."
                 .to_owned(),
@@ -147,9 +187,34 @@ impl Platform {
     pub fn boot(self, info: &DeviceInfo) -> anyhow::Result<DeviceInfo> {
         match self {
             Self::Android => Ok(hangar_devices::android::boot(&info.udid)?),
-            Self::Ios => Err(hangar_devices::Error::Unsupported("iOS boot").into()),
+            Self::Ios => boot_ios(info),
         }
     }
+}
+
+/// `simctl` state of a simulator that can be booted.
+const IOS_SHUTDOWN: &str = "Shutdown";
+
+/// Orders simulators for the picker: booted first, then newest runtime first; `simctl` order
+/// is kept within a runtime (phones before tablets).
+pub fn sort_ios(devices: &mut [DeviceInfo]) {
+    devices.sort_by_key(|d| {
+        (
+            d.state != "Booted",
+            std::cmp::Reverse(runtime_version(&d.runtime)),
+        )
+    });
+}
+
+/// Numeric components of a runtime name (`iOS 26.5` -> `[26, 5]`).
+fn runtime_version(runtime: &str) -> Vec<u32> {
+    runtime
+        .rsplit(' ')
+        .next()
+        .unwrap_or_default()
+        .split('.')
+        .map_while(|part| part.parse().ok())
+        .collect()
 }
 
 /// The forced backend (`HANGAR_DEVICE_BACKEND`) that applies to `platform`. The variable is
@@ -235,7 +300,25 @@ pub fn open_with_fallback<T>(
 
 #[cfg(target_os = "macos")]
 fn list_ios() -> anyhow::Result<Vec<DeviceInfo>> {
-    Ok(hangar_devices::simctl::list_booted()?)
+    let mut devices = hangar_devices::simctl::list_all()?;
+    // tvOS, watchOS and visionOS simulators have no phone-style input to drive.
+    devices.retain(|d| d.runtime.starts_with("iOS"));
+    sort_ios(&mut devices);
+    Ok(devices)
+}
+
+#[cfg(target_os = "macos")]
+fn boot_ios(info: &DeviceInfo) -> anyhow::Result<DeviceInfo> {
+    hangar_devices::ios::boot(&info.udid)?;
+    Ok(DeviceInfo {
+        state: "Booted".to_owned(),
+        ..info.clone()
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn boot_ios(_: &DeviceInfo) -> anyhow::Result<DeviceInfo> {
+    Err(hangar_devices::Error::Unsupported("iOS simulators need macOS").into())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -341,11 +424,23 @@ mod tests {
         assert!(!a.is_ready(&android_info("emulator-5554", "Booting")));
         assert!(a.can_boot(&android_info("Pixel_10_Pro", "Shutdown")));
         assert!(!a.can_boot(&android_info("emulator-5554", "Booted")));
-        assert!(!Platform::Ios.can_boot(&info("Shutdown")));
+        assert!(Platform::Ios.can_boot(&info("Shutdown")));
+        assert!(!Platform::Ios.can_boot(&info("Booted")));
+        assert!(!Platform::Ios.can_boot(&info("Booting")));
         assert!(a.can_shutdown(&android_info("emulator-5554", "Booted")));
         assert!(!a.can_shutdown(&android_info("R5CT1234", "Booted")));
         let ids: Vec<_> = a.controls().iter().map(|c| c.id).collect();
-        assert_eq!(ids, ["back", "home"]);
+        assert_eq!(
+            ids,
+            [
+                "back",
+                "home",
+                "app-switch",
+                "lock",
+                "volume-up",
+                "volume-down"
+            ]
+        );
         assert!(a.not_ready_hint().contains("Boot"));
     }
 
@@ -364,7 +459,27 @@ mod tests {
         assert!(Platform::Ios.is_ready(&info("Booted")));
         assert!(!Platform::Ios.is_ready(&info("Shutdown")));
         let ids: Vec<_> = Platform::Ios.controls().iter().map(|c| c.id).collect();
-        assert_eq!(ids, ["home"]);
-        assert!(Platform::Ios.not_ready_hint().contains("unsupported: boot"));
+        assert_eq!(ids, ["home", "lock", "volume-up", "volume-down"]);
+        assert!(Platform::Ios.not_ready_hint().contains("Boot"));
+        assert!(Platform::Ios.can_shutdown(&info("Booted")));
+    }
+
+    #[test]
+    fn ios_list_sorts_booted_then_newest_runtime() {
+        let sim = |name: &str, runtime: &str, state: &str| DeviceInfo {
+            name: name.into(),
+            runtime: runtime.into(),
+            ..info(state)
+        };
+        let mut devices = vec![
+            sim("a", "iOS 26.5", "Shutdown"),
+            sim("b", "iOS 9.3", "Shutdown"),
+            sim("c", "iOS 27.0", "Shutdown"),
+            sim("d", "iOS 26.5", "Booted"),
+            sim("e", "iOS 27.0", "Shutdown"),
+        ];
+        sort_ios(&mut devices);
+        let names: Vec<_> = devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["d", "c", "e", "a", "b"]);
     }
 }
