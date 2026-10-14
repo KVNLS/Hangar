@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
@@ -116,25 +116,78 @@ impl Git {
         Err(self.failure(out))
     }
 
+    /// Runs git feeding `input` on stdin; succeeds for any exit code in `ok_codes` (0 is implied),
+    /// e.g. 1 for `diff --no-index` with differences or `check-ignore` with no match.
+    pub fn run_bytes_with<I, S>(
+        &self,
+        args: I,
+        input: Option<&[u8]>,
+        ok_codes: &[i32],
+    ) -> Result<Vec<u8>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let out = self.exec_with(args, input)?;
+        let code = out.status.code();
+        if out.status.success() || code.is_some_and(|c| ok_codes.contains(&c)) {
+            return Ok(out.stdout);
+        }
+        Err(self.failure(out))
+    }
+
     fn exec<I, S>(&self, args: I) -> Result<RawOutput>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.exec_with(args, None)
+    }
+
+    fn exec_with<I, S>(&self, args: I, input: Option<&[u8]>) -> Result<RawOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let args: Vec<OsString> = args.into_iter().map(|a| a.as_ref().to_owned()).collect();
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .arg("-C")
             .arg(&self.dir)
             .args(&args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("LC_ALL", "C")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| match e.kind() {
-                ErrorKind::NotFound => Error::GitMissing,
-                _ => Error::Io(e),
-            })?;
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let not_found = |e: io::Error| match e.kind() {
+            ErrorKind::NotFound => Error::GitMissing,
+            _ => Error::Io(e),
+        };
+        let mut child = command.spawn().map_err(not_found)?;
+        // Write stdin from another thread so a full stdout pipe cannot deadlock us.
+        let writer = match (input, child.stdin.take()) {
+            (Some(input), Some(mut stdin)) => {
+                let input = input.to_vec();
+                Some(std::thread::spawn(move || stdin.write_all(&input)))
+            }
+            _ => None,
+        };
+        let output = child.wait_with_output().map_err(Error::Io)?;
+        if let Some(writer) = writer {
+            match writer.join() {
+                Ok(Ok(())) => {}
+                // git may exit before reading everything; its status tells the real story.
+                Ok(Err(e)) if e.kind() == ErrorKind::BrokenPipe => {}
+                Ok(Err(e)) => return Err(Error::Io(e)),
+                Err(_) => return Err(Error::Io(io::Error::other("stdin writer panicked"))),
+            }
+        }
         tracing::trace!(dir = %self.dir.display(), ?args, status = %output.status, "git");
         Ok(RawOutput {
             args,
