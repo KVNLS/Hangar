@@ -194,7 +194,7 @@ impl HangarApp {
     /// `HANGAR_DEVICE_*` (and `ANDROID_SERIAL`) for the workspace's assigned device, as far as it
     /// is known: an Android serial only exists once an instance has booted.
     fn device_env(&self, ws: WorkspaceId, cx: &App) -> Vec<(String, String)> {
-        let Some(assignment) = self.device_pool.read(cx).assignment(ws) else {
+        let Some(assignment) = self.devices.pool.read(cx).assignment(ws) else {
             return Vec::new();
         };
         let mut env = Vec::new();
@@ -251,12 +251,16 @@ impl HangarApp {
     }
 
     /// Forgets the workspace's MCP session and its Gemini config file (archive, delete).
-    pub(super) fn close_mcp(&self, id: WorkspaceId) {
+    pub(super) fn close_mcp(&self, id: WorkspaceId, cx: &App) {
         if let Some(mcp) = &self.mcp {
             mcp.unregister(id);
         }
         if let Some(dir) = paths::mcp_config_dir() {
-            let _ = std::fs::remove_file(dir.join(format!("{id}.gemini.json")));
+            cx.background_executor()
+                .spawn(async move {
+                    let _ = std::fs::remove_file(dir.join(format!("{id}.gemini.json")));
+                })
+                .detach();
         }
     }
 }

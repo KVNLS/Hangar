@@ -15,6 +15,7 @@ use hangar_store_sqlite::Store as SqliteStore;
 use hangar_worktree::{Gh, GitCli};
 
 use crate::setup_probe::SystemProbe;
+pub use crate::setup_probe::program_version;
 
 pub mod devices;
 pub mod vcs;

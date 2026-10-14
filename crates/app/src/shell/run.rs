@@ -13,14 +13,13 @@ use anyhow::Context as _;
 use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext};
 use hangar_core::SessionStatus;
 use hangar_runner::{RunPlan, Stack, Step};
-use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use super::toast::ToastKind;
 use super::*;
 use crate::device_pool::Lease;
 use crate::device_view::DeviceHandle;
-use crate::setting_keys;
+use crate::ops::RunConfig;
 use prepare::{Prepared, prepare, spawn_command};
 
 /// Expo prints this once the app is open on the device and the dev server is attached.
@@ -43,16 +42,6 @@ pub(super) enum PaneTab {
     Agent,
     Server,
     Build,
-}
-
-/// Saved per workspace under [`run_key`].
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunConfig {
-    port: Option<u16>,
-    scheme: Option<String>,
-    /// The app picked when the worktree holds several ([`Stack::key`]).
-    #[serde(default)]
-    stack: Option<String>,
 }
 
 /// What the user must pick before a run can be planned.

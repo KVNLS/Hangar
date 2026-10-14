@@ -7,8 +7,7 @@ use hangar_usecases::usage::UsageSettings;
 
 use crate::device_panel::{DeviceKey, Platform};
 use crate::device_pool::policy::{Assignment, Limit};
-use crate::ops::{OllamaSettings, SavedChat, SavedMode};
-use crate::shell::RunConfig;
+use crate::ops::{OllamaSettings, RunConfig, SavedChat, SavedMode};
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout};
 use crate::ui::theme::Appearance;
 

@@ -140,7 +140,8 @@ impl HangarApp {
         // The device panel is only on the workspace screen: stop streaming while it is hidden.
         if self.layout.device.open {
             let shown = screen == Screen::Workspace;
-            self.device_panel
+            self.devices
+                .panel
                 .update(cx, |panel, cx| panel.set_visible(shown, window, cx));
         }
         if screen == Screen::Overview {
@@ -341,7 +342,8 @@ impl HangarApp {
             self.save_device_layout(window, cx);
             cx.notify();
         }
-        self.device_panel
+        self.devices
+            .panel
             .update(cx, |panel, cx| panel.set_visible(open, window, cx));
     }
 
@@ -365,7 +367,7 @@ impl HangarApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.device_panel.update(cx, |panel, cx| {
+        self.devices.panel.update(cx, |panel, cx| {
             let stats = !panel.stats();
             panel.set_stats(stats, cx);
         });

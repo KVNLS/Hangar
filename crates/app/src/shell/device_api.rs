@@ -52,7 +52,9 @@ impl HangarApp {
             return Task::ready(Err(anyhow!("unknown or archived workspace")));
         }
         self.track_workspace(ws, cx);
-        self.device_pool.update(cx, |pool, cx| pool.acquire(ws, cx))
+        self.devices
+            .pool
+            .update(cx, |pool, cx| pool.acquire(ws, cx))
     }
 
     /// The workspace's device: platform, name, id, whether it is open, screen size in points
@@ -67,9 +69,10 @@ impl HangarApp {
         }
         self.track_workspace(ws, cx);
         let assignment = self
-            .device_pool
+            .devices
+            .pool
             .update(cx, |pool, cx| pool.assignment_for(ws, cx));
-        let pool = self.device_pool.downgrade();
+        let pool = self.devices.pool.downgrade();
         cx.spawn(async move |_, cx| {
             let a = assignment.await?;
             let (session, name) = pool.read_with(cx, |pool, _| {

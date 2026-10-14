@@ -6,7 +6,7 @@ impl HangarApp {
     /// "Devices at once", the detected capacity and memory pressure.
     fn render_device_capacity(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
-        let pool = self.device_pool.read(cx);
+        let pool = self.devices.pool.read(cx);
         let limit = pool.limit();
         let selected = match limit {
             Limit::Auto => 0,
@@ -66,7 +66,8 @@ impl HangarApp {
                                     0 => Limit::Auto,
                                     n => Limit::Manual(n as u32),
                                 };
-                                this.device_pool
+                                this.devices
+                                    .pool
                                     .update(cx, |pool, cx| pool.set_limit(limit, cx));
                             })),
                     ),
@@ -100,7 +101,7 @@ impl HangarApp {
     fn render_pool_devices(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
         let rows: Vec<AnyElement> = self
-            .device_pool
+            .devices.pool
             .read(cx)
             .rows()
             .into_iter()
@@ -176,7 +177,7 @@ impl HangarApp {
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let key = shutdown_key.clone();
-                                this.device_pool
+                                this.devices.pool
                                     .update(cx, |pool, cx| pool.shutdown(&key, cx))
                                     .detach();
                             })),
@@ -191,7 +192,7 @@ impl HangarApp {
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     let key = delete_key.clone();
                                     let task = this
-                                        .device_pool
+                                        .devices.pool
                                         .update(cx, |pool, cx| pool.delete_clone(&key, cx));
                                     cx.spawn_in(window, async move |this, cx| {
                                         if let Err(err) = task.await {
@@ -226,7 +227,8 @@ impl HangarApp {
     pub(super) fn render_settings_devices(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
         let callout = self
-            .device_pool
+            .devices
+            .pool
             .read(cx)
             .single_device_explanation()
             .map(|text| {
@@ -251,9 +253,9 @@ impl HangarApp {
         let pool_devices = self.render_pool_devices(cx);
         let bases: Vec<Option<String>> = Platform::ALL
             .iter()
-            .map(|p| self.device_pool.read(cx).base(*p).map(str::to_owned))
+            .map(|p| self.devices.pool.read(cx).base(*p).map(str::to_owned))
             .collect();
-        let picker = self.device_panel.read(cx).picker();
+        let picker = self.devices.panel.read(cx).picker();
         let groups = Platform::ALL.map(|platform| {
             let base = bases
                 .get(
@@ -337,7 +339,7 @@ impl HangarApp {
                                     .tooltip("Boot this device and open it in the Device panel")
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         let key = boot_key.clone();
-                                        this.device_panel.update(cx, |panel, cx| {
+                                        this.devices.panel.update(cx, |panel, cx| {
                                             panel.boot_device(key, window, cx)
                                         });
                                     })),
@@ -358,7 +360,7 @@ impl HangarApp {
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         let key = base_key.clone();
-                                        this.device_pool.update(cx, |pool, cx| {
+                                        this.devices.pool.update(cx, |pool, cx| {
                                             pool.set_platform_base(key.platform, key.id, cx)
                                         });
                                     },
@@ -409,7 +411,8 @@ impl HangarApp {
                             .label("Refresh")
                             .disabled(picker.is_listing())
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.device_panel
+                                this.devices
+                                    .panel
                                     .update(cx, |panel, cx| panel.refresh(window, cx))
                             })),
                     ),

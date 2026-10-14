@@ -1,12 +1,10 @@
 //! Settings › Usage: what agents spent per model over a day, week, month or year, how much ran
 //! on local models, and what that saved against a cloud model.
 
-use anyhow::Context as _;
 use gpui_kit::component::chart::BarChart;
 use gpui_kit::component::select::Select;
 use hangar_core::Timestamp;
 use hangar_core::changes::UsageEntry;
-use hangar_usecases::settings::SettingsExt as _;
 use hangar_usecases::usage::pricing::{BUILT_IN, CustomPrice, ModelPrice, price_of};
 use hangar_usecases::usage::{self, Period, Range, UsageSettings, UsageSummary};
 

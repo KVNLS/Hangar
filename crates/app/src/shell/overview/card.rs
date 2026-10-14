@@ -206,7 +206,12 @@ impl HangarApp {
                 (chat.subagents(), usage_label(chat.usage()))
             })
             .unwrap_or_default();
-        let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
+        let device = self
+            .devices
+            .pool
+            .read(cx)
+            .device_name(id)
+            .map(str::to_owned);
         let attempts = self.attempts_of(id);
         let allow_inline = request.is_some();
         let asks = self.question(id).is_some();

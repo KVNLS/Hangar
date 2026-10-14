@@ -42,6 +42,7 @@ pub(super) struct Layout {
     pub(super) collapsed_projects: HashSet<ProjectId>,
     /// Projects whose archived group is expanded.
     pub(super) show_archived: HashSet<ProjectId>,
+    pub(super) toast: Option<super::toast::Toast>,
 }
 
 /// Which agent new sessions start, what is installed, and the login PATH they run with.
@@ -81,6 +82,8 @@ pub(super) struct LiveState {
     pub(super) starting: HashSet<WorkspaceId>,
     /// Sessions that ended today, for the overview.
     pub(super) done_today: overview::DoneToday,
+    /// Workspaces waiting on the user, for the Dock badge and notifications.
+    pub(super) attention: attention::Attention<WorkspaceId>,
 }
 
 /// Projects and workspaces as loaded, and the operations in flight on them.
@@ -98,4 +101,29 @@ pub(super) struct WorkState {
     pub(super) answer: Option<questions::AnswerSheet>,
     /// Child workspaces each agent is creating through the orchestration tools.
     pub(super) child_creates: HashMap<WorkspaceId, usize>,
+}
+
+/// The device side of the window: every workspace's device and the panel of the focused one.
+pub(super) struct Devices {
+    pub(super) pool: Entity<DevicePool>,
+    pub(super) panel: Entity<DevicePanel>,
+    /// `HANGAR_DEV_DEVICE_LIMIT`, applied when the pool loads.
+    pub(super) limit_override: Option<crate::device_pool::policy::Limit>,
+}
+
+impl Devices {
+    /// Hands the pool the store and the workspaces it serves, once the database is open.
+    pub(super) fn load(&self, store: Arc<dyn Store>, workspaces: Vec<WorkspaceRef>, cx: &mut App) {
+        let limit = self.limit_override;
+        self.pool
+            .update(cx, |pool, cx| pool.load(store, workspaces, limit, cx));
+    }
+
+    /// Points the pool and the panel at the focused pane's workspace.
+    pub(super) fn focus(&self, focused: Option<WorkspaceId>, window: &mut Window, cx: &mut App) {
+        self.pool
+            .update(cx, |pool, cx| pool.set_focused(focused, cx));
+        self.panel
+            .update(cx, |panel, cx| panel.set_workspace(focused, window, cx));
+    }
 }

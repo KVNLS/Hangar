@@ -17,13 +17,10 @@ use hangar_core::changes::ChangedPath;
 use hangar_core::ports::{CodeHost, Store};
 use hangar_core::review::{MergeOutcome, MergeStrategy, PullOutcome, PushOutcome, ReviewError};
 
-use hangar_usecases::settings::SettingsExt as _;
-
 use super::{AgentProbe, ChangesEvent, ChangesPanel, CommitBox, WorkspaceAgent};
 use crate::changes::dialogs::{MergeDialog, PrDialog};
 use crate::changes::model::short_sha;
 use crate::changes::review::{self, PrRequest, ReviewTarget};
-use crate::setting_keys;
 use crate::ui::components::UiButton;
 use crate::ui::{ActiveTokens as _, TypeScale as _};
 
@@ -304,7 +301,7 @@ impl ChangesPanel {
         cx.spawn(async move |this, cx| {
             let saved = cx
                 .background_executor()
-                .spawn(async move { store.get_setting(&setting_keys::COAUTHOR_TRAILER) })
+                .spawn(async move { crate::ops::coauthor_trailer(&*store) })
                 .await;
             match saved {
                 Ok(Some(on)) => {
@@ -314,7 +311,7 @@ impl ChangesPanel {
                     });
                 }
                 Ok(None) => {}
-                Err(err) => tracing::warn!(%err, "unreadable co-author trailer setting"),
+                Err(err) => tracing::warn!("{err:#}"),
             }
         })
         .detach();
@@ -326,8 +323,8 @@ impl ChangesPanel {
         if let Some(store) = self.store.clone() {
             cx.background_executor()
                 .spawn(async move {
-                    if let Err(err) = store.set_setting(&setting_keys::COAUTHOR_TRAILER, &on) {
-                        tracing::warn!(%err, "failed to save the co-author trailer setting");
+                    if let Err(err) = crate::ops::save_coauthor_trailer(&*store, on) {
+                        tracing::warn!("{err:#}");
                     }
                 })
                 .detach();

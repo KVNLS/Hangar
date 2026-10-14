@@ -59,7 +59,7 @@ impl HangarApp {
                 )
             })
             .collect();
-        let waiting = workspace_id.is_some_and(|id| self.device_pool.read(cx).is_waiting(id));
+        let waiting = workspace_id.is_some_and(|id| self.devices.pool.read(cx).is_waiting(id));
         let run_button = workspace.map(|ws| {
             let ws_id = ws.id;
             UiButton::new(("run", pane))

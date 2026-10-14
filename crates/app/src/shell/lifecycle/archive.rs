@@ -18,7 +18,7 @@ impl HangarApp {
         let changes = self.diff_stat(workspace_id, cx);
         let (session, _) = self.close_session(workspace_id);
         self.close_run(workspace_id);
-        self.close_mcp(workspace_id);
+        self.close_mcp(workspace_id, cx);
         self.work
             .projects
             .set_status(workspace_id, WorkspaceStatus::Archived);
@@ -30,7 +30,8 @@ impl HangarApp {
         self.sync_diffs(cx);
         self.sync_device_focus(window, cx);
         let device = self
-            .device_pool
+            .devices
+            .pool
             .update(cx, |pool, cx| pool.archive(workspace_id, cx));
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {

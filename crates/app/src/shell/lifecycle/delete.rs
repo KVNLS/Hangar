@@ -83,7 +83,7 @@ impl HangarApp {
         let (session, terminal) = self.close_session(workspace_id);
         self.drain_agent_queue(window, cx);
         self.close_run(workspace_id);
-        self.close_mcp(workspace_id);
+        self.close_mcp(workspace_id, cx);
         // Stop watching before the worktree disappears.
         self.sync_diffs(cx);
         cx.notify();
@@ -99,7 +99,17 @@ impl HangarApp {
                     if let Some(session) = session {
                         ops::stop_session(&store, session, "workspace deleted", None)?;
                     }
-                    ops::delete_workspace(&store, workspace_id, options)
+                    let outcome = ops::delete_workspace(&store, workspace_id, options)?;
+                    // The saved port goes too, so another workspace can take it.
+                    for forgotten in [
+                        ops::forget_run_config(&store, workspace_id),
+                        ops::forget_chat(&store, workspace_id),
+                    ] {
+                        if let Err(err) = forgotten {
+                            tracing::warn!("{err:#}");
+                        }
+                    }
+                    anyhow::Ok(outcome)
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
@@ -114,10 +124,9 @@ impl HangarApp {
                             "workspace deleted"
                         );
                         this.work.projects.remove_workspace(workspace_id);
-                        this.forget_run_config(workspace_id);
                         this.forget_chat(workspace_id);
                         let device = this
-                            .device_pool
+                            .devices.pool
                             .update(cx, |pool, cx| pool.delete(workspace_id, cx));
                         cx.spawn(async move |_, _| match device.await {
                             Ok(()) => tracing::info!(workspace = %workspace_id, "workspace device deleted"),
@@ -224,7 +233,7 @@ impl HangarApp {
                             // Its simulator clone and assignment go with it, as on delete.
                             let id = ws.id;
                             let deleted =
-                                this.device_pool.update(cx, |pool, cx| pool.delete(id, cx));
+                                this.devices.pool.update(cx, |pool, cx| pool.delete(id, cx));
                             cx.spawn(async move |_, _| {
                                 if let Err(err) = deleted.await {
                                     tracing::warn!(workspace = %id, "device not deleted: {err:#}");

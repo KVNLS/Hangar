@@ -18,7 +18,7 @@ impl HangarApp {
             .flat_map(|e| e.active())
             .map(|ws| (ws.id, self.agent_state(ws.id, cx)))
             .collect();
-        let observed = self.attention.observe(states);
+        let observed = self.live.attention.observe(states);
         if let Some(count) = observed.badge {
             tracing::info!(count, "Dock badge");
         }
@@ -30,7 +30,7 @@ impl HangarApp {
         if cx.active_window().is_some() {
             return;
         }
-        let waits = if self.attention.enabled {
+        let waits = if self.live.attention.enabled {
             observed.waiting
         } else {
             Vec::new()
@@ -76,7 +76,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.attention.notify_finished = on;
+        self.live.attention.notify_finished = on;
         self.persist(window, cx, move |store| {
             ops::save_notify_finished(store, on)
         });
@@ -89,7 +89,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.attention.enabled = on;
+        self.live.attention.enabled = on;
         self.sync_attention(cx);
         self.persist(window, cx, move |store| {
             ops::save_notify_attention(store, on)

@@ -194,3 +194,56 @@ fn app_names_adapter_crates_only_in_adapters() {
         offenders.join("\n")
     );
 }
+
+/// Views (the shell and the panels) read and write settings and the usage ledger through
+/// `app::ops`, on the background executor; they call no such store method themselves (tests
+/// aside).
+#[test]
+fn views_reach_the_store_through_ops() {
+    const VIEWS: [&str; 6] = [
+        "shell",
+        "chat_view",
+        "changes",
+        "device_panel",
+        "device_view",
+        "files_view",
+    ];
+    const CALLS: [&str; 6] = [
+        ".get_setting(",
+        ".set_setting(",
+        ".delete_setting(",
+        ".record_usage(",
+        ".record_session_cost(",
+        "SettingsExt",
+    ];
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let mut offenders = Vec::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let is_view = VIEWS
+            .iter()
+            .any(|v| rel == format!("{v}.rs") || rel.starts_with(&format!("{v}/")));
+        let is_test_file = rel.ends_with("tests.rs") || rel.contains("/tests/");
+        if !is_view || is_test_file {
+            continue;
+        }
+        let text = std::fs::read_to_string(&file).unwrap();
+        let code = text.split("#[cfg(test)]").next().unwrap();
+        for (n, line) in code.lines().enumerate() {
+            if CALLS.iter().any(|c| line.contains(c)) {
+                offenders.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "views go through app::ops for settings and the usage ledger:\n{}",
+        offenders.join("\n")
+    );
+}

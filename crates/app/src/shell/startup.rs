@@ -118,10 +118,12 @@ impl HangarApp {
             store: None,
             changes_panel,
             files_panel,
-            device_pool,
+            devices: Devices {
+                pool: device_pool,
+                panel: device_panel,
+                limit_override: device_limit_override,
+            },
             mcp: mcp::start(window, cx),
-            device_limit_override,
-            device_panel,
             focus,
             layout: Layout {
                 panes: Panes::default(),
@@ -146,6 +148,7 @@ impl HangarApp {
                 sidebar_filter,
                 collapsed_projects: HashSet::new(),
                 show_archived: HashSet::new(),
+                toast: None,
             },
             agent_setup: AgentSetup {
                 path: None,
@@ -169,6 +172,7 @@ impl HangarApp {
                 questions: HashMap::new(),
                 starting: HashSet::new(),
                 done_today: Default::default(),
+                attention: attention::Attention::new(true),
             },
             work: WorkState {
                 projects: ProjectList::default(),
@@ -181,9 +185,7 @@ impl HangarApp {
                 creating: HashSet::new(),
                 busy: HashSet::new(),
             },
-            toast: None,
             settings_ui,
-            attention: attention::Attention::new(true),
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
                 // ACP agents run in their own process group and some (codex-acp) outlive a
@@ -253,9 +255,7 @@ impl HangarApp {
                             .map(move |w| workspace_ref(&e.project, w))
                     })
                     .collect();
-                let limit = self.device_limit_override;
-                self.device_pool
-                    .update(cx, |pool, cx| pool.load(store, workspaces, limit, cx));
+                self.devices.load(store, workspaces, cx);
                 if let Some(layout) = loaded.layout {
                     self.restore_layout(&layout, window, cx);
                 }
@@ -270,7 +270,7 @@ impl HangarApp {
                     );
                     let open = self.layout.device.open;
                     let logs = self.layout.device.logs_settings();
-                    self.device_panel.update(cx, |panel, cx| {
+                    self.devices.panel.update(cx, |panel, cx| {
                         panel.restore_logs(logs);
                         panel.restore(selected, stats, cx);
                         if open {
@@ -286,10 +286,10 @@ impl HangarApp {
                     self.restore_ollama(ollama, window, cx);
                 }
                 if let Some(on) = loaded.notify_attention {
-                    self.attention.enabled = on;
+                    self.live.attention.enabled = on;
                 }
                 if let Some(on) = loaded.notify_finished {
-                    self.attention.notify_finished = on;
+                    self.live.attention.notify_finished = on;
                 }
                 self.layout.terminal = TerminalPrefs {
                     option_as_meta: loaded.option_as_meta.unwrap_or_default(),

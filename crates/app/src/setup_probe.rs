@@ -1,10 +1,12 @@
 //! [`ToolProbe`] over this Mac: git, `gh`, the agent presets, Xcode, the Android SDK, a JDK and
-//! Node, looked up with the login shell's `PATH`.
+//! Node, looked up with the login shell's `PATH`; and an agent's `--version`.
 
 use std::ffi::OsStr;
+use std::io::Read as _;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use hangar_agents::find_program;
@@ -247,6 +249,53 @@ fn output_within(mut command: Command, timeout: Duration) -> Result<Option<Outpu
     }
 }
 
+/// How long `<agent> --version` may take before it is given up on.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The first version-looking word of `--version` output (`2.1.4 (Claude Code)` → `2.1.4`,
+/// `zsh 5.9 (arm64-apple-darwin24.0)` → `5.9`, `v0.3.1` → `0.3.1`).
+fn parse_version(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find(|l| !l.trim().is_empty())?
+        .split_whitespace()
+        .find_map(|word| {
+            let word = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            let word = word.strip_prefix('v').unwrap_or(word);
+            (word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('.'))
+                .then(|| word.to_owned())
+        })
+}
+
+/// Runs `<program> --version` with `path` as `PATH`; `None` when it fails, prints no version or
+/// outlasts [`VERSION_TIMEOUT`]. Blocking: call it off the UI thread.
+pub fn program_version(program: &Path, path: Option<&str>) -> Option<String> {
+    let mut command = Command::new(program);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("agent-version".into())
+        .spawn(move || {
+            let mut out = String::new();
+            let _ = stdout.read_to_string(&mut out);
+            let _ = tx.send(out);
+        })
+        .ok()?;
+    let out = rx.recv_timeout(VERSION_TIMEOUT).ok();
+    let _ = child.kill();
+    let _ = child.wait();
+    parse_version(&out?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +318,35 @@ mod tests {
         assert!(
             output_within(Command::new("/no/such/tool"), PROBE_TIMEOUT).is_ok_and(|o| o.is_none())
         );
+    }
+
+    #[test]
+    fn versions() {
+        assert_eq!(
+            parse_version("2.1.4 (Claude Code)\n").as_deref(),
+            Some("2.1.4")
+        );
+        assert_eq!(
+            parse_version("zsh 5.9 (arm64-apple-darwin24.0)").as_deref(),
+            Some("5.9")
+        );
+        assert_eq!(parse_version("\nv0.3.1").as_deref(), Some("0.3.1"));
+        assert_eq!(parse_version("codex-cli 0.46.0").as_deref(), Some("0.46.0"));
+        assert_eq!(parse_version("usage: foo [options]"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn a_program_version_is_read_and_a_missing_program_has_none() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("tool");
+        std::fs::write(&tool, "#!/bin/sh\necho \"tool v1.2.3 ($PATH)\"\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            program_version(&tool, Some("/usr/bin:/bin")).as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(program_version(&dir.path().join("missing"), None), None);
     }
 }

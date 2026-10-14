@@ -171,7 +171,7 @@ impl HangarApp {
         ]);
         // Shut-down simulators and emulators the device panel can boot. While the query is empty
         // only the panel's selected device is offered, so a long simulator list stays out of the way.
-        let picker = self.device_panel.read(cx).picker();
+        let picker = self.devices.panel.read(cx).picker();
         let selected = picker.selected().cloned();
         let boots: Vec<(DeviceKey, SharedString)> = picker
             .entries()
@@ -251,7 +251,8 @@ impl HangarApp {
                         this.open_answer_sheet(id, window, cx);
                     }
                     if let Some(key) = boot {
-                        this.device_panel
+                        this.devices
+                            .panel
                             .update(cx, |panel, cx| panel.boot_device(key, window, cx));
                     }
                 });
