@@ -39,10 +39,6 @@ const DIFF_ROW_HEIGHT: f32 = 19.;
 const LIST_MAX_ROWS: usize = 12;
 const GUTTER_WIDTH: f32 = 36.;
 
-pub enum ChangesEvent {
-    Close,
-}
-
 /// What the panel shows: a workspace's live diff and where review actions apply.
 pub struct PanelSource {
     pub workspace: WorkspaceId,
@@ -99,8 +95,6 @@ pub struct ChangesPanel {
     commit_boxes: HashMap<WorkspaceId, CommitBox>,
     _theme: Subscription,
 }
-
-impl EventEmitter<ChangesEvent> for ChangesPanel {}
 
 impl ChangesPanel {
     pub fn new(cx: &mut Context<Self>) -> Self {

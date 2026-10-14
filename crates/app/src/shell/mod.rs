@@ -34,7 +34,7 @@ use hangar_worktree::MergeStrategy;
 
 use crate::agents::{self, AgentChoice};
 use crate::changes::review::ReviewTarget;
-use crate::changes::{ChangesEvent, ChangesPanel, PanelSource, WorkspaceDiff};
+use crate::changes::{ChangesPanel, PanelSource, WorkspaceDiff};
 use crate::device_panel::{DevicePanel, DevicePanelEvent};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
@@ -250,19 +250,11 @@ impl HangarApp {
         );
 
         let changes_panel = cx.new(ChangesPanel::new);
-        let changes_sub = cx.subscribe_in(
-            &changes_panel,
-            window,
-            |this, _, event: &ChangesEvent, window, cx| match event {
-                ChangesEvent::Close => this.set_changes_open(false, window, cx),
-            },
-        );
         let device_panel = cx.new(|cx| DevicePanel::new(window, cx));
         let device_sub = cx.subscribe_in(
             &device_panel,
             window,
             |this, _, event: &DevicePanelEvent, window, cx| match event {
-                DevicePanelEvent::Close => this.set_device_open(false, window, cx),
                 DevicePanelEvent::Selected(key) => {
                     this.device.selected = key.clone();
                     this.save_device_layout(window, cx);
@@ -341,7 +333,7 @@ impl HangarApp {
             collapsed_projects: HashSet::new(),
             show_archived: HashSet::new(),
             _activity: Self::track_activity(cx),
-            _subscriptions: vec![select_sub, resize_sub, changes_sub, device_sub, filter_sub],
+            _subscriptions: vec![select_sub, resize_sub, device_sub, filter_sub],
         }
     }
 
