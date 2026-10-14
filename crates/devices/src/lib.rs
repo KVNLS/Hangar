@@ -55,6 +55,21 @@ impl ScreenSpec {
     pub fn height_pt(&self) -> f64 {
         f64::from(self.height_px) / self.scale
     }
+
+    /// The spec as the display currently shows it: width and height swapped when `landscape`
+    /// differs from the spec's own shape. Specs describe the natural (portrait) panel.
+    #[must_use]
+    pub fn oriented(self, landscape: bool) -> Self {
+        if (self.width_px > self.height_px) == landscape {
+            self
+        } else {
+            Self {
+                width_px: self.height_px,
+                height_px: self.width_px,
+                ..self
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,7 +138,8 @@ impl Frame {
     }
 }
 
-/// Input in device points (origin top-left, portrait). On Android a point is a dp
+/// Input in device points, origin top-left of the display *as currently oriented* (the space of
+/// the latest [`Frame`]: in landscape x runs along the long edge). On Android a point is a dp
 /// (density-independent pixel, `px / ScreenSpec::scale`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Input {
@@ -167,6 +183,41 @@ pub enum Orientation {
     LandscapeRight,
 }
 
+impl Orientation {
+    pub fn is_landscape(self) -> bool {
+        matches!(self, Self::LandscapeLeft | Self::LandscapeRight)
+    }
+
+    /// Android `Surface.ROTATION_*` index (quarter turns counter-clockwise): `LandscapeLeft`
+    /// (top edge pointing left) is `ROTATION_90`.
+    pub fn android_rotation(self) -> u8 {
+        match self {
+            Self::Portrait => 0,
+            Self::LandscapeLeft => 1,
+            Self::PortraitUpsideDown => 2,
+            Self::LandscapeRight => 3,
+        }
+    }
+
+    pub fn from_android_rotation(rotation: u8) -> Option<Self> {
+        match rotation {
+            0 => Some(Self::Portrait),
+            1 => Some(Self::LandscapeLeft),
+            2 => Some(Self::PortraitUpsideDown),
+            3 => Some(Self::LandscapeRight),
+            _ => None,
+        }
+    }
+
+    /// The next orientation when turning the device counter-clockwise (`left`) or clockwise.
+    #[must_use]
+    pub fn rotated(self, left: bool) -> Self {
+        let r = self.android_rotation();
+        let next = if left { (r + 1) % 4 } else { (r + 3) % 4 };
+        Self::from_android_rotation(next).unwrap_or(self)
+    }
+}
+
 /// Latest-frame channel: receivers always see the most recent frame; slow consumers skip frames.
 pub type FrameReceiver = tokio::sync::watch::Receiver<Option<Frame>>;
 pub type FrameSender = tokio::sync::watch::Sender<Option<Frame>>;
@@ -190,10 +241,16 @@ pub trait Device: Send + Sync {
         Err(Error::Unsupported("text input"))
     }
 
-    /// Rotates the device. Unsupported on iOS (no public or reverse-engineered route works on
-    /// Xcode 27, see spikes/m5-ios-notes.md); not implemented for Android yet.
+    /// Rotates the device and returns once the guest reports the new orientation. Frames and the
+    /// space of [`Input`] follow it. Unsupported on iOS (no public or reverse-engineered route
+    /// works on Xcode 27, see spikes/m5-ios-notes.md).
     fn set_orientation(&self, _orientation: Orientation) -> Result<()> {
         Err(Error::Unsupported("set_orientation"))
+    }
+
+    /// The orientation the guest currently shows. Unsupported wherever `set_orientation` is.
+    fn orientation(&self) -> Result<Orientation> {
+        Err(Error::Unsupported("orientation"))
     }
 
     fn boot(&self) -> Result<()> {

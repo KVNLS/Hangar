@@ -187,7 +187,7 @@ Gaps:
   the app's `RenderImage`. The emulator's `MMAP` transport (shared file, no gRPC payload) or a requested
   smaller `FrameSize` would cut this; not done.
 - Multi-touch (pinch) not exposed (`sendTouch` supports 10 slots; `Input` has one finger).
-- Rotation/foldables: frames follow the device orientation but input mapping assumes portrait.
+- Foldables/postures not handled (rotation is, see Rotation below).
 - `DeviceInfo` has no platform field (adding one would break struct literals in other crates);
   `Device::platform()` and the `Android …` runtime string carry it instead.
 - After `Device::boot` relaunches on another console port, `info().udid` keeps the old serial
@@ -213,3 +213,38 @@ for physical devices) — usable for viewing at ~8 fps with ~0.4 s input feedbac
 `-no-window -gpu host` by default and shut down via gRPC. Next: wire `Platform::Android` in the device
 panel (`android::list/open/boot`), add a log stream API, consider `MMAP` frames or scaled frames to cut
 the 14.6 MB copies, and a hardware-key row (Back/Home/Recents) in the panel.
+
+## Rotation
+
+API: `Device::set_orientation(Orientation)` and `Device::orientation() -> Result<Orientation>` (default
+`Unsupported`; implemented for `GrpcEmulator` and `AdbDevice`). `Input` points are in the space of the current
+frame (landscape: x along the long edge); `ScreenSpec::oriented(landscape)` gives the matching spec.
+`spike_android --rotate portrait|left|right|upside-down` rotates and saves a frame.
+
+Findings (emulator 36.5, Android 17, Pixel 10 Pro AVD):
+- `setPhysicalModel(ROTATION, [0,0,z])` with `accelerometer_rotation 1` turns the virtual sensor: z=90 is
+  `ROTATION_90` (`LandscapeLeft`), z=-90 is `ROTATION_270`. The emulator then delivers upright landscape frames
+  (2856x1280) and the guest lays out in landscape, but only apps that follow the sensor rotate. The Pixel
+  launcher does not (it stays portrait; the frame is then sideways content, like in Android Studio). 180 degrees
+  is disabled by default on phones. `set_orientation` fails after 5 s when the guest does not follow.
+- `settings put system user_rotation N` (+ `accelerometer_rotation 0`) rotates the guest too, but the gRPC
+  `streamScreenshot` stays in portrait panel space with sideways content and reports `rotation: Portrait`, so
+  gRPC uses the sensor route; `AdbDevice` uses the settings route (works on physical devices, and `screencap`
+  is already upright). Auto-rotate stays off after the adb route.
+- Read-back: `dumpsys window displays`, first `mDisplayRotation=ROTATION_n` (`mCurrentRotation` is the sensor
+  listener and lags). The display reports the new rotation ~0.7 s before apps relayout; `set_orientation`
+  waits for it plus a 700 ms settle.
+- gRPC `sendTouch` takes coordinates in the portrait panel space, not the rotated display space (adb
+  `input tap` takes rotated space). `geometry::panel_pixels` maps frame pixels back: LandscapeLeft
+  `(W-1-y, x)`, LandscapeRight `(y, H-1-x)`, upside-down `(W-1-x, H-1-y)`. Verified by tapping the Settings
+  search bar (2856x1280 frame, px (1430, 286)) in LandscapeLeft (screen changed 82%) and the back arrow in
+  LandscapeRight (64%), via gRPC; adb backend tap in landscape also worked (64%).
+- The backends learn the frame shape from the frames (only while someone watches). `GrpcEmulator` caches the
+  orientation from `set_orientation` and asks adb when the shape disagrees. A foreign 180 degree turn goes
+  unnoticed (same frame shape).
+- App: the view letterboxes by frame size already; `screen_points` now swaps the spec's sides for landscape
+  frames. Android panel has rotate left/right buttons cycling portrait/landscape-left/landscape-right.
+
+Gaps: rotation needs a sensor-following foreground app; upside-down is requested but phones usually refuse it;
+rotation from outside (device settings) is detected only by frame shape; the initial orientation of a device
+opened in landscape is assumed LandscapeLeft until the next adb refresh on input.

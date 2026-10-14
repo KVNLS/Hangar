@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use hangar_devices::{Device, DeviceInfo, FrameReceiver, Input, LogFilter, LogStream};
+use hangar_devices::{Device, DeviceInfo, FrameReceiver, Input, LogFilter, LogStream, Orientation};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// Outcome of one input sent to the device. Successful `TouchMove`s are not reported.
@@ -32,6 +32,8 @@ pub enum Outcome {
     Text(TextResult),
     /// `Device::shutdown` finished.
     Shutdown(Result<(), String>),
+    /// `Device::set_orientation` finished; carries the requested orientation.
+    Rotate(Orientation, Result<(), String>),
 }
 
 /// One queued action; inputs and text are delivered in the order they were queued.
@@ -39,6 +41,7 @@ pub enum Outcome {
 enum Command {
     Input(Input),
     Text(String),
+    Rotate(Orientation),
     Shutdown,
 }
 
@@ -130,6 +133,11 @@ impl DeviceSession {
         self.input.send(Command::Text(text)).is_ok()
     }
 
+    /// Queues `Device::set_orientation` behind the pending input; the outcome is reported once done.
+    pub fn rotate(&self, orientation: Orientation) -> bool {
+        self.input.send(Command::Rotate(orientation)).is_ok()
+    }
+
     /// Queues `Device::shutdown` behind the pending input; the outcome is reported once done.
     pub fn shutdown(&self) -> bool {
         self.input.send(Command::Shutdown).is_ok()
@@ -164,6 +172,15 @@ fn input_worker(
                             elapsed: started.elapsed(),
                         }));
                     }
+                }
+                Command::Rotate(orientation) => {
+                    let result = device
+                        .set_orientation(orientation)
+                        .map_err(|e| e.to_string());
+                    if let Err(err) = &result {
+                        tracing::warn!(%err, ?orientation, "device rotation failed");
+                    }
+                    let _ = results.send(Outcome::Rotate(orientation, result));
                 }
                 Command::Shutdown => {
                     let result = device.shutdown().map_err(|e| e.to_string());

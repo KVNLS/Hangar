@@ -430,6 +430,16 @@ impl DevicePanel {
                             DeviceViewEvent::Shutdown(result) => {
                                 this.on_shutdown(result, window, cx);
                             }
+                            DeviceViewEvent::Rotate(orientation, result) => {
+                                this.input_status = Some(InputStatus {
+                                    text: match result {
+                                        Ok(()) => format!("Rotated to {orientation:?}"),
+                                        Err(e) => format!("Rotate failed: {e}"),
+                                    }
+                                    .into(),
+                                    error: result.is_err(),
+                                });
+                            }
                         }
                         cx.notify();
                     },
@@ -785,6 +795,8 @@ impl DevicePanel {
             return None;
         };
         let can_shutdown = key.platform.can_shutdown(view.read(cx).info());
+        let can_rotate = key.platform.can_rotate();
+        let rotate_view = view.clone();
         let theme = cx.theme();
         let buttons = key.platform.controls().iter().map(|control| {
             let input = control.input;
@@ -818,6 +830,20 @@ impl DevicePanel {
                 .border_t_1()
                 .border_color(theme.border)
                 .children(buttons)
+                .when(can_rotate, |this| {
+                    this.children([(true, "Rotate left"), (false, "Rotate right")].map(
+                        |(left, label)| {
+                            let view = rotate_view.clone();
+                            Button::new(SharedString::from(format!("device-rotate-{left}")))
+                                .small()
+                                .label(if left { "⟲" } else { "⟳" })
+                                .tooltip(label)
+                                .on_click(move |_, _, cx| {
+                                    view.update(cx, |view, _| view.rotate(left));
+                                })
+                        },
+                    ))
+                })
                 .when(can_shutdown, |this| {
                     this.child(
                         Button::new("device-shutdown")

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_devices::{DeviceInfo, Frame, Input};
+use hangar_devices::{DeviceInfo, Frame, Input, Orientation};
 
 use geometry::{Gesture, Rect};
 use session::Outcome;
@@ -28,6 +28,8 @@ pub enum DeviceViewEvent {
     Text(TextResult),
     /// The device was asked to shut down (see [`DeviceView::shutdown`]).
     Shutdown(Result<(), String>),
+    /// A rotation finished: the orientation asked for, and whether the device followed.
+    Rotate(Orientation, Result<(), String>),
 }
 
 struct Shown {
@@ -44,6 +46,8 @@ pub struct DeviceView {
     retired: Vec<Arc<RenderImage>>,
     /// Where the current frame was last painted, in window coordinates.
     image_rect: Rc<Cell<Option<Rect>>>,
+    /// Orientation the device was last rotated to (starts from the first frame's shape).
+    orientation: Orientation,
     gesture: Gesture,
     press: u64,
     hold: Option<Task<()>>,
@@ -89,8 +93,17 @@ impl DeviceView {
                         Outcome::Input(result) => DeviceViewEvent::Input(result),
                         Outcome::Text(result) => DeviceViewEvent::Text(result),
                         Outcome::Shutdown(result) => DeviceViewEvent::Shutdown(result),
+                        Outcome::Rotate(orientation, result) => {
+                            DeviceViewEvent::Rotate(orientation, result)
+                        }
                     };
-                    if this.update(cx, |_, cx| cx.emit(event)).is_err() {
+                    let updated = this.update(cx, |view, cx| {
+                        if let DeviceViewEvent::Rotate(orientation, Ok(())) = &event {
+                            view.orientation = *orientation;
+                        }
+                        cx.emit(event);
+                    });
+                    if updated.is_err() {
                         break;
                     }
                 }
@@ -102,6 +115,7 @@ impl DeviceView {
             shown: None,
             retired: Vec::new(),
             image_rect: Rc::new(Cell::new(None)),
+            orientation: Orientation::Portrait,
             gesture: Gesture::default(),
             press: 0,
             hold: None,
@@ -134,6 +148,30 @@ impl DeviceView {
     /// Asks the device to shut down (in the background); the result arrives as an event.
     pub fn shutdown(&self) {
         if !self.session.shutdown() {
+            tracing::warn!("device input thread has stopped");
+        }
+    }
+
+    /// Turns the device one step left (counter-clockwise) or right, cycling through portrait and
+    /// the two landscapes (upside-down is skipped: Android leaves it disabled on phones). The
+    /// outcome arrives as [`DeviceViewEvent::Rotate`]; frames and touch mapping follow.
+    pub fn rotate(&self, left: bool) {
+        let current = match &self.shown {
+            // A device rotated elsewhere: trust the frame shape when it disagrees.
+            Some(s) if (s.frame.width > s.frame.height) != self.orientation.is_landscape() => {
+                if s.frame.width > s.frame.height {
+                    Orientation::LandscapeLeft
+                } else {
+                    Orientation::Portrait
+                }
+            }
+            _ => self.orientation,
+        };
+        let mut next = current.rotated(left);
+        if next == Orientation::PortraitUpsideDown {
+            next = next.rotated(left);
+        }
+        if !self.session.rotate(next) {
             tracing::warn!("device input thread has stopped");
         }
     }
