@@ -138,10 +138,16 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Deferred until backed (not rendered, no placeholders): chat stream, tool-call cards, permission prompts and
   the Approval/Input states (M7); build progress, crash and "in use" device overlays, Run/Reload (M6); status bar
   build/RAM; per-workspace target device; Clone repository; custom agent commands; approval-mode and concurrency settings; phone bezel around the device.
-- Owner's first visual pass covered only the workspace screen with no agents running (fixes in f23471f).
-  Every other screen, in dark and light, still needs a check against design/Hangar.dc.html.
+- Visual pass 2026-10-05 (Claude, screenshots through `HANGAR_DEV_SHOW`): every screen in dark and light, plus
+  the device panel on the iOS simulator and the Pixel_10_Pro emulator, compared with design/Hangar.dc.html.
+  Fixed: title bar ⌘K search field and button order, changes/review footer (commit box and actions under the
+  diff, design-system buttons, Create PR primary), no-remote repos no longer show gh's error, empty states and
+  file tree rows in narrow panes, overview header order.
 
 ## Remaining gaps
+- UI vs mockup: New workspace sheet has no base-branch / new-branch fields (branch shown in the footer only);
+  Settings › Agents keeps a disabled "Make default" on the default row; the device panel shows a
+  `backend: …` status line the mockup does not have; the overview card's last line is often the shell prompt.
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
