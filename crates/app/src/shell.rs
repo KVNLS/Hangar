@@ -477,6 +477,7 @@ impl HangarApp {
             |this, _, event: &ChangesEvent, window, cx| match event {
                 ChangesEvent::ExitReview => this.set_screen(Screen::Workspace, window, cx),
                 ChangesEvent::OpenReview => this.set_screen(Screen::Review, window, cx),
+                ChangesEvent::OpenSetup => this.open_setup(window, cx),
                 ChangesEvent::AskAgent { workspace, text } => {
                     this.prefill_agent(*workspace, text, window, cx)
                 }
@@ -673,7 +674,19 @@ impl HangarApp {
 
     fn report(&mut self, err: &anyhow::Error, window: &mut Window, cx: &mut Context<Self>) {
         tracing::error!("{err:#}");
-        window.push_notification(Notification::error(format!("{err:#}")), cx);
+        let mut notification = Notification::error(format!("{err:#}"));
+        if setup::is_missing_tool(err) {
+            let shell = cx.entity().downgrade();
+            notification = notification.action(move |_, _, _| {
+                let shell = shell.clone();
+                gpui_kit::component::button::Button::new("open-setup")
+                    .label("Open Setup")
+                    .on_click(move |_, window, cx| {
+                        let _ = shell.update(cx, |this, cx| this.open_setup(window, cx));
+                    })
+            });
+        }
+        window.push_notification(notification, cx);
     }
 
     /// Runs `job` with the store on the background executor and reports its error, if any.

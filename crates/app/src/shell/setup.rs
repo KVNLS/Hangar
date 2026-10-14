@@ -101,3 +101,45 @@ impl HangarApp {
         self.work.projects.is_empty() && !self.work.loading && self.work.load_error.is_none()
     }
 }
+
+/// The error comes from a tool that is missing or too old (an agent CLI, git, `gh`), which
+/// Settings › Setup explains how to install.
+pub(super) fn is_missing_tool(err: &anyhow::Error) -> bool {
+    use hangar_worktree::Error as Git;
+    let missing_git = |e: &(dyn std::error::Error + 'static)| {
+        matches!(
+            e.downcast_ref::<Git>(),
+            Some(Git::GitMissing | Git::GitTooOld { .. } | Git::GhMissing)
+        )
+    };
+    err.chain().any(|e| {
+        matches!(
+            e.downcast_ref::<hangar_agents::Error>(),
+            Some(hangar_agents::Error::NotInstalled { .. })
+        ) || missing_git(e)
+            || e.downcast_ref::<hangar_core::ports::PortError>()
+                .is_some_and(|p| missing_git(p.inner()))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use hangar_core::ports::PortError;
+
+    use super::is_missing_tool;
+
+    #[test]
+    fn recognises_missing_tools_through_wrappers() {
+        let agent = anyhow::Error::new(hangar_agents::Error::NotInstalled {
+            agent: "codex".into(),
+            program: "codex".into(),
+        })
+        .context("cannot start the agent");
+        assert!(is_missing_tool(&agent));
+        let git = anyhow::Error::new(PortError::new(hangar_worktree::Error::GitMissing))
+            .context("cannot create the worktree");
+        assert!(is_missing_tool(&git));
+        let other = anyhow::Error::new(hangar_worktree::Error::NothingToCommit);
+        assert!(!is_missing_tool(&other));
+    }
+}

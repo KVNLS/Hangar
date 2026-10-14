@@ -25,6 +25,11 @@ impl PortError {
     pub fn new(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
         Self(err.into())
     }
+
+    /// The adapter's error, for callers that recognise some of them (e.g. a missing tool).
+    pub fn inner(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self.0.as_ref()
+    }
 }
 
 pub type PortResult<T> = Result<T, PortError>;

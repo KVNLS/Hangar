@@ -19,7 +19,7 @@ use hangar_core::review::{MergeOutcome, MergeStrategy, PullOutcome, PushOutcome,
 
 use hangar_usecases::settings::SettingsExt as _;
 
-use super::{AgentProbe, ChangesPanel, CommitBox, WorkspaceAgent};
+use super::{AgentProbe, ChangesEvent, ChangesPanel, CommitBox, WorkspaceAgent};
 use crate::changes::dialogs::{MergeDialog, PrDialog};
 use crate::changes::model::short_sha;
 use crate::changes::review::{self, PrRequest, ReviewTarget};
@@ -698,6 +698,26 @@ impl ChangesPanel {
             .child(merge)
             .child(div().flex_1())
             .child(pr);
+        let gh_row = gh_blocker.map(|blocker| {
+            h_flex()
+                .gap(px(6.))
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(11.))
+                        .text_color(t.tx3)
+                        .child(blocker),
+                )
+                .child(
+                    UiButton::new("review-open-setup")
+                        .ghost()
+                        .small()
+                        .label("Open Setup")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangesEvent::OpenSetup))),
+                )
+        });
 
         v_flex()
             .flex_shrink_0()
@@ -714,6 +734,7 @@ impl ChangesPanel {
             .child(coauthor)
             .child(commit_row)
             .child(share_row)
+            .children(gh_row)
             .into_any_element()
     }
 }
