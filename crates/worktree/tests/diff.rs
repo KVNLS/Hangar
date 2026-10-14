@@ -343,6 +343,28 @@ fn large_file_guards() {
 }
 
 #[test]
+fn plain_mv_shows_as_a_rename() {
+    let repo = Repo::new();
+    fs::create_dir(repo.path.join("moved")).unwrap();
+    fs::rename(repo.path.join("long.txt"), repo.path.join("moved/long.txt")).unwrap();
+    repo.write("fresh.txt", "new\n");
+    let files = repo.diff();
+    assert_eq!(files.len(), 2, "{files:#?}");
+    let moved = find(&files, "moved/long.txt");
+    assert_eq!(moved.status, FileStatus::Renamed);
+    assert_eq!(moved.old_path.as_deref(), Some(Path::new("long.txt")));
+    let fresh = find(&files, "fresh.txt");
+    assert_eq!(fresh.status, FileStatus::Untracked);
+    assert_eq!(texts(fresh), [(LineKind::Added, "new".to_owned())]);
+    let leftovers: Vec<_> = fs::read_dir(repo.path.join(".git"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains("hangar-diff"))
+        .collect();
+    assert!(leftovers.is_empty(), "scratch index left behind: {leftovers:?}");
+}
+
+#[test]
 fn diff_does_not_touch_the_index() {
     let repo = Repo::new();
     repo.write("README.md", "changed\n");

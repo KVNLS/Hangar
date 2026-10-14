@@ -67,11 +67,21 @@ pub fn git_version() -> Result<GitVersion> {
 #[derive(Clone, Debug)]
 pub struct Git {
     dir: PathBuf,
+    env: Vec<(OsString, OsString)>,
 }
 
 impl Git {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            env: Vec::new(),
+        }
+    }
+
+    /// The same runner with `key=value` added to git's environment.
+    pub(crate) fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
     }
 
     pub fn dir(&self) -> &Path {
@@ -197,6 +207,7 @@ impl Git {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("LC_ALL", "C")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .stdin(if piped_stdin {
                 Stdio::piped()
             } else {

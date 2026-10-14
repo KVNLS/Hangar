@@ -97,12 +97,100 @@ pub fn diff_paths(
     args.push(rev.into());
     args.push("--".into());
     args.extend(paths.iter().map(|p| p.as_os_str().to_owned()));
-    let mut files = parse_patch(&git.run_bytes(&args)?, opts)?;
+
+    let mut small = Vec::new();
+    let mut files = Vec::new();
     for path in untracked_files(worktree, paths)? {
-        files.extend(diff_untracked(&git, worktree, &path, opts)?);
+        match std::fs::symlink_metadata(worktree.join(&path)) {
+            Ok(meta) if opts.max_untracked_bytes.is_some_and(|max| meta.len() > max) => {
+                let mut file = FileDiff::untracked(path);
+                file.truncated = true;
+                files.push(file);
+            }
+            Ok(_) => small.push(path),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
+    // Untracked files go into one diff through a scratch copy of the index where they are
+    // intent-to-add: no git process per file, and a file moved without `git mv` pairs with its
+    // deleted original as a rename. The real index is never written.
+    let scratch = match small.is_empty() {
+        true => None,
+        false => ScratchIndex::with_intent_to_add(&git, &small)
+            .inspect_err(|e| tracing::debug!("diff: scratch index failed, diffing one by one: {e}"))
+            .ok(),
+    };
+    let runner = match &scratch {
+        Some(index) => git
+            .clone()
+            .with_env("GIT_INDEX_FILE", index.path.as_os_str()),
+        None => git.clone(),
+    };
+    let mut diffed = parse_patch(&runner.run_bytes(&args)?, opts)?;
+    match scratch {
+        Some(_) => {
+            let untracked: std::collections::HashSet<&PathBuf> = small.iter().collect();
+            for file in &mut diffed {
+                if file.old_path.is_none() && untracked.contains(&file.path) {
+                    file.status = FileStatus::Untracked;
+                }
+            }
+        }
+        None => {
+            for path in &small {
+                diffed.extend(diff_untracked(&git, worktree, path, opts)?);
+            }
+        }
+    }
+    files.extend(diffed);
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+/// A copy of the worktree's index next to it, removed on drop.
+struct ScratchIndex {
+    path: PathBuf,
+}
+
+impl ScratchIndex {
+    fn with_intent_to_add(git: &Git, paths: &[PathBuf]) -> Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let index = git.run(["rev-parse", "--git-path", "index"])?;
+        let index = git.dir().join(index.trim());
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = index.with_file_name(format!("index.hangar-diff-{}-{n}", std::process::id()));
+        std::fs::copy(&index, &path)?;
+        let scratch = Self { path };
+        let mut list = Vec::new();
+        for p in paths {
+            list.extend_from_slice(p.as_os_str().as_encoded_bytes());
+            list.push(0);
+        }
+        git.clone()
+            .with_env("GIT_INDEX_FILE", scratch.path.as_os_str())
+            .run_bytes_with(
+                [
+                    "--literal-pathspecs",
+                    "add",
+                    "--intent-to-add",
+                    "--pathspec-from-file=-",
+                    "--pathspec-file-nul",
+                ],
+                Some(&list),
+                &[],
+            )?;
+        Ok(scratch)
+    }
+}
+
+impl Drop for ScratchIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let mut lock = self.path.clone().into_os_string();
+        lock.push(".lock");
+        let _ = std::fs::remove_file(lock);
+    }
 }
 
 /// Untracked, non-ignored files under `paths` (all when empty), relative to the worktree.
