@@ -59,7 +59,8 @@ pub fn base_label(branch: Option<&str>, merge_base: &str) -> String {
 
 /// The branch the workspace base names (`origin/main` → `main`); `None` for a commit. Blocks.
 pub fn resolve_base_name(worktree: &Path, base: &str) -> Option<String> {
-    hangar_worktree::base_branch_name(worktree, base)
+    adapters::review_ops()
+        .base_branch_name(worktree, base)
         .inspect_err(|err| tracing::warn!(%err, base, "could not resolve the base branch"))
         .ok()
         .flatten()
