@@ -318,9 +318,14 @@ Git access is the `git` CLI with porcelain output, not a library.
   done / failed, current activity). Hangar stays on the adapter's fallback mode (no `subagents` client
   capability, so no `subagent_spawned` child sessions).
 - Overview cards list the current turn's subagents ("N subagents · …", up to 4 rows, "+N more"); a row opens
-  the workspace and scrolls the chat to the launch call. The header counts running subagents.
-- Not done: child tool calls stay flat in the chat transcript (not nested under their subagent); no
-  per-subagent diff counts or devices on the rows; OpenCode, Codex and Gemini report no parent link.
+  that subagent's chat. The header counts running subagents.
+- Chat: every item has an owner (top-level subagent launch, or the agent). The agent's transcript hides
+  subagent items (each launch card has "Open"); a subagent's view shows its task (`rawInput.prompt`), text,
+  tool calls and what it returned, with a back header (esc) and no composer. Permission prompts show in both.
+  Subagent text chunks (stamped with the parent id) no longer merge into the agent's messages; Hangar
+  advertises `clientCapabilities._meta["subagent-transcript"]` for the text that was not streamed.
+- Not done: no per-subagent diff counts or devices on the rows; OpenCode, Codex and Gemini report no
+  parent link; a nested subagent shows inside its top-level one, not in a view of its own.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a

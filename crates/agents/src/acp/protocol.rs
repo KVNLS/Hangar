@@ -38,6 +38,8 @@ pub fn initialize_params() -> Value {
         "clientCapabilities": {
             "fs": { "readTextFile": false, "writeTextFile": false },
             "terminal": false,
+            // claude-agent-acp: also send subagents' text that was not streamed.
+            "_meta": { "subagent-transcript": true },
         },
         "clientInfo": { "name": "hangar", "version": env!("CARGO_PKG_VERSION") },
     })
@@ -356,6 +358,8 @@ pub struct ToolCall {
     pub parent: Option<String>,
     /// For a subagent launch, its agent type (`rawInput.subagent_type`).
     pub subagent_type: Option<String>,
+    /// For a subagent launch, the task it was given (`rawInput.prompt`).
+    pub prompt: Option<String>,
 }
 
 /// The fields a `tool_call_update` (or permission request) changes; `None` keeps the old value.
@@ -370,6 +374,14 @@ pub struct ToolCallUpdate {
     pub tool_name: Option<String>,
     pub parent: Option<String>,
     pub subagent_type: Option<String>,
+    pub prompt: Option<String>,
+}
+
+/// The subagent launch an update was made under (Claude Code: `_meta.claudeCode.parentToolUseId`).
+fn parent_of(update: &Value) -> Option<String> {
+    update["_meta"]["claudeCode"]["parentToolUseId"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 impl ToolCallUpdate {
@@ -384,10 +396,9 @@ impl ToolCallUpdate {
             tool_name: v["_meta"]["claudeCode"]["toolName"]
                 .as_str()
                 .map(str::to_owned),
-            parent: v["_meta"]["claudeCode"]["parentToolUseId"]
-                .as_str()
-                .map(str::to_owned),
+            parent: parent_of(v),
             subagent_type: v["rawInput"]["subagent_type"].as_str().map(str::to_owned),
+            prompt: v["rawInput"]["prompt"].as_str().map(str::to_owned),
         })
     }
 }
@@ -414,6 +425,7 @@ impl ToolCall {
             (&mut self.tool_name, &update.tool_name),
             (&mut self.parent, &update.parent),
             (&mut self.subagent_type, &update.subagent_type),
+            (&mut self.prompt, &update.prompt),
         ] {
             if value.is_some() {
                 field.clone_from(value);
@@ -481,8 +493,15 @@ pub struct AvailableCommand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionUpdate {
-    AgentMessage(String),
-    AgentThought(String),
+    /// `parent`: the subagent launch it came from; `None` for the agent itself.
+    AgentMessage {
+        text: String,
+        parent: Option<String>,
+    },
+    AgentThought {
+        text: String,
+        parent: Option<String>,
+    },
     UserMessage(String),
     ToolCall(ToolCall),
     ToolCallUpdate(ToolCallUpdate),
@@ -502,8 +521,14 @@ pub enum SessionUpdate {
 pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
     let kind = update["sessionUpdate"].as_str()?;
     Some(match kind {
-        "agent_message_chunk" => SessionUpdate::AgentMessage(content_text(&update["content"])),
-        "agent_thought_chunk" => SessionUpdate::AgentThought(content_text(&update["content"])),
+        "agent_message_chunk" => SessionUpdate::AgentMessage {
+            text: content_text(&update["content"]),
+            parent: parent_of(update),
+        },
+        "agent_thought_chunk" => SessionUpdate::AgentThought {
+            text: content_text(&update["content"]),
+            parent: parent_of(update),
+        },
         "user_message_chunk" => SessionUpdate::UserMessage(content_text(&update["content"])),
         "tool_call" => {
             let fields = ToolCallUpdate::parse(update)?;
@@ -598,12 +623,18 @@ mod tests {
         let u = json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"}});
         assert_eq!(
             parse_update(&u),
-            Some(SessionUpdate::AgentMessage("hi".into()))
+            Some(SessionUpdate::AgentMessage {
+                text: "hi".into(),
+                parent: None
+            })
         );
         let u = json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "image", "data": "", "mimeType": "image/png"}});
         assert_eq!(
             parse_update(&u),
-            Some(SessionUpdate::AgentThought("[image]".into()))
+            Some(SessionUpdate::AgentThought {
+                text: "[image]".into(),
+                parent: None
+            })
         );
         let link = json!({"type": "resource_link", "uri": "file:///a.rs", "name": "a.rs"});
         assert_eq!(content_text(&link), "[a.rs](file:///a.rs)");
@@ -655,7 +686,8 @@ mod tests {
         let u = json!({
             "sessionUpdate": "tool_call", "toolCallId": "a1", "title": "Migrate CartStore",
             "kind": "think", "status": "in_progress",
-            "rawInput": {"description": "Migrate CartStore", "subagent_type": "general-purpose"},
+            "rawInput": {"description": "Migrate CartStore", "subagent_type": "general-purpose",
+                         "prompt": "Move CartStore to @Observable"},
             "_meta": {"claudeCode": {"toolName": "Agent"}}
         });
         let Some(SessionUpdate::ToolCall(launch)) = parse_update(&u) else {
@@ -664,6 +696,10 @@ mod tests {
         assert!(launch.is_subagent());
         assert_eq!(launch.subagent_type.as_deref(), Some("general-purpose"));
         assert_eq!(launch.parent, None);
+        assert_eq!(
+            launch.prompt.as_deref(),
+            Some("Move CartStore to @Observable")
+        );
 
         let u = json!({
             "sessionUpdate": "tool_call", "toolCallId": "c1", "title": "Read a.rs", "kind": "read",
@@ -683,6 +719,18 @@ mod tests {
         child.apply(&update);
         assert_eq!(child.parent.as_deref(), Some("a1"));
         assert_eq!(child.tool_name.as_deref(), Some("Read"));
+
+        let u = json!({
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"},
+            "_meta": {"claudeCode": {"parentToolUseId": "a1"}}
+        });
+        assert_eq!(
+            parse_update(&u),
+            Some(SessionUpdate::AgentMessage {
+                text: "done".into(),
+                parent: Some("a1".into())
+            })
+        );
     }
 
     #[test]

@@ -440,7 +440,10 @@ mod tests {
             .send(json!({"jsonrpc": "2.0", "id": req["id"], "result": {"stopReason": "end_turn"}}));
         assert_eq!(
             next(&rx),
-            AcpEvent::Update(SessionUpdate::AgentMessage("Hi".into()))
+            AcpEvent::Update(SessionUpdate::AgentMessage {
+                text: "Hi".into(),
+                parent: None
+            })
         );
         assert_eq!(
             next(&rx),

@@ -5,7 +5,7 @@ use hangar_core::Timestamp;
 
 use super::status::age_label;
 use super::*;
-use crate::chat_view::ChatView;
+use crate::chat_view::{ChatView, subagent_state};
 use crate::ui::components::{AgentMark, Delta, Segmented, StateGlyph, UiButton, card};
 use gpui_kit::component::Icon;
 use hangar_agents::acp::subagents::{Subagent, SubagentStatus};
@@ -14,15 +14,6 @@ use crate::ui::{ActiveTokens as _, TypeScale as _};
 
 /// Subagent rows shown on a card before "+N more".
 const MAX_SUBAGENT_ROWS: usize = 4;
-
-fn subagent_glyph(status: SubagentStatus) -> AgentState {
-    match status {
-        SubagentStatus::Running => AgentState::Working,
-        SubagentStatus::Approval => AgentState::Approval,
-        SubagentStatus::Done => AgentState::Review,
-        SubagentStatus::Failed => AgentState::Failed,
-    }
-}
 
 /// "3 subagents · 1 done · 1 running · 1 waiting for approval"; zero counts are left out.
 fn subagent_summary(list: &[Subagent]) -> String {
@@ -73,7 +64,7 @@ impl HangarApp {
                     this.select_workspace(id, window, cx);
                     this.set_screen(Screen::Workspace, window, cx);
                     if let Some(view) = this.chat_view(id).cloned() {
-                        view.update(cx, |view, cx| view.reveal_tool(&sub_id, cx));
+                        view.update(cx, |view, cx| view.focus_subagent(Some(&sub_id), cx));
                     }
                 }))
                 .child(
@@ -83,7 +74,7 @@ impl HangarApp {
                         .w(px(14.))
                         .items_center()
                         .justify_center()
-                        .child(StateGlyph::new(subagent_glyph(sub.status))),
+                        .child(StateGlyph::new(subagent_state(sub.status))),
                 )
                 .child(
                     v_flex()

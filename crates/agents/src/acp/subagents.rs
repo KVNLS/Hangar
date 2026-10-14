@@ -97,12 +97,20 @@ pub fn subagents<'a>(
         .collect()
 }
 
-/// The top-level launch a call with this `parent` runs under, following `parent` links.
 fn root<'a>(by_id: &HashMap<&'a str, &'a ToolCall>, parent: Option<&'a str>) -> Option<&'a str> {
+    owner(parent, |id| by_id.get(id).copied())
+}
+
+/// The top-level subagent launch that a message or call with this `parent` belongs to,
+/// following `parent` links through `call`. `None` for the agent's own items (and cycles).
+pub fn owner<'a>(
+    parent: Option<&'a str>,
+    call: impl Fn(&str) -> Option<&'a ToolCall>,
+) -> Option<&'a str> {
     let mut id = parent?;
     for _ in 0..MAX_DEPTH {
-        match by_id.get(id).and_then(|launch| launch.parent.as_deref()) {
-            Some(up) if by_id.contains_key(up) => id = up,
+        match call(id).and_then(|launch| launch.parent.as_deref()) {
+            Some(up) if call(up).is_some() => id = up,
             _ => return Some(id),
         }
     }
@@ -259,6 +267,29 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].tool_calls, 2);
         assert_eq!(list[0].activity.as_deref(), Some("Grep foo"));
+    }
+
+    #[test]
+    fn owner_follows_nesting() {
+        let mut nested = launch("n1", "Inner", ToolStatus::InProgress);
+        nested.parent = Some("a1".into());
+        let calls = [launch("a1", "Outer", ToolStatus::InProgress), nested];
+        let find = |id: &str| calls.iter().find(|c| c.id == id);
+        assert_eq!(owner(None, find), None);
+        assert_eq!(owner(Some("a1"), find), Some("a1"));
+        assert_eq!(owner(Some("n1"), find), Some("a1"));
+        // A launch not seen (an earlier turn's, or lost) still groups its own items.
+        assert_eq!(owner(Some("gone"), find), Some("gone"));
+
+        let mut a = launch("a", "A", ToolStatus::InProgress);
+        a.parent = Some("b".into());
+        let mut b = launch("b", "B", ToolStatus::InProgress);
+        b.parent = Some("a".into());
+        let cycle = [a, b];
+        assert_eq!(
+            owner(Some("a"), |id: &str| cycle.iter().find(|c| c.id == id)),
+            None
+        );
     }
 
     #[test]
