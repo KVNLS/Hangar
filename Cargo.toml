@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "examples"]
+exclude = ["third_party/gpui-pre-apple"]
 
 [workspace.package]
 version = "0.1.0"
@@ -71,3 +72,8 @@ dbg_macro = "deny"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# BGRA CoreVideo surfaces for zero-copy device frames (zed PR #61291); see
+# third_party/gpui-pre-apple/HANGAR_PATCH.md. Drop once the gpui-component pin ships them.
+[patch.crates-io]
+gpui-pre-apple = { path = "third_party/gpui-pre-apple" }
