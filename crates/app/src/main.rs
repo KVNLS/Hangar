@@ -41,6 +41,8 @@
 //! `HANGAR_DEV_SHOW=<screen>` runs last and leaves the window on `workspace`, `review` (split),
 //! `review-inline`, `overview`, `settings-{agents,devices,appearance,keybindings}`, `palette` or
 //! `sheet` (New workspace) or `device` (device panel), for screenshots.
+//! `HANGAR_DEV_SCREENSHOT=1` then waits for the workspace device's first frame and takes the
+//! device panel's ⌘S screenshot for the agent.
 //!
 //! Device pool (one device per workspace):
 //! - `HANGAR_DEV_WORKSPACES=a,b` — `HANGAR_DEV_OPEN` creates these workspaces instead of

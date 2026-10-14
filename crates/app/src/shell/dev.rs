@@ -90,6 +90,8 @@ pub struct DevOptions {
     pub appearance: Option<String>,
     /// Screen to leave the window on once every other hook has run (for screenshots).
     pub show: Option<String>,
+    /// After `show`: wait for the workspace device's first frame, then take the ⌘S screenshot.
+    pub screenshot: bool,
     /// Build and run on their devices: `1` = the workspaces `HANGAR_DEV_OPEN` created (else the
     /// focused one), or comma-separated slugs.
     pub run: Option<String>,
@@ -227,6 +229,7 @@ impl DevOptions {
             files: var("HANGAR_DEV_FILES"),
             appearance: var("HANGAR_DEV_APPEARANCE"),
             show: var("HANGAR_DEV_SHOW"),
+            screenshot: flag("HANGAR_DEV_SCREENSHOT"),
             run: var("HANGAR_DEV_RUN"),
             select: var("HANGAR_DEV_SELECT"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
@@ -466,6 +469,38 @@ pub(super) async fn run_dev_hooks(
     }
     if let Some(name) = dev.show.clone() {
         dev_show(&this, &name, cx).await;
+    }
+    if dev.screenshot {
+        dev_screenshot(&this, cx).await;
+    }
+}
+
+/// `HANGAR_DEV_SCREENSHOT=1`: the device panel's ⌘S once the workspace device paints a frame.
+async fn dev_screenshot(this: &WeakEntity<HangarApp>, cx: &mut AsyncWindowContext) {
+    let deadline = std::time::Instant::now() + DEV_BOOT_TIMEOUT;
+    loop {
+        let ready = this
+            .update(cx, |this, cx| {
+                let panel = this.device_panel.read(cx);
+                let ws = panel.workspace()?;
+                panel
+                    .view()
+                    .and_then(|v| v.read(cx).painted_frame().map(|_| ws))
+            })
+            .ok()
+            .flatten();
+        if let Some(ws) = ready {
+            tracing::info!(workspace = %ws, "HANGAR_DEV_SCREENSHOT");
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.screenshot_to_agent(ws, window, cx)
+            });
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::error!("HANGAR_DEV_SCREENSHOT: no workspace device frame");
+            return;
+        }
+        cx.background_executor().timer(DEV_POLL).await;
     }
 }
 

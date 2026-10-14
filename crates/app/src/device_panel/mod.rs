@@ -1569,12 +1569,10 @@ fn stats_forced() -> bool {
     std::env::var_os("HANGAR_DEVICE_STATS").is_some_and(|v| v == "1")
 }
 
+/// The base device's name and runtime. Its state is the item's dot; the label beside the select
+/// shows the state of the device actually shown (often the workspace's own clone).
 fn entry_title(e: &DeviceEntry) -> String {
-    let mut title = format!("{} · {}", e.info.name, e.info.runtime);
-    if !e.ready {
-        title.push_str(&format!(" · {}", e.info.state));
-    }
-    title
+    format!("{} · {}", e.info.name, e.info.runtime)
 }
 
 fn plural_chars(n: usize) -> String {

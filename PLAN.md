@@ -317,8 +317,10 @@ Git access is the `git` CLI with porcelain output, not a library.
     - Palette "Split pane down".
     - Keybindings show ⌘⇧\ for split down, and the ⌘\ row is labelled "(alternate)".
     - Agents settings no longer show "Default" twice.
-  - Open: the device select names the base model's state ("Shutdown") while the label beside it shows the workspace device ("Booting").
-  - Not yet seen on screen: the done card, ⌘S screenshot, the in-use overlay, toasts.
+  - The device select no longer shows the base model's state ("· Shutdown"): the dot says it, and the label beside it shows the device actually shown (the workspace's clone).
+  - Seen with a live Claude Code (ACP) turn: "wants to run a command", ⏎ approving once, then the "Ready for review" card with "1 file changed, +1 −0" and the trailer on by default.
+  - Seen with `HANGAR_DEV_SCREENSHOT=1` (new hook): the PNG is saved, its path is typed into the terminal agent, and the toast shows. The toast covers the device panel's Shut down button for 2.8 s (bottom right, as in the mockup).
+  - Not seen live: the in-use overlay (needs a lease held by a run, so a buildable app; unit-tested).
 - `changes/review.rs` calls `hangar_worktree::base_branch_name` directly instead of through a `ReviewOps` port.
 
 ## Device panel visual pass (2026-10-05)
