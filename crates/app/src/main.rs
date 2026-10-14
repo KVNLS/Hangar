@@ -1,5 +1,10 @@
 //! Hangar desktop app.
 //!
+//! `hangar mcp-bridge` runs the MCP stdio bridge instead of the app (checked before anything
+//! GPUI starts): agents launched from a workspace start it as their `hangar` MCP server. It
+//! relays stdin/stdout to the running app's socket (`HANGAR_MCP_SOCKET`) with the workspace's
+//! session secret (`HANGAR_MCP_SESSION`), prints errors to stderr and exits non-zero on failure.
+//!
 //! Environment:
 //! - `HANGAR_DB` — database file (default `~/Library/Application Support/Hangar/hangar.db`).
 //! - `HANGAR_WORKTREES` — worktree root (default `~/Library/Application Support/Hangar/worktrees`).
@@ -79,7 +84,24 @@ use gpui_kit::*;
 use hangar_app::shell::{DevOptions, HangarApp};
 use tracing_subscriber::EnvFilter;
 
-fn main() {
+fn main() -> std::process::ExitCode {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "mcp-bridge")
+    {
+        return match hangar_mcp::run_bridge_from_env() {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("hangar mcp-bridge: {err}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+    run_app();
+    std::process::ExitCode::SUCCESS
+}
+
+fn run_app() {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
