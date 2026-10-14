@@ -4,6 +4,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+pub mod capacity;
+
+pub use capacity::{BootRefusal, DeviceCost, HostResources, Pressure};
+
 /// `DeviceInfo::state` values Hangar acts on (simctl and the Android adapter use the same words).
 pub mod state {
     /// Simulator booted; Android: online in adb and `sys.boot_completed=1`.

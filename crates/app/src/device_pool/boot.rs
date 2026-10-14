@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_devices::capacity::{self, HostResources};
+use hangar_devices::capacity;
 use tokio::sync::oneshot;
 
 use crate::device_panel::{BackendReason, Platform};
@@ -148,7 +148,7 @@ impl DevicePool {
                     .background_executor()
                     .spawn(async {
                         // `HANGAR_PRESSURE` (tests) applies to the guard too.
-                        HostResources::detect().map(|mut host| {
+                        capacity::detect().map(|mut host| {
                             if let Ok(p) = capacity::pressure_with_override() {
                                 host.pressure = p;
                             }

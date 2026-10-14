@@ -303,7 +303,7 @@ impl DevicePool {
             host_error: None,
             pressure: None,
             bases: BTreeMap::new(),
-            android_cost: DeviceCost::android(&hangar_devices::android::AvdCost::DEFAULT),
+            android_cost: capacity::android_cost(&hangar_devices::android::AvdCost::DEFAULT),
             assignments: HashMap::new(),
             workspaces: HashMap::new(),
             devices: HashMap::new(),
@@ -372,7 +372,7 @@ impl DevicePool {
                 .background_executor()
                 .spawn(async move {
                     (
-                        HostResources::detect(),
+                        capacity::detect(),
                         backend::cost(Platform::Android, android_base.as_deref()),
                     )
                 })

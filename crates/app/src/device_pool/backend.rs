@@ -301,10 +301,10 @@ pub fn delete_clone(udid: &str) -> anyhow::Result<()> {
 pub fn cost(platform: Platform, base: Option<&str>) -> DeviceCost {
     match (platform, base, hangar_devices::android::avd::avd_home()) {
         (Platform::Android, Some(avd), Some(home)) => {
-            DeviceCost::android(&hangar_devices::android::avd::cost(&home, avd))
+            hangar_devices::capacity::android_cost(&hangar_devices::android::avd::cost(&home, avd))
         }
         (Platform::Android, _, _) => {
-            DeviceCost::android(&hangar_devices::android::AvdCost::DEFAULT)
+            hangar_devices::capacity::android_cost(&hangar_devices::android::AvdCost::DEFAULT)
         }
         (Platform::Ios, _, _) => DeviceCost::ios_simulator(),
     }
