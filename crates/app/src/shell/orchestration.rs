@@ -297,7 +297,9 @@ impl HangarApp {
     ) -> anyhow::Result<String> {
         self.ensure_orchestration()?;
         let child = orchestration::find_child(self.every_workspace(), ws, query)?.clone();
-        orchestration::check_prompt(&child.name, self.agent_state(child.id, cx))?;
+        let reports_waits =
+            agents::agent_profile(&self.agent_for(child.id)).is_some_and(|p| p.reports_waits);
+        orchestration::check_prompt(&child.name, self.agent_state(child.id, cx), reports_waits)?;
         let live = self.live_agent(&child)?;
         live.send_text(&orchestration::prompt_text(text), cx)?;
         tracing::info!(parent = %ws, child = %child.id, "agent prompted a workspace");

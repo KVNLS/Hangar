@@ -508,6 +508,16 @@ impl Store {
         Ok(())
     }
 
+    /// Keys that start with `prefix`, sorted. An exact prefix, not a `LIKE` pattern.
+    pub fn setting_keys(&self, prefix: &str) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT key FROM settings WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key",
+        )?;
+        let keys = stmt.query_map([prefix], |row| row.get(0))?;
+        Ok(keys.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Reads a JSON-encoded setting; `None` when the key was never set.
     pub fn get_setting<T: serde::de::DeserializeOwned>(
         &self,
@@ -857,5 +867,9 @@ impl hangar_core::ports::Store for Store {
 
     fn remove_setting(&self, key: &str) -> PortResult<()> {
         Store::remove_setting(self, key).map_err(PortError::new)
+    }
+
+    fn setting_keys(&self, prefix: &str) -> PortResult<Vec<String>> {
+        Store::setting_keys(self, prefix).map_err(PortError::new)
     }
 }

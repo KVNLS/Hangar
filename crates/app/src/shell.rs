@@ -8,6 +8,7 @@ mod dev;
 mod device_api;
 mod dialogs;
 mod layout;
+mod leftovers;
 mod lifecycle;
 mod mcp;
 mod new_workspace;
@@ -913,6 +914,7 @@ impl HangarApp {
                 if let Some(err) = loaded.settings_error {
                     self.report(&err, window, cx);
                 }
+                self.offer_orphan_cleanup(window, cx);
             }
             Err(err) => {
                 tracing::error!("{err:#}");

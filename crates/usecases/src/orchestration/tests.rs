@@ -188,16 +188,25 @@ fn a_child_starts_from_the_parents_base_named_after_its_task() {
 }
 
 #[test]
+fn a_child_that_does_not_report_waits_cannot_be_prompted() {
+    assert_eq!(
+        check_prompt("Child", AgentState::Idle, false),
+        Err(Refusal::WaitsUnknown("Child".into()))
+    );
+    assert_eq!(check_prompt("Child", AgentState::Idle, true), Ok(()));
+}
+
+#[test]
 fn a_child_waiting_for_the_user_cannot_be_prompted() {
     assert_eq!(
-        check_prompt("Child", AgentState::Approval),
+        check_prompt("Child", AgentState::Approval, true),
         Err(Refusal::WaitingForUser {
             name: "Child".into(),
             what: "a permission request",
         })
     );
     assert!(matches!(
-        check_prompt("Child", AgentState::Input),
+        check_prompt("Child", AgentState::Input, true),
         Err(Refusal::WaitingForUser { .. })
     ));
     for state in [
@@ -206,7 +215,7 @@ fn a_child_waiting_for_the_user_cannot_be_prompted() {
         AgentState::Review,
         AgentState::Failed,
     ] {
-        assert_eq!(check_prompt("Child", state), Ok(()));
+        assert_eq!(check_prompt("Child", state, true), Ok(()));
     }
 }
 

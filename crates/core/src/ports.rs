@@ -75,6 +75,8 @@ pub trait Store: Send + Sync {
     fn write_setting(&self, key: &str, json: &str) -> PortResult<()>;
     /// Removing a missing key is not an error.
     fn remove_setting(&self, key: &str) -> PortResult<()>;
+    /// Keys that start with `prefix`, sorted (e.g. every `device:<workspace>` assignment).
+    fn setting_keys(&self, prefix: &str) -> PortResult<Vec<String>>;
 }
 
 /// A shared store is a store, so `&Arc<dyn Store>` can be passed where `&dyn Store` is expected.
@@ -143,6 +145,9 @@ impl<S: Store + ?Sized> Store for std::sync::Arc<S> {
     }
     fn remove_setting(&self, key: &str) -> PortResult<()> {
         (**self).remove_setting(key)
+    }
+    fn setting_keys(&self, prefix: &str) -> PortResult<Vec<String>> {
+        (**self).setting_keys(prefix)
     }
 }
 
