@@ -3,8 +3,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use anyhow::{Context as _, anyhow};
+use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, AgentHandle, PtyAdapter, SpawnContext, UpdateHook};
 use hangar_core::{
     Project, ProjectId, Session, SessionId, SessionStatus, Store, Timestamp, Workspace,
@@ -289,27 +291,92 @@ pub fn start_session_with(
     let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
     session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
     let spawned = write_private_files(&workspace.worktree_path, &extra.files)
-        .and_then(|()| adapter.spawn(&ctx).map_err(anyhow::Error::new));
+        .and_then(|()| adapter.spawn(&ctx).map_err(anyhow::Error::new))
+        .map(|handle| {
+            let command = handle.program().display().to_string();
+            (handle, command)
+        });
+    let (session, handle, record_error) =
+        record_start(store, session, &adapter.display_name, spawned)?;
+    Ok(StartedSession {
+        session,
+        handle,
+        record_error,
+    })
+}
+
+/// A structured agent that started and holds an open ACP session.
+pub struct StartedAcpSession {
+    pub session: Session,
+    pub acp: Arc<AcpSession>,
+    pub events: Receiver<AcpEvent>,
+    /// The agent runs but its session row could not be written.
+    pub record_error: Option<anyhow::Error>,
+}
+
+/// [`start_session_with`] for an ACP agent: spawns it, runs the handshake (blocking, up to a
+/// few minutes) and records the session. `extra.mcp_servers` are given to `session/new`.
+pub fn start_acp_session(
+    store: &Store,
+    adapter: &AcpAdapter,
+    workspace: &Workspace,
+    path_env: Option<&str>,
+    on_update: UpdateHook,
+    extra: &AgentExtras,
+) -> anyhow::Result<StartedAcpSession> {
+    let mut ctx = SpawnContext::new(&workspace.worktree_path);
+    if let Some(path) = path_env {
+        ctx.env.push(("PATH".to_owned(), path.to_owned()));
+    }
+    ctx.env.extend(extra.env.iter().cloned());
+    ctx.extra_args.extend(extra.args.iter().cloned());
+    ctx.on_update = Some(on_update);
+
+    let mut session = Session::new(workspace.id, agents::kind(&adapter.id));
+    session.args = adapter.args.iter().chain(&extra.args).cloned().collect();
+    let spawned = write_private_files(&workspace.worktree_path, &extra.files)
+        .and_then(|()| {
+            adapter
+                .start(&ctx, &extra.mcp_servers)
+                .map_err(anyhow::Error::new)
+        })
+        .map(|(acp, events)| {
+            let command = acp.program().display().to_string();
+            ((acp, events), command)
+        });
+    let (session, (acp, events), record_error) =
+        record_start(store, session, &adapter.display_name, spawned)?;
+    Ok(StartedAcpSession {
+        session,
+        acp: Arc::new(acp),
+        events,
+        record_error,
+    })
+}
+
+/// Records the outcome of starting an agent: `Running` with its command, or `Failed`.
+fn record_start<T>(
+    store: &Store,
+    mut session: Session,
+    display_name: &str,
+    spawned: anyhow::Result<(T, String)>,
+) -> anyhow::Result<(Session, T, Option<anyhow::Error>)> {
     match spawned {
-        Ok(handle) => {
-            session.command = handle.program().display().to_string();
+        Ok((agent, command)) => {
+            session.command = command;
             session.status = SessionStatus::Running;
             let record_error = store
                 .insert_session(&session)
                 .context("the agent started but its session could not be saved")
                 .err();
-            Ok(StartedSession {
-                session,
-                handle,
-                record_error,
-            })
+            Ok((session, agent, record_error))
         }
         Err(err) => {
             session.status = SessionStatus::Failed {
-                message: err.to_string(),
+                message: format!("{err:#}"),
             };
             session.ended_at = Some(Timestamp::now());
-            let err = err.context(format!("failed to start {}", adapter.display_name));
+            let err = err.context(format!("failed to start {display_name}"));
             match store.insert_session(&session) {
                 Ok(()) => Err(err),
                 Err(record) => {
@@ -557,6 +624,16 @@ pub fn remove_project(store: &Store, id: ProjectId) -> anyhow::Result<()> {
 }
 
 /// Session status for a finished program.
+/// How an ACP agent's process ended: its exit code, or `Failed` when a signal ended it.
+pub fn acp_exit_status(code: Option<i32>) -> SessionStatus {
+    match code {
+        Some(code) => SessionStatus::Exited { code },
+        None => SessionStatus::Failed {
+            message: "stopped by a signal".to_owned(),
+        },
+    }
+}
+
 pub fn exit_status(exit: &Result<ExitInfo, String>) -> SessionStatus {
     match exit {
         Ok(ExitInfo {
@@ -702,7 +779,9 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let project = add_project(&store, repo.path()).unwrap();
         let ws = create_workspace(&store, &project, "x", root.path()).unwrap();
-        let adapter = agents::preset("claude").unwrap();
+        let Some(agents::AgentPreset::Pty(adapter)) = agents::preset("claude") else {
+            panic!("claude is a terminal preset");
+        };
         assert!(
             start_session(&store, &adapter, &ws, Some("/nonexistent"), Arc::new(|| {})).is_err()
         );
@@ -729,6 +808,7 @@ mod tests {
             "sh",
         ]);
         let extra = AgentExtras {
+            mcp_servers: Vec::new(),
             args: vec!["--flag".into()],
             env: vec![
                 ("HANGAR_X".into(), "x1".into()),

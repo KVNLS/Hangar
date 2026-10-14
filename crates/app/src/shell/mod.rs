@@ -34,15 +34,18 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_agents::AgentHandle;
+use hangar_agents::acp::AcpSession;
 use hangar_core::{
-    AgentState, Project, ProjectId, Session, Store, Workspace, WorkspaceId, WorkspaceStatus,
+    AgentState, Project, ProjectId, Session, SessionStatus, Store, Workspace, WorkspaceId,
+    WorkspaceStatus,
 };
 use hangar_terminal::ExitInfo;
 use hangar_worktree::MergeStrategy;
 
-use crate::agents::{self, AgentChoice};
+use crate::agents::{self, AgentChoice, AgentPreset};
 use crate::changes::review::ReviewTarget;
 use crate::changes::{ChangesEvent, ChangesPanel, ExitReview, PanelSource, WorkspaceDiff};
+use crate::chat_view::{ChatEvent, ChatView};
 use crate::device_panel::{DevicePanel, DevicePanelEvent};
 use crate::device_pool::{DevicePool, NoticeLevel, PoolEvent, WorkspaceRef};
 use crate::login_env::{self, PathSource, ResolvedPath};
@@ -142,12 +145,24 @@ impl SelectItem for AgentOption {
 
 type AgentSelect = SelectState<Vec<AgentOption>>;
 
+/// What runs a workspace's agent and how the pane shows it.
+enum AgentSurface {
+    /// An interactive CLI in a terminal. Dropping the handle kills the program.
+    Terminal {
+        handle: AgentHandle,
+        view: Entity<TerminalView>,
+    },
+    /// A structured agent over ACP, shown as a chat.
+    Chat {
+        acp: Arc<AcpSession>,
+        view: Entity<ChatView>,
+    },
+}
+
 struct LiveSession {
     session: Session,
     agent_name: SharedString,
-    /// Owns the process; dropping it kills the program.
-    handle: AgentHandle,
-    view: Entity<TerminalView>,
+    surface: AgentSurface,
     activity: status::Activity,
     _exit: Subscription,
 }
@@ -158,10 +173,65 @@ impl LiveSession {
         if self.session.status.is_terminal() {
             return None;
         }
-        if let Err(err) = self.handle.session().kill() {
-            tracing::warn!(%err, session = %self.session.id, "failed to kill agent");
+        match &self.surface {
+            AgentSurface::Terminal { handle, .. } => {
+                if let Err(err) = handle.session().kill() {
+                    tracing::warn!(%err, session = %self.session.id, "failed to kill agent");
+                }
+            }
+            AgentSurface::Chat { acp, .. } => acp.kill(),
         }
         Some(self.session.id)
+    }
+
+    fn view(&self) -> AnyView {
+        match &self.surface {
+            AgentSurface::Terminal { view, .. } => view.clone().into(),
+            AgentSurface::Chat { view, .. } => view.clone().into(),
+        }
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match &self.surface {
+            AgentSurface::Terminal { view, .. } => view.focus_handle(cx),
+            AgentSurface::Chat { view, .. } => view.focus_handle(cx),
+        }
+    }
+
+    /// Types `text` and Return into a terminal agent, or sends it as a chat agent's prompt.
+    fn send_text(&self, text: &str, cx: &mut App) -> anyhow::Result<()> {
+        match &self.surface {
+            AgentSurface::Terminal { handle, .. } => {
+                handle.session().write(format!("{text}\r"))?;
+                Ok(())
+            }
+            AgentSurface::Chat { view, .. } => view.update(cx, |chat, cx| chat.send(text, cx)),
+        }
+    }
+
+    fn exit_waiter(&self) -> ExitWaiter {
+        match &self.surface {
+            AgentSurface::Terminal { handle, .. } => {
+                ExitWaiter::Terminal(Arc::clone(handle.session()))
+            }
+            AgentSurface::Chat { acp, .. } => ExitWaiter::Acp(Arc::clone(acp)),
+        }
+    }
+}
+
+/// Waits off the main thread for a stopped agent's process to go away.
+enum ExitWaiter {
+    Terminal(Arc<hangar_terminal::TerminalSession>),
+    Acp(Arc<AcpSession>),
+}
+
+impl ExitWaiter {
+    /// Whether the process ended within `timeout`. Blocks.
+    fn wait(&self, timeout: Duration) -> bool {
+        match self {
+            Self::Terminal(terminal) => terminal.wait_for_exit(timeout).is_some(),
+            Self::Acp(acp) => acp.wait_for_exit(timeout),
+        }
     }
 }
 
@@ -261,11 +331,11 @@ pub struct HangarApp {
 impl HangarApp {
     pub fn new(dev: DevOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Install state is unknown until the login PATH arrives; list names only for now.
-        let initial_choices: Vec<AgentChoice> = hangar_agents::presets()
+        let initial_choices: Vec<AgentChoice> = agents::all_presets()
             .into_iter()
             .map(|a| AgentChoice {
-                id: a.id,
-                name: a.display_name,
+                id: a.id().to_owned(),
+                name: a.display_name().to_owned(),
                 installed: true,
             })
             .collect();

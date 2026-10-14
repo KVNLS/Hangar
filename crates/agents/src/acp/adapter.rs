@@ -236,6 +236,22 @@ impl AcpSession {
         Err(Error::Unsupported("resuming an ACP session (session/load)"))
     }
 
+    pub fn has_exited(&self) -> bool {
+        self.exited.load(Ordering::SeqCst)
+    }
+
+    /// Waits up to `timeout` for the agent process to be reaped. Returns whether it was.
+    pub fn wait_for_exit(&self, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while !self.has_exited() {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+
     /// Closes stdin, sends SIGTERM to the agent's process group and SIGKILL after a grace
     /// period if it is still running. [`AcpEvent::Exited`] follows.
     pub fn kill(&self) {
@@ -356,6 +372,7 @@ mod tests {
         assert_eq!(wait(rx), AcpEvent::TurnEnded(protocol::StopReason::EndTurn));
         session.kill();
         assert!(matches!(wait(rx), AcpEvent::Exited { .. }));
+        assert!(session.wait_for_exit(Duration::from_secs(1)));
         assert!(matches!(session.load("s-1"), Err(Error::Unsupported(_))));
     }
 }

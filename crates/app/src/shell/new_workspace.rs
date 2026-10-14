@@ -227,10 +227,10 @@ impl HangarApp {
             if task.is_empty() {
                 return Some(());
             }
-            this.update(cx, |this, _| {
+            this.update(cx, |this, cx| {
                 let live = this.sessions.get(&id)?;
-                if let Err(err) = live.handle.session().write(format!("{task}\r")) {
-                    tracing::error!(%err, "could not send the task to the agent");
+                if let Err(err) = live.send_text(&task, cx) {
+                    tracing::error!("could not send the task to the agent: {err:#}");
                 }
                 Some(())
             })

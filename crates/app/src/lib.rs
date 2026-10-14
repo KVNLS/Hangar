@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod assets;
 pub mod changes;
+pub mod chat_view;
 pub mod device_panel;
 pub mod device_pool;
 pub mod device_view;

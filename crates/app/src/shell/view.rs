@@ -303,7 +303,7 @@ impl HangarApp {
         let run_view = workspace_id.and_then(|id| self.run_view(id, shown));
         let body = match (run_view, live) {
             (Some(view), _) => body.child(view),
-            (None, Some(live)) => body.child(live.view.clone()),
+            (None, Some(live)) => body.child(live.view()),
             (None, None) => body
                 .flex()
                 .items_center()
@@ -441,7 +441,7 @@ impl HangarApp {
 
     pub(super) fn agent_display_name(&self) -> String {
         agents::preset(&self.agent)
-            .map(|a| a.display_name)
+            .map(|a| a.display_name().to_owned())
             .unwrap_or_else(|| self.agent.to_string())
     }
 }

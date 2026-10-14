@@ -137,9 +137,15 @@ impl HangarApp {
         let rows = self.agent_choices.iter().map(|choice| {
             let id = SharedString::from(choice.id.clone());
             let is_default = self.agent.as_ref() == choice.id;
-            let program = agents::preset(&choice.id)
-                .map(|p| p.program.clone())
-                .unwrap_or_default();
+            let program = match agents::preset(&choice.id) {
+                Some(agents::AgentPreset::Acp(acp))
+                    if detected && !choice.installed && !acp.install_hint.is_empty() =>
+                {
+                    format!("{} · {}", acp.program, acp.install_hint)
+                }
+                Some(preset) => preset.program().to_owned(),
+                None => String::new(),
+            };
             h_flex()
                 .gap_3()
                 .px(px(14.))

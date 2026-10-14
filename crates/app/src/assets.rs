@@ -10,8 +10,12 @@ gpui_kit::assets::icon_assets!(
     [
         Activity,
         ArrowLeft,
+        ArrowRightLeft,
         AtSign,
+        Brain,
         Camera,
+        Circle,
+        CircleDot,
         Columns2,
         FileDiff,
         GitBranch,
@@ -24,6 +28,7 @@ gpui_kit::assets::icon_assets!(
         ListCollapse,
         Lock,
         MessageSquare,
+        Move,
         Pencil,
         Power,
         RotateCcw,
@@ -34,8 +39,10 @@ gpui_kit::assets::icon_assets!(
         Square,
         SunMoon,
         Terminal,
+        Trash,
         Volume1,
         Volume2,
+        Wrench,
         X,
     ]
 );

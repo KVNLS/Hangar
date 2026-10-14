@@ -34,12 +34,12 @@ impl HangarApp {
                 };
                 created.push(workspace_id);
                 if let Some(input) = dev.input.clone() {
-                    let _ = this.update(cx, |this, _| {
+                    let _ = this.update(cx, |this, cx| {
                         let Some(live) = this.sessions.get(&workspace_id) else {
                             return;
                         };
-                        if let Err(err) = live.handle.session().write(format!("{input}\r")) {
-                            tracing::error!(%err, "HANGAR_DEV_INPUT: write failed");
+                        if let Err(err) = live.send_text(&input, cx) {
+                            tracing::error!("HANGAR_DEV_INPUT: {err:#}");
                         }
                     });
                 }

@@ -1,5 +1,6 @@
 //! Per-workspace agent state for the sidebar, status bar and overview. PTY agents report only
-//! running/exited, so "working" is inferred from recent terminal output.
+//! running/exited, so "working" is inferred from recent terminal output; structured (ACP) agents
+//! report their turn and permission requests.
 
 use std::time::Instant;
 
@@ -96,12 +97,22 @@ impl HangarApp {
         let now = Instant::now();
         let mut changed = false;
         for live in self.sessions.values_mut() {
-            let bytes = live.view.read(cx).session().stats().bytes_read();
+            let view = match &live.surface {
+                AgentSurface::Terminal { view, .. } => view,
+                AgentSurface::Chat { view, .. } => {
+                    // Structured agents report their state; only the summary line is polled.
+                    let last_line = view.read(cx).last_line();
+                    changed |= last_line != live.activity.last_line;
+                    live.activity.last_line = last_line;
+                    continue;
+                }
+            };
+            let bytes = view.read(cx).session().stats().bytes_read();
             let activity = &mut live.activity;
             if bytes != activity.bytes {
                 activity.bytes = bytes;
                 activity.last_output = Some(now);
-                let snapshot = live.view.read(cx).session().terminal().snapshot();
+                let snapshot = view.read(cx).session().terminal().snapshot();
                 activity.last_line = summary_line((0..snapshot.rows).map(|r| snapshot.row_text(r)))
                     .map(SharedString::from);
                 changed = true;
@@ -127,11 +138,18 @@ impl HangarApp {
     pub(super) fn agent_state(&self, id: WorkspaceId, cx: &App) -> AgentState {
         let live = self.sessions.get(&id);
         let has_changes = self.diff_counts(id, cx).is_some_and(|c| c.files > 0);
-        AgentState::from_pty(
-            live.map(|l| &l.session.status),
-            live.is_some_and(|l| l.activity.active),
-            has_changes,
-        )
+        match live.map(|l| &l.surface) {
+            Some(AgentSurface::Chat { view, .. }) => AgentState::from_acp(
+                live.map(|l| &l.session.status),
+                view.read(cx).turn(),
+                has_changes,
+            ),
+            _ => AgentState::from_pty(
+                live.map(|l| &l.session.status),
+                live.is_some_and(|l| l.activity.active),
+                has_changes,
+            ),
+        }
     }
 
     /// Focuses the next workspace waiting on the user (⌘J).

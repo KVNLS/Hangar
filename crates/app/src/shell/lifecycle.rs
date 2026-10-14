@@ -115,32 +115,48 @@ impl HangarApp {
         let path = self.path.as_ref().map(|p| p.value.clone());
         // Without the device tools the agent still runs: say why, don't block it.
         let extras = self
-            .agent_extras(&adapter.id, &workspace, cx)
+            .agent_extras(adapter.id(), &workspace, cx)
             .unwrap_or_else(|err| {
                 tracing::warn!("agent starts without device tools: {err:#}");
                 Default::default()
             });
         let waker = TerminalWaker::new();
         let hook = waker.hook();
-        let agent_name: SharedString = adapter.display_name.clone().into();
+        let agent_name: SharedString = adapter.display_name().to_owned().into();
 
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx
+            let started = cx
                 .background_executor()
                 .spawn(async move {
-                    ops::start_session_with(
-                        &store,
-                        &adapter,
-                        &workspace,
-                        path.as_deref(),
-                        hook,
-                        &extras,
-                    )
+                    match &adapter {
+                        AgentPreset::Pty(adapter) => ops::start_session_with(
+                            &store,
+                            adapter,
+                            &workspace,
+                            path.as_deref(),
+                            hook,
+                            &extras,
+                        )
+                        .map(Started::Terminal),
+                        AgentPreset::Acp(adapter) => ops::start_acp_session(
+                            &store,
+                            adapter,
+                            &workspace,
+                            path.as_deref(),
+                            hook,
+                            &extras,
+                        )
+                        .map(Started::Chat),
+                    }
                 })
                 .await;
-            this.update_in(cx, |this, window, cx| match result {
-                Ok(started) => {
+            this.update_in(cx, |this, window, cx| match started {
+                Ok(Started::Terminal(started)) => {
                     this.attach_session(started, agent_name, waker, window, cx);
+                    true
+                }
+                Ok(Started::Chat(started)) => {
+                    this.attach_chat_session(started, agent_name, waker, window, cx);
                     true
                 }
                 Err(err) => {
@@ -150,6 +166,133 @@ impl HangarApp {
             })
             .unwrap_or(false)
         })
+    }
+
+    /// Whether a freshly started agent may stay: the workspace may have been archived or
+    /// deleted while it was starting. Records the session as stopped when it may not.
+    fn keep_started(
+        &mut self,
+        workspace_id: WorkspaceId,
+        session: &Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.projects.is_active(workspace_id) && !self.busy.contains(&workspace_id) {
+            return true;
+        }
+        let id = session.id;
+        self.persist(window, cx, move |store| {
+            ops::stop_session(store, id, "workspace closed while starting")
+        });
+        false
+    }
+
+    fn insert_live_session(
+        &mut self,
+        workspace_id: WorkspaceId,
+        live: LiveSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(previous) = self.sessions.insert(workspace_id, live)
+            && let Some(id) = previous.stop()
+        {
+            self.persist(window, cx, move |store| {
+                ops::stop_session(store, id, "replaced by a new session")
+            });
+        }
+        if self.panes.slot(self.panes.focused()) == Some(workspace_id) {
+            self.focus_terminal(window, cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn attach_chat_session(
+        &mut self,
+        started: ops::StartedAcpSession,
+        agent_name: SharedString,
+        waker: TerminalWaker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ops::StartedAcpSession {
+            session,
+            acp,
+            events,
+            record_error,
+        } = started;
+        let workspace_id = session.workspace_id;
+        tracing::info!(
+            workspace = %workspace_id,
+            session = %session.id,
+            program = %acp.program().display(),
+            pid = acp.pid(),
+            acp_session = acp.session_id(),
+            "structured session started"
+        );
+        if let Some(err) = record_error {
+            self.report(&err, window, cx);
+        }
+        if !self.keep_started(workspace_id, &session, window, cx) {
+            acp.kill();
+            return;
+        }
+        let root = self
+            .projects
+            .workspace(workspace_id)
+            .map(|ws| ws.worktree_path.clone())
+            .unwrap_or_default();
+        let view = {
+            let acp = Arc::clone(&acp);
+            let name = agent_name.clone();
+            cx.new(|cx| ChatView::new(acp, events, waker, name, root, window, cx))
+        };
+        let exit = cx.subscribe_in(
+            &view,
+            window,
+            move |this, _, event: &ChatEvent, window, cx| match event {
+                ChatEvent::StateChanged => cx.notify(),
+                ChatEvent::Exited { code, stderr_tail } => {
+                    if !stderr_tail.is_empty() {
+                        tracing::info!(workspace = %workspace_id, "agent stderr: {stderr_tail}");
+                    }
+                    this.on_session_exit(workspace_id, ops::acp_exit_status(*code), window, cx);
+                }
+                ChatEvent::OpenFile(path) => this.open_in_files(workspace_id, path, window, cx),
+            },
+        );
+        let live = LiveSession {
+            session,
+            agent_name,
+            surface: AgentSurface::Chat { acp, view },
+            activity: Default::default(),
+            _exit: exit,
+        };
+        self.insert_live_session(workspace_id, live, window, cx);
+    }
+
+    /// Shows `path` (absolute, inside the workspace's worktree) in the Files tab.
+    fn open_in_files(
+        &mut self,
+        workspace_id: WorkspaceId,
+        path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ws) = self.projects.workspace(workspace_id) else {
+            return;
+        };
+        let Ok(relative) = path.strip_prefix(&ws.worktree_path) else {
+            tracing::info!("not opening {}: outside the worktree", path.display());
+            return;
+        };
+        let relative = relative.to_owned();
+        if let Some(pane) = (0..PANE_COUNT).find(|p| self.panes.slot(*p) == Some(workspace_id)) {
+            self.focus_pane(pane, window, cx);
+        }
+        self.set_files_open(true, window, cx);
+        self.files_panel
+            .update(cx, |panel, cx| panel.open(relative, cx));
     }
 
     pub(super) fn attach_session(
@@ -176,15 +319,10 @@ impl HangarApp {
         if let Some(err) = record_error {
             self.report(&err, window, cx);
         }
-        // The workspace may have been archived or deleted while the agent was starting.
-        if !self.projects.is_active(workspace_id) || self.busy.contains(&workspace_id) {
+        if !self.keep_started(workspace_id, &session, window, cx) {
             if let Err(err) = handle.session().kill() {
                 tracing::warn!(%err, "failed to kill agent of a removed workspace");
             }
-            let id = session.id;
-            self.persist(window, cx, move |store| {
-                ops::stop_session(store, id, "workspace closed while starting")
-            });
             return;
         }
         let terminal = Arc::clone(handle.session());
@@ -194,39 +332,28 @@ impl HangarApp {
             &view,
             window,
             move |this, _, event: &TerminalEvent, window, cx| match event {
-                TerminalEvent::Exited(exit) => this.on_session_exit(workspace_id, exit, window, cx),
+                TerminalEvent::Exited(exit) => {
+                    this.on_session_exit(workspace_id, ops::exit_status(exit), window, cx)
+                }
             },
         );
-        if let Some(previous) = self.sessions.insert(
-            workspace_id,
-            LiveSession {
-                session,
-                agent_name,
-                handle,
-                view,
-                activity: Default::default(),
-                _exit: exit,
-            },
-        ) && let Some(id) = previous.stop()
-        {
-            self.persist(window, cx, move |store| {
-                ops::stop_session(store, id, "replaced by a new session")
-            });
-        }
-        if self.panes.slot(self.panes.focused()) == Some(workspace_id) {
-            self.focus_terminal(window, cx);
-        }
-        cx.notify();
+        let live = LiveSession {
+            session,
+            agent_name,
+            surface: AgentSurface::Terminal { handle, view },
+            activity: Default::default(),
+            _exit: exit,
+        };
+        self.insert_live_session(workspace_id, live, window, cx);
     }
 
     pub(super) fn on_session_exit(
         &mut self,
         workspace_id: WorkspaceId,
-        exit: &Result<ExitInfo, String>,
+        status: SessionStatus,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let status = ops::exit_status(exit);
         let Some(live) = self.sessions.get_mut(&workspace_id) else {
             return;
         };
@@ -239,20 +366,14 @@ impl HangarApp {
         });
     }
 
-    /// Kills the workspace's agent, if any, and forgets its terminal. Returns the session to
-    /// record as stopped and the terminal to wait on.
+    /// Kills the workspace's agent, if any, and forgets its view. Returns the session to record
+    /// as stopped and a way to wait for the process.
     pub(super) fn close_session(
         &mut self,
         workspace_id: WorkspaceId,
-    ) -> (
-        Option<hangar_core::SessionId>,
-        Option<Arc<hangar_terminal::TerminalSession>>,
-    ) {
+    ) -> (Option<hangar_core::SessionId>, Option<ExitWaiter>) {
         match self.sessions.remove(&workspace_id) {
-            Some(live) => {
-                let stopped = live.stop();
-                (stopped, Some(Arc::clone(live.handle.session())))
-            }
+            Some(live) => (live.stop(), Some(live.exit_waiter())),
             None => (None, None),
         }
     }
@@ -432,8 +553,8 @@ impl HangarApp {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    if let Some(terminal) = terminal
-                        && terminal.wait_for_exit(KILL_GRACE).is_none()
+                    if let Some(waiter) = terminal
+                        && !waiter.wait(KILL_GRACE)
                     {
                         tracing::warn!("agent still running after kill; removing worktree anyway");
                     }
@@ -606,11 +727,11 @@ impl HangarApp {
         let Some(id) = self.panes.slot(self.panes.focused()) else {
             return;
         };
-        let view = self
-            .run_view(id, self.pane_tab(id))
-            .or_else(|| self.sessions.get(&id).map(|live| live.view.clone()));
-        if let Some(view) = view {
-            let handle = view.focus_handle(cx);
+        let handle = match self.run_view(id, self.pane_tab(id)) {
+            Some(view) => Some(view.focus_handle(cx)),
+            None => self.sessions.get(&id).map(|live| live.focus_handle(cx)),
+        };
+        if let Some(handle) = handle {
             window.focus(&handle, cx);
         }
     }
@@ -640,4 +761,10 @@ impl HangarApp {
             .find(|w| w.slug == slug)
             .map(|w| w.id)
     }
+}
+
+/// An agent started off the main thread, before it is attached to a view.
+enum Started {
+    Terminal(StartedSession),
+    Chat(ops::StartedAcpSession),
 }
