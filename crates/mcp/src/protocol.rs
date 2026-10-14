@@ -23,7 +23,10 @@ const INSTRUCTIONS: &str = "These tools act on the iOS simulator or Android emul
     coordinates are device points with the origin at the top-left of the screen as currently \
     oriented (the screenshot result states the point size). Use build_and_run after code changes, \
     then screenshot and logs to verify. When a decision belongs to the user, ask_user asks them and \
-    waits for the answer.";
+    waits for the answer. The device starts on demand: every device tool except device_info \
+    boots it. Before running xcrun simctl or adb yourself, call device_info and target its id \
+    (simctl UDID, adb -s serial) only when booted is true; otherwise take a screenshot first. \
+    HANGAR_DEVICE_ID and ANDROID_SERIAL are set when the agent starts and may be missing or stale.";
 
 const ORCHESTRATION_INSTRUCTIONS: &str = " The user also lets this agent split work across \
     parallel Hangar workspaces: workspace_create starts another agent on a self-contained task in \

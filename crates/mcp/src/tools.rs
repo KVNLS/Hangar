@@ -531,7 +531,9 @@ fn device_definitions() -> Vec<Value> {
         json!({
             "name": "device_info",
             "description": "Describe the simulator/emulator attached to this Hangar workspace: platform, \
-                name, id, screen size in points, orientation and whether it is booted.",
+                name, id, screen size in points, orientation and whether it is booted. Does not boot it. \
+                While booted, id is the target for xcrun simctl (UDID) or adb -s (serial); while not, \
+                it is not, and a screenshot boots the device.",
             "inputSchema": no_args,
         }),
         json!({

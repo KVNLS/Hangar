@@ -72,12 +72,11 @@ fn orchestration_tools_need_the_setting() {
     };
     assert!(!names(&host).iter().any(|n| n == "workspace_create"));
     let init = call(&host, request(2, "initialize", json!({}))).unwrap();
-    assert!(
-        !init["result"]["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("workspace_create")
-    );
+    let instructions = init["result"]["instructions"].as_str().unwrap();
+    assert!(!instructions.contains("workspace_create"));
+    // Agents running simctl/adb themselves must take the live id, not the launch-time env.
+    assert!(instructions.contains("call device_info"));
+    assert!(instructions.contains("may be missing or stale"));
     // Off: refused before the arguments are even looked at.
     let r = call(
         &host,
