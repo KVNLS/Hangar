@@ -27,16 +27,11 @@ impl HangarApp {
                 let (agent, target) = (dev.agent.clone(), dev.target.clone());
                 let input = dev.input.clone();
                 let Ok(create) = this.update_in(cx, |this, window, cx| {
-                    this.create_workspace(
-                        project.id,
-                        name,
-                        agent,
-                        target,
-                        (None, None),
-                        input,
-                        window,
-                        cx,
-                    )
+                    let new = ops::NewWorkspace {
+                        task: input,
+                        ..ops::NewWorkspace::named(name)
+                    };
+                    this.create_workspace(project.id, new, agent, target, window, cx)
                 }) else {
                     break;
                 };

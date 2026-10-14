@@ -20,6 +20,7 @@ use hangar_core::{Project, ProjectId, Session, SessionId, SessionStatus, Workspa
 use hangar_terminal::ExitInfo;
 use hangar_usecases::sessions::Sessions;
 use hangar_usecases::settings::SettingsExt as _;
+pub use hangar_usecases::workspaces::NewWorkspace;
 use hangar_usecases::workspaces::Workspaces;
 pub use hangar_usecases::workspaces::{DeleteOptions, DeleteOutcome, DeleteSummary};
 
@@ -363,21 +364,17 @@ pub fn create_workspace(
     name: &str,
     worktrees_root: &Path,
 ) -> anyhow::Result<Workspace> {
-    create_workspace_from(store, project, name, worktrees_root, (None, None), None)
+    create_workspace_from(store, project, worktrees_root, &NewWorkspace::named(name))
 }
 
-/// As [`create_workspace`], starting from `base` (default: the project's default base) on a
-/// branch named `branch` (default: `hangar/<slug>`, suffixed until free). A given branch name is
-/// used as is and must not exist yet. `task` is saved with the workspace.
+/// As [`create_workspace`], with a base, branch name, task or group (see [`NewWorkspace`]).
 pub fn create_workspace_from(
     store: &dyn Store,
     project: &Project,
-    name: &str,
     worktrees_root: &Path,
-    branches: (Option<&str>, Option<&str>),
-    task: Option<&str>,
+    new: &NewWorkspace,
 ) -> anyhow::Result<Workspace> {
-    Ok(workspaces(store).create(project, name, worktrees_root, branches, task)?)
+    Ok(workspaces(store).create(project, worktrees_root, new)?)
 }
 
 pub struct StartedSession {

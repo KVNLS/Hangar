@@ -12,7 +12,7 @@ use uuid::Uuid;
 use hangar_core::ports::{PortError, PortResult};
 use hangar_core::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Setting, Timestamp,
-    Workspace, WorkspaceId, WorkspaceStatus,
+    Workspace, WorkspaceGroupId, WorkspaceId, WorkspaceStatus,
 };
 
 #[cfg(test)]
@@ -63,6 +63,9 @@ CREATE TABLE settings (
 "#,
     r#"
 ALTER TABLE workspaces ADD COLUMN task TEXT;
+"#,
+    r#"
+ALTER TABLE workspaces ADD COLUMN group_id TEXT;
 "#,
 ];
 
@@ -194,8 +197,9 @@ impl Store {
         self.conn()
             .execute(
                 "INSERT INTO workspaces
-                 (id, project_id, name, slug, branch, base, worktree_path, status, created_at, task)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 (id, project_id, name, slug, branch, base, worktree_path, status, created_at, task,
+                  group_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     workspace.id.0.to_string(),
                     workspace.project_id.0.to_string(),
@@ -207,6 +211,7 @@ impl Store {
                     workspace.status.as_str(),
                     workspace.created_at.0,
                     workspace.task,
+                    workspace.group.map(|g| g.0.to_string()),
                 ],
             )
             .map_err(|e| {
@@ -228,7 +233,7 @@ impl Store {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at,
-                    task
+                    task, group_id
              FROM workspaces WHERE project_id = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map([project_id.0.to_string()], workspace_from_row)?;
@@ -239,7 +244,7 @@ impl Store {
         self.conn()
             .query_row(
                 "SELECT id, project_id, name, slug, branch, base, worktree_path, status, created_at,
-                    task
+                    task, group_id
                  FROM workspaces WHERE id = ?1",
                 [id.0.to_string()],
                 workspace_from_row,
@@ -518,6 +523,14 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
         status,
         created_at: Timestamp(row.get(8)?),
         task: row.get(9)?,
+        group: row
+            .get::<_, Option<String>>(10)?
+            .map(|text| {
+                Uuid::parse_str(&text)
+                    .map(WorkspaceGroupId)
+                    .map_err(|e| conversion_error(10, e))
+            })
+            .transpose()?,
     })
 }
 

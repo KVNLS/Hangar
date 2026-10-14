@@ -5,19 +5,14 @@ use super::*;
 impl HangarApp {
     /// Creates the worktree and workspace off the main thread, assigns it `target` as its base
     /// device (else the default on first use), shows it in the focused pane and starts
-    /// `agent_id` in it. Resolves once the agent has started, failed or been queued.
-    /// `branches`: the base to start from and the new branch's name, each `None` for the
-    /// default (see [`ops::create_workspace_from`]). `input` is typed into the agent once it
-    /// runs, which may be later if the start is queued.
-    #[allow(clippy::too_many_arguments)]
+    /// `agent_id` in it. Resolves once the agent has started, failed or been queued. The task
+    /// of `new` is typed into the agent once it runs, which may be later if the start is queued.
     pub(super) fn create_workspace(
         &mut self,
         project_id: ProjectId,
-        name: String,
+        new: ops::NewWorkspace,
         agent_id: String,
         target: Option<crate::device_panel::DeviceKey>,
-        branches: (Option<String>, Option<String>),
-        input: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Option<WorkspaceId>> {
@@ -46,21 +41,11 @@ impl HangarApp {
         self.work.creating.insert(project_id);
         cx.notify();
 
-        let task = input.clone();
+        let input = new.task.clone().filter(|t| !t.trim().is_empty());
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    let (base, branch) = branches;
-                    ops::create_workspace_from(
-                        &store,
-                        &project,
-                        &name,
-                        &root,
-                        (base.as_deref(), branch.as_deref()),
-                        task.as_deref(),
-                    )
-                })
+                .spawn(async move { ops::create_workspace_from(&store, &project, &root, &new) })
                 .await;
             let started = this
                 .update_in(cx, |this, window, cx| {

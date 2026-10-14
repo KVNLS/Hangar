@@ -3,6 +3,7 @@
 //! that changes the disk, a repository or the database goes through a port.
 
 pub mod agents;
+pub mod batch;
 #[cfg(test)]
 mod fakes;
 pub mod review;

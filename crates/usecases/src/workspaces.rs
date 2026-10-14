@@ -5,9 +5,32 @@ use std::path::{Path, PathBuf};
 
 use hangar_core::ports::{NewWorktree, PortError, Store, VersionControl};
 use hangar_core::{
-    BRANCH_PREFIX, Project, ProjectId, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
-    WorkspaceStatus, branch_name, slugify, unique_slug, worktree_path,
+    BRANCH_PREFIX, Project, ProjectId, SessionId, SessionStatus, Timestamp, Workspace,
+    WorkspaceGroupId, WorkspaceId, WorkspaceStatus, branch_name, slugify, unique_slug,
+    worktree_path,
 };
+
+/// What to create: the name, where its branch starts and how it is named, the task, and the
+/// attempts it belongs to. Blank fields mean the defaults.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewWorkspace {
+    pub name: String,
+    /// Branch to start from (default: the project's default base).
+    pub base: Option<String>,
+    /// The new branch's name (default: `hangar/<slug>`, suffixed until free).
+    pub branch: Option<String>,
+    pub task: Option<String>,
+    pub group: Option<WorkspaceGroupId>,
+}
+
+impl NewWorkspace {
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -179,21 +202,22 @@ impl<'a> Workspaces<'a> {
         Ok(project)
     }
 
-    /// Creates the branch, the worktree and the workspace row, starting from `base` (default:
-    /// the project's default base) on a branch named `branch` (default: `hangar/<slug>`,
-    /// suffixed until free). The slug gets a numeric suffix when the name, branch or directory
-    /// is already taken; a given branch name is used as is and must not exist yet. `task` is what
-    /// the agent is asked to do, saved with the workspace.
+    /// Creates the branch, the worktree and the workspace row (see [`NewWorkspace`]). The slug
+    /// gets a numeric suffix when the name, branch or directory is already taken; a given branch
+    /// name is used as is and must not exist yet.
     pub fn create(
         &self,
         project: &Project,
-        name: &str,
         worktrees_root: &Path,
-        (base, branch): (Option<&str>, Option<&str>),
-        task: Option<&str>,
+        spec: &NewWorkspace,
     ) -> Result<Workspace> {
-        let task = task.map(str::trim).filter(|t| !t.is_empty());
-        let name = name.trim();
+        let (base, branch) = (spec.base.as_deref(), spec.branch.as_deref());
+        let task = spec
+            .task
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        let name = spec.name.trim();
         if name.is_empty() {
             return Err(WorkspaceError::EmptyName);
         }
@@ -267,6 +291,7 @@ impl<'a> Workspaces<'a> {
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
             task: task.map(str::to_owned),
+            group: spec.group,
         };
         if let Err(err) = self.store.insert_workspace(&workspace) {
             self.rollback(repo, &path, &workspace.branch);
@@ -444,7 +469,7 @@ mod tests {
         );
         let project = project(&store);
         let ws = Workspaces::new(&store, &git)
-            .create(&project, " Fix login ", &root(), (None, None), None)
+            .create(&project, &root(), &NewWorkspace::named(" Fix login "))
             .unwrap();
         assert_eq!(
             (ws.name.as_str(), ws.slug.as_str()),
@@ -465,7 +490,14 @@ mod tests {
         let git = FakeGit::default();
         let project = project(&store);
         let err = Workspaces::new(&store, &git)
-            .create(&project, "Fix", &root(), (Some("develop"), None), None)
+            .create(
+                &project,
+                &root(),
+                &NewWorkspace {
+                    base: Some("develop".into()),
+                    ..NewWorkspace::named("Fix")
+                },
+            )
             .unwrap_err();
         assert!(matches!(err, WorkspaceError::SaveWorkspace(_)), "{err}");
         let path = root().join("my-app/fix");
@@ -486,15 +518,29 @@ mod tests {
         let project = project(&store);
         let workspaces = Workspaces::new(&store, &git);
         let err = workspaces
-            .create(&project, "x", &root(), (None, Some("bad name")), None)
+            .create(
+                &project,
+                &root(),
+                &NewWorkspace {
+                    branch: Some("bad name".into()),
+                    ..NewWorkspace::named("x")
+                },
+            )
             .unwrap_err();
         assert_eq!(err.to_string(), "`bad name` is not a valid branch name");
         let err = workspaces
-            .create(&project, "x", &root(), (None, Some("taken")), None)
+            .create(
+                &project,
+                &root(),
+                &NewWorkspace {
+                    branch: Some("taken".into()),
+                    ..NewWorkspace::named("x")
+                },
+            )
             .unwrap_err();
         assert_eq!(err.to_string(), "branch `taken` already exists");
         let err = workspaces
-            .create(&project, "  ", &root(), (None, None), None)
+            .create(&project, &root(), &NewWorkspace::named("  "))
             .unwrap_err();
         assert_eq!(err.to_string(), "workspace name is empty");
         assert!(git.calls().is_empty());
@@ -524,6 +570,7 @@ mod tests {
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
             task: None,
+            group: None,
         };
         store.insert_workspace(&ws).unwrap();
         let err = Workspaces::new(&store, &git)
@@ -540,7 +587,7 @@ mod tests {
         let project = project(&store);
         let workspaces = Workspaces::new(&store, &git);
         workspaces
-            .create(&project, "One", &root(), (None, None), None)
+            .create(&project, &root(), &NewWorkspace::named("One"))
             .unwrap();
         let err = workspaces.remove_project(project.id).unwrap_err();
         assert_eq!(

@@ -82,10 +82,13 @@ fn create_workspace_from_a_base_on_a_chosen_branch() {
     let ws = create_workspace_from(
         &store,
         &project,
-        "Hotfix",
         root.path(),
-        (Some("release"), Some("fix/crash")),
-        Some("  Fix the crash  "),
+        &NewWorkspace {
+            base: Some("release".into()),
+            branch: Some("fix/crash".into()),
+            task: Some("  Fix the crash  ".into()),
+            ..NewWorkspace::named("Hotfix")
+        },
     )
     .unwrap();
     assert_eq!(ws.task.as_deref(), Some("Fix the crash"));
@@ -100,19 +103,21 @@ fn create_workspace_from_a_base_on_a_chosen_branch() {
     let taken = create_workspace_from(
         &store,
         &project,
-        "again",
         root.path(),
-        (None, Some("fix/crash")),
-        None,
+        &NewWorkspace {
+            branch: Some("fix/crash".into()),
+            ..NewWorkspace::named("again")
+        },
     );
     assert!(taken.unwrap_err().to_string().contains("already exists"));
     let bad = create_workspace_from(
         &store,
         &project,
-        "x",
         root.path(),
-        (None, Some("a..b")),
-        None,
+        &NewWorkspace {
+            branch: Some("a..b".into()),
+            ..NewWorkspace::named("x")
+        },
     );
     assert!(
         bad.unwrap_err()
@@ -123,10 +128,13 @@ fn create_workspace_from_a_base_on_a_chosen_branch() {
     let ws = create_workspace_from(
         &store,
         &project,
-        "plain",
         root.path(),
-        (Some(" "), Some("")),
-        Some(" "),
+        &NewWorkspace {
+            base: Some(" ".into()),
+            branch: Some(String::new()),
+            task: Some(" ".into()),
+            ..NewWorkspace::named("plain")
+        },
     )
     .unwrap();
     assert_eq!(ws.branch, "hangar/plain");
@@ -510,6 +518,7 @@ fn delete_refuses_paths_that_are_not_linked_worktrees() {
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
             task: None,
+            group: None,
         };
         f.store.insert_workspace(&ws).unwrap();
         let force = DeleteOptions {

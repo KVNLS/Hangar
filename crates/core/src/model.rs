@@ -45,6 +45,10 @@ id_type!(
     /// Identifies a [`Session`].
     SessionId
 );
+id_type!(
+    /// Links workspaces made from one task for several agents (best of N), to compare them.
+    WorkspaceGroupId
+);
 
 /// Milliseconds since the Unix epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -131,6 +135,9 @@ pub struct Workspace {
     /// What the agent was asked to do (the New workspace task), if anything.
     #[serde(default)]
     pub task: Option<String>,
+    /// The attempts this workspace was created with, if it is one of several.
+    #[serde(default)]
+    pub group: Option<WorkspaceGroupId>,
 }
 
 impl Workspace {
@@ -252,6 +259,7 @@ mod tests {
             status: WorkspaceStatus::Active,
             created_at: Timestamp::now(),
             task: None,
+            group: None,
         };
         assert_eq!(ws.title(), "Login");
         ws.task = Some("\n  Fix the login crash \nwith a test".into());

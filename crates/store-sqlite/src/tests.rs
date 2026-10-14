@@ -25,6 +25,7 @@ fn workspace(project_id: ProjectId, name: &str) -> Workspace {
         status: WorkspaceStatus::Active,
         created_at: Timestamp::now(),
         task: None,
+        group: None,
     }
 }
 
@@ -447,12 +448,13 @@ fn v2_workspaces_migrate_without_a_task() {
 }
 
 #[test]
-fn a_workspace_task_round_trips() {
+fn a_workspace_task_and_group_round_trip() {
     let store = store();
     let p = project("/repos/task");
     store.insert_project(&p).unwrap();
     let ws = Workspace {
         task: Some("Fix the login screen\nand its tests".to_owned()),
+        group: Some(WorkspaceGroupId::new()),
         ..workspace(p.id, "Login")
     };
     store.insert_workspace(&ws).unwrap();

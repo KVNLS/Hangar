@@ -317,18 +317,15 @@ impl HangarApp {
             id,
         });
         self.close_new_workspace(window, cx);
-        let input = Some(task).filter(|t| !t.is_empty());
-        self.create_workspace(
-            project_id,
+        let new = ops::NewWorkspace {
             name,
-            agent,
-            target,
-            (base, branch),
-            input,
-            window,
-            cx,
-        )
-        .detach();
+            base,
+            branch,
+            task: Some(task).filter(|t| !t.is_empty()),
+            group: None,
+        };
+        self.create_workspace(project_id, new, agent, target, window, cx)
+            .detach();
     }
 
     pub(super) fn render_new_workspace_sheet(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

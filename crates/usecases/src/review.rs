@@ -254,6 +254,7 @@ mod tests {
                 status: WorkspaceStatus::Active,
                 created_at: Timestamp::now(),
                 task: None,
+                group: None,
             },
             repo: "/repo".into(),
         }
