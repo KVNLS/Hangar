@@ -1,5 +1,5 @@
-//! The app's asset source: gpui-kit's default component icons plus the few extra Lucide icons
-//! Hangar uses (the default bundle has no house, lock, power, volume or rotate-left icons).
+//! The app's asset source: gpui-kit's default component icons plus the extra Lucide icons Hangar
+//! uses (device controls and the design system's chrome) that the default bundle lacks.
 
 use std::borrow::Cow;
 
@@ -8,7 +8,32 @@ use gpui_kit::{AssetSource, Result, SharedString};
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
-        ArrowLeft, House, LayoutGrid, Lock, Power, RotateCcw, RotateCw, Volume1, Volume2
+        ArrowLeft,
+        AtSign,
+        Camera,
+        Columns2,
+        FileDiff,
+        GitBranch,
+        GitCommitHorizontal,
+        GitPullRequest,
+        Hammer,
+        House,
+        Keyboard,
+        LayoutGrid,
+        Lock,
+        MessageSquare,
+        Pencil,
+        Power,
+        RotateCcw,
+        RotateCw,
+        RotateCwSquare,
+        Rows2,
+        Smartphone,
+        SunMoon,
+        Terminal,
+        Volume1,
+        Volume2,
+        X,
     ]
 );
 
@@ -37,7 +62,12 @@ mod tests {
 
     #[test]
     fn serves_extra_and_default_icons() {
-        for icon in [IconName::House, IconName::RotateCcw, IconName::Volume2] {
+        for icon in [
+            IconName::House,
+            IconName::RotateCcw,
+            IconName::Volume2,
+            IconName::GitBranch,
+        ] {
             let path = icon.path();
             assert!(Assets.load(&path).unwrap().is_some(), "{path}");
         }

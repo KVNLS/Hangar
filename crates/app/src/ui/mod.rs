@@ -1,5 +1,6 @@
 //! Hangar design system v0.1 (`design/Hangar.dc.html`): tokens, theme, metrics, type.
 
+pub mod components;
 pub mod fonts;
 pub mod metrics;
 pub mod text;
