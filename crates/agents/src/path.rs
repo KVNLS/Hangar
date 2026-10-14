@@ -32,3 +32,24 @@ fn is_executable(path: &Path) -> bool {
         meta.is_file()
     }
 }
+
+/// Resolves an agent's program with the `PATH` the child will see: the spawn context's, else
+/// the adapter's, else this process's.
+pub(crate) fn resolve_program(
+    agent: &str,
+    program: &str,
+    adapter_env: &[(String, String)],
+    ctx_env: &[(String, String)],
+) -> crate::Result<PathBuf> {
+    let path_override = ctx_env
+        .iter()
+        .rev()
+        .chain(adapter_env.iter().rev())
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| std::ffi::OsString::from(v));
+    let path_var = path_override.or_else(|| std::env::var_os("PATH"));
+    find_program(program, path_var.as_deref()).ok_or_else(|| crate::Error::NotInstalled {
+        agent: agent.to_owned(),
+        program: program.to_owned(),
+    })
+}

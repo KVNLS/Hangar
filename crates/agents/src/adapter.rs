@@ -6,7 +6,7 @@ use std::sync::Arc;
 use hangar_terminal::{GridSize, SpawnOptions, TerminalConfig, TerminalSession};
 
 use crate::error::{Error, Result};
-use crate::path::find_program;
+use crate::path::{find_program, resolve_program};
 
 /// Called from the terminal pump thread after each batch of program output.
 pub type UpdateHook = Arc<dyn Fn() + Send + Sync>;
@@ -127,21 +127,8 @@ impl PtyAdapter {
         self
     }
 
-    /// Resolves the program with the `PATH` the child will see: the context's, else the
-    /// adapter's, else this process's.
     fn resolve(&self, ctx: &SpawnContext) -> Result<PathBuf> {
-        let path_override = ctx
-            .env
-            .iter()
-            .rev()
-            .chain(self.env.iter().rev())
-            .find(|(k, _)| k == "PATH")
-            .map(|(_, v)| OsString::from(v));
-        let path_var = path_override.or_else(|| std::env::var_os("PATH"));
-        find_program(&self.program, path_var.as_deref()).ok_or_else(|| Error::NotInstalled {
-            agent: self.id.clone(),
-            program: self.program.clone(),
-        })
+        resolve_program(&self.id, &self.program, &self.env, &ctx.env)
     }
 }
 

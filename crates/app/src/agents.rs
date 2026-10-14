@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
+use hangar_agents::acp::{AcpAdapter, McpServer, acp_presets};
 use hangar_agents::{PtyAdapter, find_program, presets};
 use hangar_core::{AgentKind, WorkspaceId};
 use serde_json::json;
@@ -18,20 +19,67 @@ pub struct AgentChoice {
     pub installed: bool,
 }
 
+/// A built-in agent: an interactive CLI in a terminal, or a structured agent over ACP.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentPreset {
+    Pty(PtyAdapter),
+    Acp(AcpAdapter),
+}
+
+impl AgentPreset {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Pty(a) => &a.id,
+            Self::Acp(a) => &a.id,
+        }
+    }
+
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Pty(a) => &a.display_name,
+            Self::Acp(a) => &a.display_name,
+        }
+    }
+
+    pub fn program(&self) -> &str {
+        match self {
+            Self::Pty(a) => &a.program,
+            Self::Acp(a) => &a.program,
+        }
+    }
+}
+
+/// Every preset in picker order: each ACP variant follows the CLI it drives.
+pub fn all_presets() -> Vec<AgentPreset> {
+    let mut acp = acp_presets();
+    let mut all = Vec::new();
+    for pty in presets() {
+        let id = pty.id.clone();
+        all.push(AgentPreset::Pty(pty));
+        let (follow, rest): (Vec<_>, Vec<_>) = acp
+            .into_iter()
+            .partition(|a| a.id.strip_suffix("-acp") == Some(id.as_str()));
+        all.extend(follow.into_iter().map(AgentPreset::Acp));
+        acp = rest;
+    }
+    all.extend(acp.into_iter().map(AgentPreset::Acp));
+    all
+}
+
 /// Presets with their install state, resolved against `path` (a `PATH`-style list).
 pub fn choices(path: Option<&str>) -> Vec<AgentChoice> {
-    presets()
+    all_presets()
         .into_iter()
-        .map(|adapter| AgentChoice {
-            installed: is_installed(&adapter, path),
-            id: adapter.id,
-            name: adapter.display_name,
+        .map(|preset| AgentChoice {
+            installed: is_installed(preset.program(), path),
+            id: preset.id().to_owned(),
+            name: preset.display_name().to_owned(),
         })
         .collect()
 }
 
-pub fn is_installed(adapter: &PtyAdapter, path: Option<&str>) -> bool {
-    find_program(&adapter.program, path.map(OsStr::new)).is_some()
+pub fn is_installed(program: &str, path: Option<&str>) -> bool {
+    find_program(program, path.map(OsStr::new)).is_some()
 }
 
 /// Claude Code if installed, else the shell.
@@ -44,13 +92,13 @@ pub fn default_agent(choices: &[AgentChoice]) -> &'static str {
     }
 }
 
-pub fn preset(id: &str) -> Option<PtyAdapter> {
-    presets().into_iter().find(|adapter| adapter.id == id)
+pub fn preset(id: &str) -> Option<AgentPreset> {
+    all_presets().into_iter().find(|preset| preset.id() == id)
 }
 
 pub fn kind(id: &str) -> AgentKind {
     match id {
-        "claude" => AgentKind::Claude,
+        "claude" | "claude-acp" => AgentKind::Claude,
         "codex" => AgentKind::Codex,
         "opencode" => AgentKind::OpenCode,
         "gemini" => AgentKind::Gemini,
@@ -66,6 +114,8 @@ pub struct AgentExtras {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub files: Vec<(PathBuf, String)>,
+    /// Given to an ACP agent's `session/new`.
+    pub mcp_servers: Vec<McpServer>,
 }
 
 /// How an agent reaches the app's MCP server through `hangar mcp-bridge`.
@@ -112,6 +162,15 @@ pub fn mcp_launch(
             extras.args.push("--mcp-config".to_owned());
             extras.args.push(stdio_server.to_string());
         }
+        "claude-acp" => extras.mcp_servers.push(McpServer {
+            name: SERVER_NAME.to_owned(),
+            command: exe.to_owned(),
+            args: vec![BRIDGE_ARG.to_owned()],
+            env: vec![
+                (hangar_mcp::SESSION_ENV.to_owned(), bridge.session.clone()),
+                (hangar_mcp::SOCKET_ENV.to_owned(), socket.to_owned()),
+            ],
+        }),
         "opencode" => {
             let config = json!({
                 "$schema": "https://opencode.ai/config.json",
@@ -176,10 +235,9 @@ fn toml_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentChoice, BridgeLaunch, choices, default_agent, is_installed, kind, mcp_launch, preset,
-        toml_string,
+        AgentChoice, AgentPreset, BridgeLaunch, choices, default_agent, is_installed, kind,
+        mcp_launch, preset, toml_string,
     };
-    use hangar_agents::PtyAdapter;
     use hangar_core::AgentKind;
     use serde_json::{Value, json};
     use std::path::PathBuf;
@@ -207,10 +265,9 @@ mod tests {
 
     #[test]
     fn installed_check_uses_given_path() {
-        let sh = PtyAdapter::new("sh", "sh", "sh");
-        assert!(is_installed(&sh, Some("/nonexistent:/bin")));
-        assert!(!is_installed(&sh, Some("/nonexistent")));
-        assert!(!is_installed(&sh, None));
+        assert!(is_installed("sh", Some("/nonexistent:/bin")));
+        assert!(!is_installed("sh", Some("/nonexistent")));
+        assert!(!is_installed("sh", None));
     }
 
     #[test]
@@ -223,6 +280,10 @@ mod tests {
         }
         assert_eq!(kind("aider"), AgentKind::Custom("aider".into()));
         assert!(preset("nope").is_none());
+        let ids: Vec<String> = all.iter().map(|c| c.id.clone()).collect();
+        let at = |id: &str| ids.iter().position(|i| i == id);
+        assert_eq!(at("claude-acp"), at("claude").map(|i| i + 1));
+        assert!(matches!(preset("claude-acp"), Some(AgentPreset::Acp(_))));
     }
 
     const EXE: &str = "/Applications/Hangar.app/Contents/MacOS/hangar";
@@ -273,6 +334,23 @@ mod tests {
         assert_eq!(x.args.len(), 2);
         assert!(x.files.is_empty());
         assert!(!x.args[1].contains("ab12"), "no secret in argv");
+        assert_bridge_env(&x.env);
+    }
+
+    #[test]
+    fn claude_acp_gets_the_bridge_through_session_new() {
+        let x = mcp_launch("claude-acp", &bridge(EXE), &device_env()).unwrap();
+        assert!(x.args.is_empty(), "no secret or config in argv");
+        assert_eq!(x.mcp_servers.len(), 1);
+        let server = &x.mcp_servers[0];
+        assert_eq!(server.name, "hangar");
+        assert_eq!(server.command, EXE);
+        assert_eq!(server.args, ["mcp-bridge"]);
+        assert_eq!(env_of(&server.env, "HANGAR_MCP_SESSION"), Some("ab12"));
+        assert_eq!(
+            env_of(&server.env, "HANGAR_MCP_SOCKET"),
+            Some("/tmp/hangar-501/hangar.sock")
+        );
         assert_bridge_env(&x.env);
     }
 

@@ -111,6 +111,11 @@ impl TerminalWaker {
         let notify = Arc::clone(&self.0);
         Arc::new(move || notify.notify_one())
     }
+
+    /// Resolves after the next [`Self::hook`] call (or at once if one is pending).
+    pub async fn notified(&self) {
+        self.0.notified().await;
+    }
 }
 
 /// Emitted by [`TerminalView`].

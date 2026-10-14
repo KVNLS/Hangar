@@ -15,7 +15,7 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 |----------|----------------------------------------------------------------------------------|----------------|
 | core     | Project / Workspace / Session models, EventBus, SQLite Store                     | —              |
 | worktree | git CLI wrapper: worktree add/remove/list, status, diff                          | —              |
-| agents   | AgentAdapter trait; PtyAdapter (now), AcpAdapter (M7)                            | core, terminal |
+| agents   | AgentAdapter trait, PtyAdapter; ACP client (`acp`: protocol, stdio, AcpAdapter)  | terminal       |
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |
 | files    | file watching (notify, debounced, git-ignore aware), LiveDiff model              | worktree       |
 | devices  | Device trait; iOS (private + simctl fallback), Android (M4)                      | —              |
@@ -89,7 +89,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - [x] M5 iOS device panel — headless boot/shutdown, hardware buttons, keyboard (no rotation on Xcode 27)
 - [x] UI v0.1 — design system + views, merged into main 2026-10-05
 - [x] M6 Mobile run loop (first cut) — detection, ports, Run ⌘R in terminal tabs, native install/launch
-- [ ] M7 ACP structured agents
+- [x] M7 ACP structured agents (first cut) — Claude Code over `claude-agent-acp`, chat pane, Approval state
 - [x] M8 MCP device tools (first cut) — per-workspace devices, capacity guard, tools over `hangar mcp-bridge`
 
 ## Done since M2 first cut
@@ -169,6 +169,41 @@ Git access is the `git` CLI with porcelain output, not a library.
   mode; `AvdCost` can understate RAM (the emulator raises it for new API levels); Expo picks Android devices by
   AVD name, ambiguous with several instances; MCP cancellation and resources/prompts not implemented.
 
+## M7 ACP structured agents (first cut)
+- `hangar_agents::acp`: hand-rolled ACP v1 client (owner decision: no ACP crate). JSON-RPC over the agent's
+  stdio on std threads; `initialize` (no fs/terminal client capabilities, so the agent uses its own tools in
+  the worktree), `session/new` with `mcpServers`, `session/prompt` (text), `session/cancel`, permission
+  requests answered selected/cancelled, other agent requests get -32601. Update kinds Hangar does not know are
+  reported as `Other` and logged. The agent runs in its own process group; stop = close stdin, SIGTERM, SIGKILL
+  after 3 s.
+- Preset "Claude Code (structured)" (`claude-acp`) runs `claude-agent-acp` (npm
+  `@agentclientprotocol/claude-agent-acp`, Node 22+) from PATH; nothing is downloaded at runtime. Settings ›
+  Agents shows the install command when it is missing. The hangar MCP bridge goes into `session/new`
+  (secret in the server env, not argv).
+- App: `LiveSession` holds a terminal or a chat (`AgentSurface`). `ChatView` (`crates/app/src/chat_view`):
+  streamed markdown (gpui-component `TextView`), collapsed thoughts, tool-call cards (kind, status, clickable
+  locations → Files tab, text output, line diffs, 40-line cap), plan, permission prompt (⏎ allow once, esc
+  deny), "Working…" line, composer (⏎ send, ⇧⏎ newline, Stop/esc cancels the turn). `AgentState::from_acp`:
+  pending permission → Approval, running turn → Working, failed turn or bad exit → Failed, changes → Review.
+  The New workspace task and `HANGAR_DEV_INPUT` become the first prompt.
+- Composer: the mode chip is a menu of the agent's modes (`session/set_mode`; claude-agent-acp answers `{}`
+  and sends no `current_mode_update`, so the chip changes on success). Typing `/prefix` lists matching slash
+  commands (from `available_commands_update`, up to 8); clicking one fills `/name `. Both are protocol- and
+  build-checked; neither was seen on screen yet (the display slept during the check).
+- Resume: each workspace's ACP session id is saved as `chat:<workspace id>` (with the preset that ran it).
+  When the selected agent matches, the pane offers "Resume …" (`session/load`: the agent replays the history
+  as updates before answering, so the transcript comes back) next to "New conversation". A refused load
+  (e.g. -32002 unknown session) starts a new session and says so in the transcript. Checked against
+  claude-agent-acp at the protocol level (history replayed, unknown id refused); not yet clicked in the app.
+- Gaps: no images or @-context in the composer, no
+  keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
+  no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
+  stopping a turn is esc or the Stop button; no transcript virtualization (long sessions render every item).
+- Live (2026-10-05, scratch repo, spikes/m7-acp-notes.md): streaming, tool cards, three permission prompts
+  (Approval in the sidebar, ⏎ approves), `device_info` over the MCP bridge, an edit → Review `+1 −0`, esc
+  stops a streaming turn, quitting leaves no agent process. `claude-agent-acp` puts the MCP session secret in
+  its `claude` child's argv (visible to the same user in `ps`).
+
 ## UI v0.1 (design/Hangar.dc.html)
 - Design system in `crates/app/src/ui`: tokens (dark/light, `cx.tokens()`), gpui-component theme mapping,
   Geist/Geist Mono, metrics, type scale, components; `ui_gallery` example. `AgentState` in `core`.
@@ -200,4 +235,7 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Owner reviews `device-pool`; a real agent session using the device tools; then M7 (ACP structured agents).
+- Owner reviews `m7-acp` and looks at the mode menu, slash list and Resume in the app (not seen on screen:
+  the display slept during the check).
+- Then more ACP agents: Gemini `--experimental-acp`, `codex-acp`, `opencode acp` (the local OpenCode install
+  printed nothing for `opencode acp --help` within 15 s).
