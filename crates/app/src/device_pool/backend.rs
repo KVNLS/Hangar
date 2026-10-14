@@ -173,6 +173,68 @@ pub fn shutdown(platform: Platform, id: &str) -> anyhow::Result<()> {
     }
 }
 
+/// What runs right now: booted simulators, and the read-only emulator instances (the only
+/// kind the pool boots) with their AVD.
+#[derive(Debug, Default)]
+pub struct RunningSet {
+    simulators: Vec<String>,
+    read_only: Vec<(String, String)>,
+}
+
+impl RunningSet {
+    pub fn scan() -> Self {
+        let simulators = match list_ios_all() {
+            Ok(all) => all
+                .into_iter()
+                .filter(|d| d.state == "Booted")
+                .map(|d| d.udid)
+                .collect(),
+            Err(err) => {
+                tracing::debug!(target: "device_pool", "simulators not listed: {err:#}");
+                Vec::new()
+            }
+        };
+        let read_only = hangar_devices::android::discovery::scan()
+            .into_iter()
+            .filter(|d| d.read_only)
+            .map(|d| (d.serial(), d.avd_id))
+            .collect();
+        Self {
+            simulators,
+            read_only,
+        }
+    }
+
+    /// The id of the target's running device, if it runs (a pool instance for Android).
+    pub fn find(&self, target: &Target) -> Option<String> {
+        match target {
+            Target::Ios { udid }
+            | Target::IosOwn {
+                udid: Some(udid), ..
+            } => self.simulators.contains(udid).then(|| udid.clone()),
+            Target::Android {
+                avd,
+                serial: Some(serial),
+                ..
+            } => self
+                .read_only
+                .iter()
+                .any(|(s, a)| s == serial && a == avd)
+                .then(|| serial.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Shuts the target down if it runs (a device the pool did not open in this run).
+pub fn shutdown_if_running(platform: Platform, target: &Target) -> anyhow::Result<bool> {
+    let Some(id) = RunningSet::scan().find(target) else {
+        return Ok(false);
+    };
+    shutdown(platform, &id)?;
+    Ok(true)
+}
+
 /// Deletes a simulator the pool created (shutting it down first).
 pub fn delete_clone(udid: &str) -> anyhow::Result<()> {
     if let Err(err) = shutdown_ios(udid) {

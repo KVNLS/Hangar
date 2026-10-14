@@ -331,6 +331,7 @@ impl DevicePool {
                     tracing::info!(target: "device_pool", limit = ?pool.limit, "limit forced by HANGAR_DEV_DEVICE_LIMIT");
                 }
                 pool.detect_host(cx);
+                pool.reconcile_running(cx);
                 cx.notify();
             });
         })
@@ -372,6 +373,7 @@ impl DevicePool {
                     }
                 }
                 pool.maybe_alert_single(cx);
+                pool.enforce_limit(cx);
                 cx.notify();
             });
         })
@@ -759,6 +761,7 @@ impl DevicePool {
         let assignment = self.resolve_assignment(ws, cx);
         cx.spawn(async move |this, cx| {
             let a = assignment.await?;
+            Self::wait_host(&this, cx).await;
             let key = this.update(cx, |pool, _| pool.key_of(ws, &a))?;
             Self::open(this, key, cx)
                 .await
@@ -777,6 +780,7 @@ impl DevicePool {
         let assignment = self.resolve_assignment(ws, cx);
         cx.spawn(async move |this, cx| {
             let a = assignment.await?;
+            Self::wait_host(&this, cx).await;
             let key = this.update(cx, |pool, _| pool.key_of(ws, &a))?;
             let lease = Self::lease(this.clone(), key.clone(), ws, cx).await?;
             let avd = (a.platform == Platform::Android).then(|| a.base.clone());
@@ -1301,10 +1305,33 @@ impl DevicePool {
         cx.notify();
     }
 
-    /// Shuts down idle devices above the cap.
-    /// The cap counts booted devices of every platform; with several platforms booted the
-    /// tightest of their caps applies.
+    /// Whether host detection finished (the cap is known).
+    fn host_known(&self) -> bool {
+        self.host.is_some() || self.host_error.is_some()
+    }
+
+    /// Waits (briefly) for host detection, so the first calls after launch pick the right mode.
+    async fn wait_host(this: &WeakEntity<Self>, cx: &mut AsyncApp) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if this
+                .read_with(cx, |pool, _| pool.host_known())
+                .unwrap_or(true)
+            {
+                return;
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+        }
+    }
+
+    /// Shuts down idle devices above the cap. The cap counts booted devices of every platform;
+    /// with several platforms booted the tightest of their caps applies.
     fn enforce_limit(&mut self, cx: &mut Context<Self>) {
+        if !self.host_known() {
+            return;
+        }
         let Some(limit) = self
             .devices
             .values()
@@ -1376,21 +1403,94 @@ impl DevicePool {
             self.focused = None;
         }
         cx.notify();
-        self.shutdown(&PoolKey::Own(ws), cx)
+        let known = self.assignments.contains_key(&ws);
+        let store = self.store.clone();
+        cx.spawn(async move |this, cx| {
+            // Right after launch the saved assignment may not be loaded yet.
+            if !known && let Some(store) = store {
+                let saved = cx
+                    .background_executor()
+                    .spawn(async move { store.get_setting::<Assignment>(&assignment_key(ws)) })
+                    .await?;
+                if let Some(a) = saved {
+                    this.update(cx, |pool, _| {
+                        pool.assignments.entry(ws).or_insert(a);
+                    })?;
+                }
+            }
+            this.update(cx, |pool, cx| pool.shutdown_own(ws, cx))?.await
+        })
+    }
+
+    fn shutdown_own(
+        &mut self,
+        ws: WorkspaceId,
+        cx: &mut Context<Self>,
+    ) -> Task<anyhow::Result<()>> {
+        let key = PoolKey::Own(ws);
+        let Some(device) = self.entry(&key) else {
+            return Task::ready(Ok(()));
+        };
+        if matches!(device.state, State::Closed) && !device.running {
+            // Possibly still running from an earlier launch of Hangar.
+            let (platform, target) = (device.platform, device.target.clone());
+            return cx.background_executor().spawn(async move {
+                if backend::shutdown_if_running(platform, &target)? {
+                    tracing::info!(target: "device_pool", ?target, "device left from an earlier run shut down");
+                }
+                Ok(())
+            });
+        }
+        self.shutdown(&key, cx)
+    }
+
+    /// Marks the workspaces' own devices that still run (from an earlier launch) as running, so
+    /// they count against the cap and can be shut down when idle.
+    fn reconcile_running(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let running = cx
+                .background_executor()
+                .spawn(async { backend::RunningSet::scan() })
+                .await;
+            let _ = this.update(cx, |pool, cx| {
+                let owned: Vec<WorkspaceId> = pool.assignments.keys().copied().collect();
+                for ws in owned {
+                    let key = PoolKey::Own(ws);
+                    let Some(device) = pool.entry(&key) else {
+                        continue;
+                    };
+                    if running.find(&device.target).is_some() && !device.running {
+                        device.running = true;
+                        tracing::info!(target: "device_pool", workspace = %ws, name = %device.name, "own device still running from an earlier launch");
+                    } else if !device.running
+                        && matches!(device.state, State::Closed)
+                        && device.leases.is_idle()
+                    {
+                        pool.devices.remove(&key);
+                    }
+                }
+                pool.enforce_limit(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// The workspace is deleted: as [`Self::archive`], then its simulator (if the pool created
     /// one) and its assignment are deleted.
     pub fn delete(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) -> Task<anyhow::Result<()>> {
         let shutdown = self.archive(ws, cx);
-        self.devices.remove(&PoolKey::Own(ws));
-        self.workspaces.remove(&ws);
-        let assignment = self.assignments.remove(&ws);
         let store = self.store.clone();
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |this, cx| {
             if let Err(err) = shutdown.await {
                 tracing::warn!(target: "device_pool", "shutdown before delete failed: {err:#}");
             }
+            let assignment = this.update(cx, |pool, cx| {
+                pool.devices.remove(&PoolKey::Own(ws));
+                pool.workspaces.remove(&ws);
+                cx.notify();
+                pool.assignments.remove(&ws)
+            })?;
             cx.background_executor()
                 .spawn(async move {
                     if let Some(store) = store {
