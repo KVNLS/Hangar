@@ -45,6 +45,12 @@ objc2-core-foundation = "0.3.2"
 block2 = "0.6.2"
 libc = "0.2.190"
 tempfile = "3.27.0"
+# Android emulator gRPC (hangar-devices only).
+tonic = { version = "0.14.6", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14.6"
+prost = "0.14.4"
+tonic-prost-build = { version = "0.14.6", default-features = false }
+protox = "0.9.1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

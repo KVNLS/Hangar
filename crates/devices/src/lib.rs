@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+pub mod android;
 pub mod geometry;
 pub mod simctl;
 
@@ -28,6 +29,12 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Ios,
+    Android,
+}
 
 /// Physical description of the main screen.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -113,7 +120,8 @@ impl Frame {
     }
 }
 
-/// Input in device points (origin top-left, portrait).
+/// Input in device points (origin top-left, portrait). On Android a point is a dp
+/// (density-independent pixel, `px / ScreenSpec::scale`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Input {
     Tap {
@@ -134,6 +142,8 @@ pub enum Input {
     },
     /// Hardware Home button press (on Face ID devices it still returns to the home screen).
     Home,
+    /// Android Back (unsupported on iOS).
+    Back,
 }
 
 /// Latest-frame channel: receivers always see the most recent frame; slow consumers skip frames.
@@ -143,15 +153,28 @@ pub type FrameSender = tokio::sync::watch::Sender<Option<Frame>>;
 pub trait Device: Send + Sync {
     fn info(&self) -> &DeviceInfo;
 
-    /// Short backend name for logs ("private", "simctl").
+    /// Short backend name for logs ("private", "simctl", "grpc", "adb").
     fn backend(&self) -> &'static str;
+
+    fn platform(&self) -> Platform {
+        Platform::Ios
+    }
 
     fn frames(&self) -> FrameReceiver;
 
     fn send_input(&self, input: Input) -> Result<()>;
 
+    /// Types text into the focused field.
+    fn send_text(&self, _text: &str) -> Result<()> {
+        Err(Error::Unsupported("text input"))
+    }
+
     fn boot(&self) -> Result<()> {
         Err(Error::Unsupported("boot"))
+    }
+
+    fn shutdown(&self) -> Result<()> {
+        Err(Error::Unsupported("shutdown"))
     }
 
     fn install(&self, _app_path: &std::path::Path) -> Result<()> {

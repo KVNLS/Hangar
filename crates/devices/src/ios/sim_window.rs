@@ -80,6 +80,7 @@ pub(crate) fn click(info: &DeviceInfo, input: Input) -> Result<()> {
             post_key(KEY_H, true)?;
             post_key(KEY_H, false)
         }
+        Input::Back => Err(Error::Unsupported("Back button on iOS")),
     }
 }
 

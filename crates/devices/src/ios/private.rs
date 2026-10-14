@@ -510,6 +510,7 @@ impl Hid {
                 std::thread::sleep(TAP_HOLD);
                 self.press(BUTTON_HOME, BUTTON_UP)
             }
+            Input::Back => Err(Error::Unsupported("Back button on iOS")),
         }
     }
 
