@@ -1069,9 +1069,26 @@ impl DevicePanel {
                 .child(format!("{name}: shutting down…")),
             // Open but the view is not attached yet (attached on the next pool notification).
             DeviceStatus::Open { .. } => centered().child("Opening…"),
-            DeviceStatus::Closed { name, error } => {
+            DeviceStatus::Closed {
+                name,
+                error,
+                conflict,
+            } => {
                 let name = name.to_owned();
                 let error = error.map(str::to_owned);
+                let conflict = conflict.map(|serial| {
+                    UiButton::new("device-clear-conflict")
+                        .label(format!("Shut down {serial} and retry"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let task = this.pool.update(cx, |pool, cx| pool.clear_conflict(ws, cx));
+                            cx.spawn(async move |_, _| {
+                                if let Err(err) = task.await {
+                                    tracing::warn!(workspace = %ws, "conflict not cleared: {err:#}");
+                                }
+                            })
+                            .detach();
+                        }))
+                });
                 centered()
                     .child(
                         EmptyState::new(Lucide::Smartphone, format!("{name} is not running"))
@@ -1095,6 +1112,7 @@ impl DevicePanel {
                     .when_some(error, |this, error| {
                         this.child(div().max_w(px(360.)).text_color(t.red).child(error))
                     })
+                    .children(conflict)
             }
         }
         .into_any_element()

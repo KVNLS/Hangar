@@ -40,6 +40,47 @@ pub enum Target {
     },
 }
 
+/// The base AVD runs outside the pool without `-read-only`, which keeps the emulator from
+/// starting any other instance of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conflict {
+    pub avd: String,
+    pub serial: String,
+}
+
+impl std::fmt::Display for Conflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} is already running as {} without -read-only, so Hangar cannot start another \
+             instance of it. Shut it down (Device tab: Shut down and retry), then try again.",
+            self.avd, self.serial
+        )
+    }
+}
+
+impl std::error::Error for Conflict {}
+
+/// Shuts down the instance in the way of the pool and waits until it is gone.
+pub fn clear_conflict(conflict: &Conflict) -> anyhow::Result<()> {
+    shutdown(Platform::Android, &conflict.serial)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        let gone = !hangar_devices::android::discovery::scan()
+            .iter()
+            .any(|d| d.serial() == conflict.serial);
+        if gone {
+            tracing::info!(target: "device_pool", serial = %conflict.serial, "conflicting emulator shut down");
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    Err(anyhow!(
+        "{} still runs 30 s after asking it to shut down",
+        conflict.serial
+    ))
+}
+
 /// A running device found or brought up, ready to open.
 pub struct Running {
     pub info: DeviceInfo,
@@ -126,12 +167,11 @@ pub fn boot(target: &Target, progress: &dyn Fn(String)) -> anyhow::Result<Runnin
             use hangar_devices::android::{AndroidSdk, BootOptions, discovery, emulator};
             let sdk = AndroidSdk::locate()?;
             if let Some(d) = emulator::conflicting_instance(&discovery::scan(), avd, true) {
-                return Err(anyhow!(
-                    "{avd} is already running as {} without -read-only, so Hangar cannot start \
-                     another instance of it. Shut it down (select it in the Device tab and \
-                     press Shut down), then try again.",
-                    d.serial()
-                ));
+                return Err(Conflict {
+                    avd: avd.clone(),
+                    serial: d.serial(),
+                }
+                .into());
             }
             let options = BootOptions {
                 read_only: true,

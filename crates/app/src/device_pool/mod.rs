@@ -140,6 +140,8 @@ pub enum DeviceStatus<'a> {
     Closed {
         name: &'a str,
         error: Option<&'a str>,
+        /// An emulator outside the pool blocks the boot ([`DevicePool::clear_conflict`]).
+        conflict: Option<&'a str>,
     },
     Opening {
         name: &'a str,
@@ -193,6 +195,8 @@ struct PoolDevice {
     last_used: u64,
     leases: LeaseQueue<WorkspaceId, LeaseReply>,
     error: Option<String>,
+    /// The last boot was blocked by an instance running outside the pool.
+    conflict: Option<backend::Conflict>,
 }
 
 impl PoolDevice {
@@ -698,6 +702,7 @@ impl DevicePool {
             last_used: 0,
             leases: LeaseQueue::default(),
             error: None,
+            conflict: None,
         })
     }
 
@@ -988,6 +993,7 @@ impl DevicePool {
         });
         if let Some(device) = self.devices.get_mut(key) {
             device.error = None;
+            device.conflict = None;
             device.state = State::Opening {
                 stage,
                 started: Instant::now(),
@@ -1088,9 +1094,11 @@ impl DevicePool {
                 match booted {
                     Ok(running) => running,
                     Err(err) => {
+                        let conflict = err.downcast_ref::<backend::Conflict>().cloned();
                         let _ = this.update(cx, |pool, _| {
                             if let Some(d) = pool.devices.get_mut(key) {
                                 d.running = false;
+                                d.conflict = conflict;
                             }
                         });
                         return Err(failed(err));
@@ -1571,6 +1579,29 @@ impl DevicePool {
         })
     }
 
+    /// Shuts down the emulator that kept the workspace's device from booting (the base AVD
+    /// running outside the pool), then starts the workspace's device.
+    pub fn clear_conflict(
+        &mut self,
+        ws: WorkspaceId,
+        cx: &mut Context<Self>,
+    ) -> Task<anyhow::Result<DeviceSession>> {
+        let Some(conflict) = self
+            .key_for(ws)
+            .and_then(|k| self.devices.get(&k))
+            .and_then(|d| d.conflict.clone())
+        else {
+            return Task::ready(Err(anyhow!("nothing is in the way of this device")));
+        };
+        tracing::info!(target: "device_pool", workspace = %ws, serial = %conflict.serial, "shutting down the emulator in the way");
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move { backend::clear_conflict(&conflict) })
+                .await?;
+            this.update(cx, |pool, cx| pool.ensure(ws, cx))?.await
+        })
+    }
+
     /// What the panel shows for the workspace.
     pub fn status(&self, ws: WorkspaceId) -> DeviceStatus<'_> {
         let Some(key) = self.key_for(ws) else {
@@ -1581,12 +1612,17 @@ impl DevicePool {
                 (PoolKey::Base(_), Some(a)) => a.base.as_str(),
                 _ => "its own device",
             };
-            return DeviceStatus::Closed { name, error: None };
+            return DeviceStatus::Closed {
+                name,
+                error: None,
+                conflict: None,
+            };
         };
         match &device.state {
             State::Closed => DeviceStatus::Closed {
                 name: &device.name,
                 error: device.error.as_deref(),
+                conflict: device.conflict.as_ref().map(|c| c.serial.as_str()),
             },
             State::Opening { stage, started, .. } => DeviceStatus::Opening {
                 name: &device.name,
