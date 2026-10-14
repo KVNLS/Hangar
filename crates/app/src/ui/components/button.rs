@@ -6,7 +6,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::ui::{
-    ActiveTokens as _, BUTTON_HEIGHT, BUTTON_HEIGHT_SHEET, BUTTON_HEIGHT_SMALL, FONT_MONO,
+    ActiveTokens as _, BUTTON_HEIGHT, BUTTON_HEIGHT_SHEET, BUTTON_HEIGHT_SMALL, TypeScale as _,
 };
 use crate::ui::{RADIUS_CONTROL, Tokens};
 
@@ -223,7 +223,7 @@ impl RenderOnce for UiButton {
             .when_some(self.kbd, |this, kbd| {
                 this.child(
                     div()
-                        .font_family(FONT_MONO)
+                        .font_mono()
                         .text_size(px(10.))
                         .font_weight(FontWeight::MEDIUM)
                         .opacity(0.7)

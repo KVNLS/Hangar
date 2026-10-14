@@ -9,12 +9,12 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_agents::acp::protocol::{PlanStatus, ToolContent, ToolStatus};
+use hangar_agents::acp::protocol::{ConfigOption, PlanStatus, ToolContent, ToolStatus};
 use hangar_core::AgentState;
 
 use super::{ChatView, Item, Outcome};
 use crate::ui::components::{StateGlyph, UiButton};
-use crate::ui::{ActiveTokens as _, FONT_MONO, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TypeScale as _};
+use crate::ui::{ActiveTokens as _, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TypeScale as _};
 
 const MAX_WIDTH: Pixels = px(700.);
 const RADIUS: Pixels = px(6.);
@@ -277,7 +277,7 @@ impl ChatView {
                     .gap(SPACE_2)
                     .h(px(28.))
                     .px(px(10.))
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(12.))
                     .child(Icon::new(icon).with_size(px(12.)).text_color(t.tx3))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(verb))
@@ -439,6 +439,42 @@ impl ChatView {
         )
     }
 
+    /// A menu chip per non-mode config option with a choice (model, effort, fast mode, …).
+    fn render_config_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let view = cx.entity().downgrade();
+        self.config
+            .iter()
+            .filter(|o| !o.is_mode() && o.values.len() > 1)
+            .map(|option| {
+                let view = view.clone();
+                let option = option.clone();
+                Button::new(SharedString::from(format!("chat-config-{}", option.id)))
+                    .ghost()
+                    .xsmall()
+                    .label(config_label(&option))
+                    .icon(Lucide::ChevronDown)
+                    .tooltip(option.name.clone())
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for value in &option.values {
+                            let view = view.clone();
+                            let (id, picked) = (option.id.clone(), value.value.clone());
+                            menu = menu.item(
+                                PopupMenuItem::new(value.name.clone())
+                                    .checked(value.value == option.current)
+                                    .on_click(move |_, _, cx| {
+                                        let _ = view.update(cx, |chat, cx| {
+                                            chat.choose_config(id.clone(), picked.clone(), cx)
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    })
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     fn render_commands(
         &self,
         commands: Vec<hangar_agents::acp::protocol::AvailableCommand>,
@@ -528,6 +564,7 @@ impl ChatView {
                         .type_mono_small()
                         .text_color(t.tx2)
                         .when_some(self.render_mode_chip(cx), |d, chip| d.child(chip))
+                        .children(self.render_config_chips(cx))
                         .child(div().flex_1())
                         .child(div().text_color(t.tx3).child("⏎ send · ⇧⏎ newline"))
                         .child(action),
@@ -740,7 +777,7 @@ fn tool_body(content: &[ToolContent], root: &std::path::Path, cx: &App) -> Optio
             .border_t_1()
             .border_color(t.line)
             .py(px(4.))
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.5))
             .line_height(px(18.))
             .overflow_hidden()
@@ -755,6 +792,15 @@ fn tool_body(content: &[ToolContent], root: &std::path::Path, cx: &App) -> Optio
             })
             .into_any_element(),
     )
+}
+
+/// Model and effort values speak for themselves ("Opus 5.5", "High"); other options need their
+/// name ("Fast mode: Off").
+fn config_label(option: &ConfigOption) -> String {
+    match option.category.as_deref() {
+        Some("model" | "thought_level") => option.current_name().to_owned(),
+        _ => format!("{}: {}", option.name, option.current_name()),
+    }
 }
 
 #[cfg(test)]

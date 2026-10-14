@@ -1,6 +1,6 @@
 //! Hangar desktop app.
 //!
-//! `hangar mcp-bridge` runs the MCP stdio bridge instead of the app (checked before anything
+//! `Hangar mcp-bridge` runs the MCP stdio bridge instead of the app (checked before anything
 //! GPUI starts): agents launched from a workspace start it as their `hangar` MCP server. It
 //! relays stdin/stdout to the running app's socket (`HANGAR_MCP_SOCKET`) with the workspace's
 //! session secret (`HANGAR_MCP_SESSION`), prints errors to stderr and exits non-zero on failure.
@@ -104,7 +104,7 @@ fn main() -> std::process::ExitCode {
         return match hangar_mcp::run_bridge_from_env() {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("hangar mcp-bridge: {err}");
+                eprintln!("Hangar mcp-bridge: {err}");
                 std::process::ExitCode::FAILURE
             }
         };

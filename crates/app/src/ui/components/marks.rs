@@ -3,7 +3,7 @@
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::ui::{ActiveTokens as _, FONT_MONO, RADIUS_BADGE};
+use crate::ui::{ActiveTokens as _, RADIUS_BADGE, TypeScale as _};
 
 /// One key cap (`⌘`, `K`, `esc`).
 #[derive(IntoElement)]
@@ -29,7 +29,7 @@ impl RenderOnce for Kbd {
             .border_1()
             .border_color(t.line2)
             .bg(t.elev)
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(10.5))
             .font_weight(FontWeight::MEDIUM)
             .text_color(t.tx2)
@@ -70,7 +70,7 @@ impl RenderOnce for CountBadge {
             .rounded(px(8.))
             .bg(t.accbg)
             .text_color(t.acc)
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(10.))
             .font_weight(FontWeight::SEMIBOLD)
             .child(self.0)
@@ -120,7 +120,7 @@ impl RenderOnce for AgentMark {
             .border_1()
             .border_color(t.line2)
             .text_color(t.tx2)
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(text)
             .font_weight(FontWeight::SEMIBOLD)
             .child(self.mark)
@@ -147,7 +147,7 @@ impl RenderOnce for Delta {
             .flex()
             .flex_none()
             .gap_1()
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.))
             .child(
                 div()
@@ -195,7 +195,7 @@ impl RenderOnce for Chip {
             .px(px(6.))
             .rounded(px(4.))
             .bg(t.hover)
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.))
             .text_color(t.tx2)
             .when_some(self.icon, |this, icon| this.child(icon.size(px(11.))))

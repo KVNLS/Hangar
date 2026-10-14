@@ -8,7 +8,7 @@ use super::*;
 use crate::ui::components::{AgentMark, Delta, Segmented, StateGlyph, UiButton, card};
 use gpui_kit::component::Icon;
 
-use crate::ui::{ActiveTokens as _, FONT_MONO, TypeScale as _};
+use crate::ui::{ActiveTokens as _, TypeScale as _};
 
 impl HangarApp {
     fn overview_card(&self, ws: &Workspace, cx: &mut Context<Self>) -> AnyElement {
@@ -91,7 +91,7 @@ impl HangarApp {
                     .border_1()
                     .border_color(t.line)
                     .bg(t.term)
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(11.5))
                     .line_height(px(17.))
                     .text_color(t.tx2)
@@ -226,7 +226,7 @@ impl HangarApp {
                     .child(div().type_title().child("Overview"))
                     .child(
                         div()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(12.))
                             .text_color(t.tx3)
                             .child(summary),

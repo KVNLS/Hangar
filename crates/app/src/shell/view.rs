@@ -5,7 +5,7 @@ use gpui_kit::assets::IconName as Lucide;
 use super::run::PaneTab;
 use super::*;
 use crate::ui::components::{CountBadge, EmptyState, StateGlyph, TabStyle, UiButton, UiTab};
-use crate::ui::{ActiveTokens as _, FONT_MONO, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT};
+use crate::ui::{ActiveTokens as _, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT, TypeScale as _};
 
 impl Render for HangarApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -283,7 +283,7 @@ impl HangarApp {
                 this.child(
                     div()
                         .px_2()
-                        .font_family(FONT_MONO)
+                        .font_mono()
                         .text_size(px(11.))
                         .text_color(t.amb)
                         .child("Waiting for the device"),
@@ -294,7 +294,7 @@ impl HangarApp {
                 this.child(
                     div()
                         .px_2()
-                        .font_family(FONT_MONO)
+                        .font_mono()
                         .text_size(px(11.))
                         .text_color(t.tx3)
                         .child(status),

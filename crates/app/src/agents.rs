@@ -99,9 +99,9 @@ pub fn preset(id: &str) -> Option<AgentPreset> {
 pub fn kind(id: &str) -> AgentKind {
     match id {
         "claude" | "claude-acp" => AgentKind::Claude,
-        "codex" => AgentKind::Codex,
-        "opencode" => AgentKind::OpenCode,
-        "gemini" => AgentKind::Gemini,
+        "codex" | "codex-acp" => AgentKind::Codex,
+        "opencode" | "opencode-acp" => AgentKind::OpenCode,
+        "gemini" | "gemini-acp" => AgentKind::Gemini,
         "shell" => AgentKind::Shell,
         other => AgentKind::Custom(other.to_owned()),
     }
@@ -118,7 +118,7 @@ pub struct AgentExtras {
     pub mcp_servers: Vec<McpServer>,
 }
 
-/// How an agent reaches the app's MCP server through `hangar mcp-bridge`.
+/// How an agent reaches the app's MCP server through `Hangar mcp-bridge`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BridgeLaunch {
     /// The Hangar executable (`std::env::current_exe()`).
@@ -162,15 +162,17 @@ pub fn mcp_launch(
             extras.args.push("--mcp-config".to_owned());
             extras.args.push(stdio_server.to_string());
         }
-        "claude-acp" => extras.mcp_servers.push(McpServer {
-            name: SERVER_NAME.to_owned(),
-            command: exe.to_owned(),
-            args: vec![BRIDGE_ARG.to_owned()],
-            env: vec![
-                (hangar_mcp::SESSION_ENV.to_owned(), bridge.session.clone()),
-                (hangar_mcp::SOCKET_ENV.to_owned(), socket.to_owned()),
-            ],
-        }),
+        "claude-acp" | "codex-acp" | "gemini-acp" | "opencode-acp" => {
+            extras.mcp_servers.push(McpServer {
+                name: SERVER_NAME.to_owned(),
+                command: exe.to_owned(),
+                args: vec![BRIDGE_ARG.to_owned()],
+                env: vec![
+                    (hangar_mcp::SESSION_ENV.to_owned(), bridge.session.clone()),
+                    (hangar_mcp::SOCKET_ENV.to_owned(), socket.to_owned()),
+                ],
+            })
+        }
         "opencode" => {
             let config = json!({
                 "$schema": "https://opencode.ai/config.json",
@@ -282,11 +284,14 @@ mod tests {
         assert!(preset("nope").is_none());
         let ids: Vec<String> = all.iter().map(|c| c.id.clone()).collect();
         let at = |id: &str| ids.iter().position(|i| i == id);
-        assert_eq!(at("claude-acp"), at("claude").map(|i| i + 1));
-        assert!(matches!(preset("claude-acp"), Some(AgentPreset::Acp(_))));
+        for cli in ["claude", "codex", "opencode", "gemini"] {
+            let acp = format!("{cli}-acp");
+            assert_eq!(at(&acp), at(cli).map(|i| i + 1), "{acp}");
+            assert!(matches!(preset(&acp), Some(AgentPreset::Acp(_))), "{acp}");
+        }
     }
 
-    const EXE: &str = "/Applications/Hangar.app/Contents/MacOS/hangar";
+    const EXE: &str = "/Applications/Hangar.app/Contents/MacOS/Hangar";
 
     fn bridge(exe: &str) -> BridgeLaunch {
         BridgeLaunch {
@@ -338,8 +343,14 @@ mod tests {
     }
 
     #[test]
-    fn claude_acp_gets_the_bridge_through_session_new() {
-        let x = mcp_launch("claude-acp", &bridge(EXE), &device_env()).unwrap();
+    fn acp_agents_get_the_bridge_through_session_new() {
+        for id in ["claude-acp", "codex-acp", "gemini-acp", "opencode-acp"] {
+            acp_bridge(id);
+        }
+    }
+
+    fn acp_bridge(id: &str) {
+        let x = mcp_launch(id, &bridge(EXE), &device_env()).unwrap();
         assert!(x.args.is_empty(), "no secret or config in argv");
         assert_eq!(x.mcp_servers.len(), 1);
         let server = &x.mcp_servers[0];
@@ -384,11 +395,11 @@ mod tests {
         );
         assert_bridge_env(&x.env);
 
-        let odd = r#"/Users/me/My "Apps"\bin/hangar"#;
+        let odd = r#"/Users/me/My "Apps"\bin/Hangar"#;
         let x = mcp_launch("codex", &bridge(odd), &[]).unwrap();
         assert!(
             x.args[1]
-                .starts_with(r#"mcp_servers.hangar={command="/Users/me/My \"Apps\"\\bin/hangar","#),
+                .starts_with(r#"mcp_servers.hangar={command="/Users/me/My \"Apps\"\\bin/Hangar","#),
             "{}",
             x.args[1]
         );

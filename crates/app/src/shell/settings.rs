@@ -10,7 +10,7 @@ use crate::device_panel::Platform;
 use crate::device_pool::policy::{self, Limit};
 use crate::ui::components::{AgentMark, CountBadge, Segmented, UiButton, card, kbd_keys};
 use crate::ui::theme::Appearance;
-use crate::ui::{ActiveTokens as _, FONT_MONO, RADIUS_CONTROL, ROW_HEIGHT, TypeScale as _};
+use crate::ui::{ActiveTokens as _, RADIUS_CONTROL, ROW_HEIGHT, TypeScale as _};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SettingsTab {
@@ -59,6 +59,7 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Filter workspaces", "cmd-p", "Global"),
     ("Add project", "cmd-o", "Global"),
     ("Toggle sidebar", "cmd-b", "Global"),
+    ("Quit Hangar (stops running agents)", "cmd-q", "Global"),
     ("Review changes", "cmd-shift-r", "Workspace"),
     ("Build and run on the device", "cmd-r", "Workspace"),
     ("Stop the run", "cmd-.", "Workspace"),
@@ -179,7 +180,7 @@ impl HangarApp {
                 .child(
                     div()
                         .w(px(110.))
-                        .font_family(FONT_MONO)
+                        .font_mono()
                         .text_size(px(11.))
                         .text_color(if detected && choice.installed {
                             t.grn
@@ -370,7 +371,7 @@ impl HangarApp {
                             .w(px(110.))
                             .gap_1p5()
                             .items_center()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(11.))
                             .text_color(color)
                             .child(div().size(px(6.)).rounded_full().bg(color))
@@ -537,7 +538,7 @@ impl HangarApp {
                                 .w(px(90.))
                                 .gap_1p5()
                                 .items_center()
-                                .font_family(FONT_MONO)
+                                .font_mono()
                                 .text_size(px(11.))
                                 .text_color(color)
                                 .child(div().size(px(6.)).rounded_full().bg(color))

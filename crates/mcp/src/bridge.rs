@@ -1,4 +1,4 @@
-//! Agent side: `hangar mcp-bridge` relays MCP stdio to the running app's socket.
+//! Agent side: `Hangar mcp-bridge` relays MCP stdio to the running app's socket.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};

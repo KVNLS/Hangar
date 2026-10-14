@@ -15,7 +15,7 @@ use hangar_core::WorkspaceId;
 
 use crate::changes::live::WorkspaceDiff;
 use crate::ui::components::{EmptyState, UiButton};
-use crate::ui::{ActiveTokens as _, FONT_MONO};
+use crate::ui::{ActiveTokens as _, TypeScale as _};
 pub use tree::{TreeRow, ancestors, tree_rows};
 
 const TREE_ROW_HEIGHT: f32 = 24.;
@@ -327,7 +327,7 @@ impl FilesPanel {
                     .items_center()
                     .border_b_1()
                     .border_color(t.line)
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(11.))
                     .text_color(t.tx2)
                     .child(Icon::new(Lucide::File).with_size(px(12.)))
@@ -346,7 +346,7 @@ impl FilesPanel {
                     .min_h_0()
                     .py_1p5()
                     .bg(t.app)
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(11.5))
                     .child(body),
             )
@@ -402,7 +402,7 @@ impl Render for FilesPanel {
                     .items_center()
                     .border_b_1()
                     .border_color(t.line)
-                    .font_family(FONT_MONO)
+                    .font_mono()
                     .text_size(px(11.))
                     .text_color(t.tx3)
                     .child(format!("{} files · {changed} changed", self.files.len()))

@@ -12,9 +12,7 @@ use super::*;
 use crate::device_panel::{DeviceKey, Platform};
 use crate::device_pool::backend;
 use crate::ui::components::{AgentMark, Chip, Segmented, UiButton};
-use crate::ui::{
-    ActiveTokens as _, FONT_MONO, RADIUS_SHEET, TITLEBAR_HEIGHT, TypeScale as _, overlay_shadow,
-};
+use crate::ui::{ActiveTokens as _, RADIUS_SHEET, TITLEBAR_HEIGHT, TypeScale as _, overlay_shadow};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct TargetOption {
@@ -304,7 +302,7 @@ impl HangarApp {
                 )
                 .child(
                     div()
-                        .font_family(FONT_MONO)
+                        .font_mono()
                         .text_size(px(11.))
                         .text_color(t.tx3)
                         .child(if installed { "installed" } else { "not found" }),
@@ -348,7 +346,7 @@ impl HangarApp {
                     .child(div().flex_1())
                     .child(
                         div()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(10.))
                             .text_color(t.tx3)
                             .child("esc"),

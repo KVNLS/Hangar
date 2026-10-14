@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use super::client::{AcpConnection, AcpEvent, RequestId};
-use super::protocol::{self, AgentInfo, McpServer, PROTOCOL_VERSION, SessionMode};
+use super::protocol::{
+    self, AUTH_REQUIRED, AgentInfo, ConfigOption, McpServer, PROTOCOL_VERSION, SessionMode,
+};
 use crate::SpawnContext;
 use crate::error::{Error, Result};
 use crate::path::{find_program, resolve_program};
@@ -20,6 +22,8 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `session/new` starts the session's MCP servers, which can be slow.
 const NEW_SESSION_TIMEOUT: Duration = Duration::from_secs(120);
 const SET_MODE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Switching models can make the agent fetch model metadata.
+const SET_CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
 const STDERR_TAIL: usize = 4096;
 /// How long a stopped agent gets between SIGTERM and SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(3);
@@ -35,6 +39,8 @@ pub struct AcpAdapter {
     pub env: Vec<(String, String)>,
     /// Shown when the program is missing.
     pub install_hint: String,
+    /// Shown when the agent refuses to start a session until the user signs in.
+    pub login_hint: String,
 }
 
 impl AcpAdapter {
@@ -50,11 +56,22 @@ impl AcpAdapter {
             args: Vec::new(),
             env: Vec::new(),
             install_hint: String::new(),
+            login_hint: String::new(),
         }
+    }
+
+    pub fn with_args<S: Into<String>>(mut self, args: impl IntoIterator<Item = S>) -> Self {
+        self.args = args.into_iter().map(Into::into).collect();
+        self
     }
 
     pub fn with_install_hint(mut self, hint: impl Into<String>) -> Self {
         self.install_hint = hint.into();
+        self
+    }
+
+    pub fn with_login_hint(mut self, hint: impl Into<String>) -> Self {
+        self.login_hint = hint.into();
         self
     }
 
@@ -132,6 +149,7 @@ impl AcpAdapter {
             info: AgentInfo::default(),
             current_mode: None,
             modes: Vec::new(),
+            config: Vec::new(),
             resumed: false,
             resume_error: None,
             conn,
@@ -142,8 +160,25 @@ impl AcpAdapter {
             Ok(()) => Ok((session, events)),
             Err(e) => {
                 session.kill();
-                Err(session.explain(e))
+                Err(self.explain_auth(session.explain(e)))
             }
+        }
+    }
+}
+
+impl AcpAdapter {
+    fn explain_auth(&self, e: Error) -> Error {
+        match e {
+            Error::Rpc {
+                code: AUTH_REQUIRED,
+                message,
+                ..
+            } => Error::NotSignedIn {
+                agent: self.display_name.clone(),
+                message: message.trim_end_matches('.').to_owned(),
+                hint: self.login_hint.clone(),
+            },
+            other => other,
         }
     }
 }
@@ -157,6 +192,7 @@ pub struct AcpSession {
     info: AgentInfo,
     current_mode: Option<String>,
     modes: Vec<SessionMode>,
+    config: Vec<ConfigOption>,
     resumed: bool,
     resume_error: Option<String>,
     conn: AcpConnection<ChildStdin>,
@@ -199,6 +235,7 @@ impl AcpSession {
                         self.session_id = id.to_owned();
                         self.resumed = true;
                         (self.current_mode, self.modes) = protocol::parse_modes(&result);
+                        self.config = protocol::parse_config_options(&result["configOptions"]);
                         return Ok(());
                     }
                     Err(e @ Error::Rpc { .. }) => self.resume_error = Some(e.to_string()),
@@ -216,6 +253,7 @@ impl AcpSession {
             .ok_or_else(|| Error::Protocol("session/new returned no sessionId".to_owned()))?
             .to_owned();
         (self.current_mode, self.modes) = protocol::parse_modes(&result);
+        self.config = protocol::parse_config_options(&result["configOptions"]);
         Ok(())
     }
 
@@ -280,6 +318,51 @@ impl AcpSession {
             SET_MODE_TIMEOUT,
         )?;
         Ok(())
+    }
+
+    /// The config options the session started with; later lists arrive as `ConfigOptions`
+    /// updates or from [`Self::set_config_option`].
+    pub fn config_options(&self) -> &[ConfigOption] {
+        &self.config
+    }
+
+    /// Sets a config option. Blocks until the agent answers with the complete new list, which
+    /// can add or drop options (picking a model changes the efforts on offer).
+    pub fn set_config_option(&self, config_id: &str, value: &str) -> Result<Vec<ConfigOption>> {
+        let result = self.conn.request(
+            "session/set_config_option",
+            protocol::set_config_option_params(&self.session_id, config_id, value),
+            SET_CONFIG_TIMEOUT,
+        )?;
+        Ok(protocol::parse_config_options(&result["configOptions"]))
+    }
+
+    /// Applies saved `(config id, value)` choices before the session is shared: model options
+    /// first (they decide which efforts exist), then the rest in order. Choices the agent does
+    /// not offer (any more) are skipped; returns the ones it refused.
+    pub fn apply_config(&mut self, wanted: &[(String, String)]) -> Vec<String> {
+        let is_model = |id: &str, config: &[ConfigOption]| {
+            config
+                .iter()
+                .any(|o| o.id == id && o.category.as_deref() == Some("model"))
+        };
+        let mut ordered: Vec<&(String, String)> = wanted.iter().collect();
+        ordered.sort_by_key(|(id, _)| !is_model(id, &self.config));
+        let mut refused = Vec::new();
+        for (id, value) in ordered {
+            let offered = self.config.iter().any(|o| {
+                &o.id == id && &o.current != value && o.values.iter().any(|v| &v.value == value)
+            });
+            if !offered {
+                continue;
+            }
+            match self.set_config_option(id, value) {
+                Ok(list) if !list.is_empty() => self.config = list,
+                Ok(_) => {}
+                Err(e) => refused.push(format!("{id} = {value}: {e}")),
+            }
+        }
+        refused
     }
 
     /// Asks the agent to stop the running turn. Unanswered permission requests are cancelled.
@@ -388,7 +471,22 @@ fn read_tail(tail: &Mutex<VecDeque<u8>>) -> String {
 pub fn acp_presets() -> Vec<AcpAdapter> {
     vec![
         AcpAdapter::new("claude-acp", "Claude Code (structured)", "claude-agent-acp")
-            .with_install_hint("npm install -g @agentclientprotocol/claude-agent-acp"),
+            .with_install_hint("npm install -g @agentclientprotocol/claude-agent-acp")
+            .with_login_hint("Run `claude` in a terminal and sign in."),
+        AcpAdapter::new("codex-acp", "Codex (structured)", "codex-acp")
+            .with_install_hint("npm install -g @zed-industries/codex-acp")
+            .with_login_hint("Run `codex login` in a terminal, or set OPENAI_API_KEY."),
+        AcpAdapter::new("opencode-acp", "OpenCode (structured)", "opencode")
+            .with_args(["acp"])
+            .with_install_hint("curl -fsSL https://opencode.ai/install | bash")
+            .with_login_hint("Run `opencode auth login` in a terminal."),
+        // Nobody can answer the folder trust prompt over ACP; the PTY preset skips it too.
+        AcpAdapter::new("gemini-acp", "Gemini CLI (structured)", "gemini")
+            .with_args(["--acp", "--skip-trust"])
+            .with_install_hint("npm install -g @google/gemini-cli")
+            .with_login_hint(
+                "Run `gemini` in a terminal and choose Log in with Google, or set GEMINI_API_KEY.",
+            ),
     ]
 }
 
@@ -442,6 +540,56 @@ mod tests {
                 .is_some_and(|e| e.contains("Session not found"))
         );
         session.kill();
+    }
+
+    #[test]
+    fn saved_config_applies_model_first_and_skips_unknown_values() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // session/new offers a model without efforts; choosing `big` adds the effort option.
+        let script = r#"
+            read l; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+            read l; echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"small","options":[{"value":"small","name":"Small"},{"value":"big","name":"Big"}]}]}}'
+            read l; case "$l" in *'"configId":"model"'*'"value":"big"'*) ;; *) exit 9;; esac
+            echo '{"jsonrpc":"2.0","id":3,"result":{"configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"big","options":[{"value":"small","name":"Small"},{"value":"big","name":"Big"}]},{"id":"effort","name":"Effort","category":"thought_level","type":"select","currentValue":"medium","options":[{"value":"medium","name":"Medium"},{"value":"high","name":"High"}]}]}}'
+            read l; case "$l" in *'"configId":"effort"'*'"value":"high"'*) ;; *) exit 9;; esac
+            echo '{"jsonrpc":"2.0","id":4,"result":{"configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"big","options":[{"value":"big","name":"Big"}]},{"id":"effort","name":"Effort","category":"thought_level","type":"select","currentValue":"high","options":[{"value":"medium","name":"Medium"},{"value":"high","name":"High"}]}]}}'
+            read l
+        "#;
+        let (mut session, _events) = sh(script)
+            .start(&SpawnContext::new(dir.path()), &[], None)
+            .expect("starts");
+        assert_eq!(session.config_options().len(), 1);
+        let wanted = [
+            ("effort".to_owned(), "high".to_owned()),
+            ("fast".to_owned(), "on".to_owned()),
+            ("model".to_owned(), "big".to_owned()),
+        ];
+        assert!(session.apply_config(&wanted).is_empty());
+        let current: Vec<(&str, &str)> = session
+            .config_options()
+            .iter()
+            .map(|o| (o.id.as_str(), o.current.as_str()))
+            .collect();
+        assert_eq!(current, [("model", "big"), ("effort", "high")]);
+        session.kill();
+    }
+
+    #[test]
+    fn auth_required_names_the_login_step() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = r#"
+            read l; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"authMethods":[{"id":"oauth","name":"Log in"}]}}'
+            read l; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"API key is missing"}}'
+            read l
+        "#;
+        let err = sh(script)
+            .with_login_hint("Run `t login`.")
+            .start(&SpawnContext::new(dir.path()), &[], None)
+            .expect_err("needs a login");
+        assert_eq!(
+            err.to_string(),
+            "t is not signed in (API key is missing). Run `t login`."
+        );
     }
 
     #[test]

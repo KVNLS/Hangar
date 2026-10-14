@@ -90,7 +90,7 @@ Git access is the `git` CLI with porcelain output, not a library.
 - [x] UI v0.1 — design system + views, merged into main 2026-10-05
 - [x] M6 Mobile run loop (first cut) — detection, ports, Run ⌘R in terminal tabs, native install/launch
 - [x] M7 ACP structured agents (first cut) — Claude Code over `claude-agent-acp`, chat pane, Approval state
-- [x] M8 MCP device tools (first cut) — per-workspace devices, capacity guard, tools over `hangar mcp-bridge`
+- [x] M8 MCP device tools (first cut) — per-workspace devices, capacity guard, tools over `Hangar mcp-bridge`
 
 ## Done since M2 first cut
 - Terminal: selection (drag/word/line/shift-extend, auto-scroll), Cmd-C/Cmd-A, mouse reporting (1000/1002/1003,
@@ -156,13 +156,13 @@ Git access is the `git` CLI with porcelain output, not a library.
   Limit 1 = single-device mode: workspaces share the base device through FIFO leases ("Waiting for the device");
   Auto detecting 1 alerts once. Runtime guard: no boot under memory pressure or low free memory (falls back to
   a running device), and at critical pressure idle unfocused devices are shut down.
-- MCP (`crates/mcp` + `app::mcp_host`): agents start `hangar mcp-bridge`, which relays MCP stdio to the app's
+- MCP (`crates/mcp` + `app::mcp_host`): agents start `Hangar mcp-bridge`, which relays MCP stdio to the app's
   0700/0600 Unix socket with a per-workspace session secret (`HANGAR_MCP_SESSION`, in the agent's env only).
   Tools: device_info, screenshot, tap, swipe, type_text, press, logs, build_and_run, launch_app. Wiring:
   Claude Code `--mcp-config` (inline), OpenCode `OPENCODE_CONFIG_CONTENT`, Codex `-c mcp_servers.hangar=…`
   (`env_vars`), Gemini `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` + `--skip-trust` (owner decision). Nothing is written
   in the worktree. Agents also get `HANGAR_DEVICE_PLATFORM`, `HANGAR_DEVICE_ID`, `ANDROID_SERIAL`.
-- Live (2026-10-05, scratch repo): a shell agent in a workspace ran `hangar mcp-bridge` with only its own env:
+- Live (2026-10-05, scratch repo): a shell agent in a workspace ran `Hangar mcp-bridge` with only its own env:
   initialize, tools/list, build_and_run (built and launched on the workspace's own new simulator), device_info,
   screenshot, tap (the counter went 0 → 1), screenshot; a wrong session got -32001.
 - Not verified live: Codex and Gemini wiring (not installed), OpenCode's MCP permission default, a real agent
@@ -198,6 +198,33 @@ Git access is the `git` CLI with porcelain output, not a library.
   as updates before answering, so the transcript comes back) next to "New conversation". A refused load
   (e.g. -32002 unknown session) starts a new session and says so in the transcript. Checked against
   claude-agent-acp at the protocol level (history replayed, unknown id refused); not yet clicked in the app.
+- Preset "OpenCode (structured)" (`opencode-acp`) runs `opencode acp` (OpenCode 1.18.34 checked). It sends
+  its modes (build, plan) only as the `mode` select of `configOptions` (no `modes`), so `parse_modes` falls
+  back to it and `config_option_update` maps to the current mode; `session/set_mode` still switches it.
+  The model select is ignored. The hangar MCP bridge goes into `session/new` as for Claude: live check in the
+  app listed the nine `hangar_*` tools. `session/load` replays history (Resume). bash runs without asking under
+  OpenCode's default permissions; with `"bash": "ask"` it sends standard allow_once / allow_always /
+  reject_once options (request id 0). Checked on screen: tool cards, mode menu (build/plan) and switch, slash
+  list, Resume after restart, Approval state with Allow once and Reject. OpenCode does not keep the mode
+  across `session/load` (comes back as `build`).
+- Presets "Codex (structured)" (`codex-acp`, npm `@zed-industries/codex-acp` 0.16) and "Gemini CLI
+  (structured)" (`gemini-acp`: `gemini --acp --skip-trust`, Gemini CLI 0.62; `--experimental-acp` is
+  deprecated). Both get the hangar bridge through `session/new`. codex-acp checked at the protocol level:
+  standard `modes` (Read Only default, Default, Full Access), loadSession, tool calls, session/new MCP servers
+  used (MCP tool calls ask for approval). Its turn fails while `~/.codex/config.toml` picks a model the
+  ChatGPT login refuses (owner's config, left alone). Gemini is not signed in here: `session/new` answers
+  -32000, which Hangar now reports as `NotSignedIn` with each preset's login hint. Gemini turns unchecked.
+- Model and effort: the composer shows a chip per non-mode `configOptions` select the agent offers (Claude
+  Code: model, effort, fast mode; Codex: model, then reasoning effort once a model with efforts is picked;
+  OpenCode: model). `session/set_config_option` answers with the full new list, which replaces the chips;
+  `config_option_update` does the same. Choices are saved per agent (`agent_config:<agent id>`, mode left
+  out: it decides permissions) and re-applied right after each new session starts, model first. Checked on
+  screen with Codex (GPT-5.5 → effort chip, Low; next session starts on GPT-5.5 / Low) and Claude Code.
+- Quit (⌘Q, new) and window close stop every live agent (`on_app_quit`): codex-acp ignores a closed stdin
+  and would outlive Hangar. A crash or SIGKILL of Hangar still leaves such agents running.
+- Mono text (`TypeScale::font_mono`, terminal) turns Geist Mono's `liga`/`calt` off: its ligatures drew `--`
+  over the preceding space (`git log--oneline`). The Files code viewer (gpui-component editor, theme font
+  family only) still uses them.
 - Gaps: no images or @-context in the composer, no
   keyboard navigation in the slash list (Shift-Tab is the text area's outdent, so no mode cycling key); `Input` state unused (ACP has
   no question request); tool cards show a simple changed-lines diff, not hunks; ⌘. stays Run › Stop, so
@@ -237,12 +264,12 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
 - Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
+- Agents: if Hangar crashes or is killed, codex-acp (ignores a closed stdin) keeps running; the Files code
+  viewer (gpui-component editor) still draws Geist Mono's `--` ligatures.
 - Devices: device panel controls, logs pane, Rotate and the boot stage text never checked visually by
   Claude; logs pane fixed height, no horizontal scroll; emulators started outside Hangar keep Gboard's stylus
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Owner reviews `m7-acp` and looks at the mode menu, slash list and Resume in the app (not seen on screen:
-  the display slept during the check).
-- Then more ACP agents: Gemini `--experimental-acp`, `codex-acp`, `opencode acp` (the local OpenCode install
-  printed nothing for `opencode acp --help` within 15 s).
+- Gemini over ACP: sign in (`gemini`, Log in with Google), then check a turn, modes and MCP live.
+- Device panel visual pass (controls, logs pane, Rotate, boot stage text never seen on screen by Claude).

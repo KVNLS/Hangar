@@ -13,7 +13,7 @@ use gpui_kit::component::input::{InputEvent, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use hangar_agents::acp::protocol::{
-    AvailableCommand, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
+    AvailableCommand, ConfigOption, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
 };
 use hangar_agents::acp::{AcpEvent, AcpSession, PermissionRequest};
 use hangar_core::AcpTurn;
@@ -72,6 +72,9 @@ pub enum ChatEvent {
     },
     /// A tool call location was clicked (absolute path inside the worktree).
     OpenFile(PathBuf),
+    /// The user picked a value for a non-mode config option (model, effort, …) and the agent
+    /// took it.
+    ConfigChosen { config_id: String, value: String },
 }
 
 impl EventEmitter<ChatEvent> for ChatView {}
@@ -92,6 +95,8 @@ pub struct ChatView {
     /// Display name of the session mode (Claude Code: Manual, Accept edits, Plan, …).
     mode: Option<SharedString>,
     mode_id: Option<String>,
+    /// The agent's config options (model, effort, mode, …) as it last reported them.
+    config: Vec<ConfigOption>,
     /// Slash commands the agent offers (`/name` at the start of a prompt).
     commands: Vec<AvailableCommand>,
     composer: Entity<TextareaState>,
@@ -154,6 +159,7 @@ impl ChatView {
             exited: false,
             mode: None,
             mode_id: None,
+            config: Vec::new(),
             commands: Vec::new(),
             composer,
             scroll: ScrollHandle::new(),
@@ -163,6 +169,7 @@ impl ChatView {
         };
         let mode = view.session.initial_mode().map(str::to_owned);
         view.set_mode(mode);
+        view.config = view.session.config_options().to_vec();
         view
     }
 
@@ -482,6 +489,7 @@ impl ChatView {
                 }
             },
             SessionUpdate::CurrentMode(mode) => self.set_mode(Some(mode)),
+            SessionUpdate::ConfigOptions(list) => self.set_config(list),
             SessionUpdate::AvailableCommands(commands) => self.commands = commands,
             SessionUpdate::Other { .. } => {}
         }
@@ -493,6 +501,54 @@ impl ChatView {
             SharedString::from(name.map_or(id.clone(), |m| m.name.clone()))
         });
         self.mode_id = id;
+    }
+
+    fn set_config(&mut self, list: Vec<ConfigOption>) {
+        if let Some(mode) = list.iter().find(|o| o.is_mode()) {
+            self.set_mode(Some(mode.current.clone()));
+        }
+        self.config = list;
+    }
+
+    /// Sets a config option off the main thread; the chips follow the list the agent answers
+    /// with (picking a model can add or drop the effort option).
+    fn choose_config(&mut self, config_id: String, value: String, cx: &mut Context<Self>) {
+        let unchanged = self
+            .config
+            .iter()
+            .any(|o| o.id == config_id && o.current == value);
+        if unchanged || self.exited {
+            return;
+        }
+        let session = Arc::clone(&self.session);
+        cx.spawn(async move |this, cx| {
+            let (id, requested) = (config_id.clone(), value.clone());
+            let result = cx
+                .background_executor()
+                .spawn(async move { session.set_config_option(&id, &requested) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                match result {
+                    Ok(list) => {
+                        let mut list = list;
+                        if list.is_empty() {
+                            list = view.config.clone();
+                            if let Some(o) = list.iter_mut().find(|o| o.id == config_id) {
+                                o.current = value.clone();
+                            }
+                        }
+                        let is_mode = list.iter().any(|o| o.id == config_id && o.is_mode());
+                        view.set_config(list);
+                        if !is_mode {
+                            cx.emit(ChatEvent::ConfigChosen { config_id, value });
+                        }
+                    }
+                    Err(err) => view.notice(true, format!("Could not change the setting: {err}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Switches the session mode off the main thread; the chip changes once the agent agrees.

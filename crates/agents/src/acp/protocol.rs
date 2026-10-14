@@ -7,6 +7,8 @@ pub const PROTOCOL_VERSION: u64 = 1;
 
 pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
+/// The agent needs the user to sign in first.
+pub const AUTH_REQUIRED: i64 = -32000;
 
 /// An MCP server the agent should start for the session (stdio transport).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +62,10 @@ pub fn set_mode_params(session_id: &str, mode_id: &str) -> Value {
     json!({ "sessionId": session_id, "modeId": mode_id })
 }
 
+pub fn set_config_option_params(session_id: &str, config_id: &str, value: &str) -> Value {
+    json!({ "sessionId": session_id, "configId": config_id, "value": value })
+}
+
 pub fn cancel_params(session_id: &str) -> Value {
     json!({ "sessionId": session_id })
 }
@@ -105,26 +111,113 @@ pub struct SessionMode {
     pub name: String,
 }
 
-/// The `modes` of a `session/new` result: the current mode id and the available modes.
+/// The modes of a `session/new` or `session/load` result: the current mode id and the
+/// available modes. Agents that only send `configOptions` (OpenCode) expose them as the option
+/// of category `mode`, which `session/set_mode` still switches.
 pub fn parse_modes(result: &Value) -> (Option<String>, Vec<SessionMode>) {
     let modes = &result["modes"];
-    let available = modes["availableModes"]
+    if modes.is_object() {
+        return (
+            modes["currentModeId"].as_str().map(str::to_owned),
+            parse_mode_list(&modes["availableModes"], "id"),
+        );
+    }
+    match mode_option(&result["configOptions"]) {
+        Some(option) => (
+            option["currentValue"].as_str().map(str::to_owned),
+            parse_mode_list(&option["options"], "value"),
+        ),
+        None => (None, Vec::new()),
+    }
+}
+
+fn parse_mode_list(items: &Value, id_key: &str) -> Vec<SessionMode> {
+    items
         .as_array()
         .map(|modes| {
             modes
                 .iter()
                 .filter_map(|m| {
-                    let id = m["id"].as_str()?.to_owned();
+                    let id = m[id_key].as_str()?.to_owned();
                     let name = m["name"].as_str().unwrap_or(&id).to_owned();
                     Some(SessionMode { id, name })
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    (
-        modes["currentModeId"].as_str().map(str::to_owned),
-        available,
-    )
+        .unwrap_or_default()
+}
+
+fn mode_option(options: &Value) -> Option<&Value> {
+    options
+        .as_array()?
+        .iter()
+        .find(|o| o["category"].as_str() == Some("mode"))
+}
+
+/// A session setting the agent lets the client pick from (model, effort, mode, …).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigOption {
+    pub id: String,
+    pub name: String,
+    /// `mode`, `model`, `thought_level`, … (`None` when the agent gives none).
+    pub category: Option<String>,
+    pub current: String,
+    pub values: Vec<ConfigValue>,
+}
+
+impl ConfigOption {
+    pub fn is_mode(&self) -> bool {
+        self.category.as_deref() == Some("mode")
+    }
+
+    /// Display name of the current value.
+    pub fn current_name(&self) -> &str {
+        self.values
+            .iter()
+            .find(|v| v.value == self.current)
+            .map_or(&self.current, |v| &v.name)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigValue {
+    pub value: String,
+    pub name: String,
+}
+
+/// The `select` entries of a `configOptions` array; grouped values are flattened.
+pub fn parse_config_options(options: &Value) -> Vec<ConfigOption> {
+    let Some(all) = options.as_array() else {
+        return Vec::new();
+    };
+    all.iter()
+        .filter(|o| o["type"].as_str() == Some("select"))
+        .filter_map(|o| {
+            let id = o["id"].as_str()?.to_owned();
+            Some(ConfigOption {
+                name: o["name"].as_str().unwrap_or(&id).to_owned(),
+                category: o["category"].as_str().map(str::to_owned),
+                current: o["currentValue"].as_str()?.to_owned(),
+                values: select_values(&o["options"]),
+                id,
+            })
+        })
+        .collect()
+}
+
+fn select_values(items: &Value) -> Vec<ConfigValue> {
+    let mut out = Vec::new();
+    for item in items.as_array().into_iter().flatten() {
+        if item["options"].is_array() {
+            out.extend(select_values(&item["options"]));
+        } else if let Some(value) = item["value"].as_str() {
+            out.push(ConfigValue {
+                value: value.to_owned(),
+                name: item["name"].as_str().unwrap_or(value).to_owned(),
+            });
+        }
+    }
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -366,6 +459,8 @@ pub enum SessionUpdate {
     Plan(Vec<PlanEntry>),
     AvailableCommands(Vec<AvailableCommand>),
     CurrentMode(String),
+    /// The complete list of config options; replaces the previous one.
+    ConfigOptions(Vec<ConfigOption>),
     /// An update kind this client does not know.
     Other {
         kind: String,
@@ -409,6 +504,9 @@ pub fn parse_update(update: &Value) -> Option<SessionUpdate> {
         ),
         "current_mode_update" => {
             SessionUpdate::CurrentMode(update["currentModeId"].as_str()?.to_owned())
+        }
+        "config_option_update" => {
+            SessionUpdate::ConfigOptions(parse_config_options(&update["configOptions"]))
         }
         other => SessionUpdate::Other {
             kind: other.to_owned(),
@@ -575,6 +673,56 @@ mod tests {
         assert_eq!(current.as_deref(), Some("default"));
         assert_eq!(modes[0].name, "Manual");
         assert_eq!(parse_modes(&json!({"sessionId": "s"})), (None, Vec::new()));
+    }
+
+    #[test]
+    fn modes_from_config_options() {
+        // OpenCode 1.18: no `modes`, a `mode` select among the config options.
+        let options = json!([
+            {"id": "model", "category": "model", "type": "select", "currentValue": "m", "options": [{"value": "m", "name": "M"}]},
+            {"id": "mode", "name": "Session Mode", "category": "mode", "type": "select", "currentValue": "build", "options": [
+                {"value": "build", "name": "build", "description": "The default agent."},
+                {"value": "plan", "name": "plan"}
+            ]}
+        ]);
+        let (current, modes) = parse_modes(&json!({"sessionId": "s", "configOptions": options}));
+        assert_eq!(current.as_deref(), Some("build"));
+        let ids: Vec<&str> = modes.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["build", "plan"]);
+
+        let mut changed = options.clone();
+        changed[1]["currentValue"] = json!("plan");
+        let update = json!({"sessionUpdate": "config_option_update", "configOptions": changed});
+        let Some(SessionUpdate::ConfigOptions(list)) = parse_update(&update) else {
+            panic!("config options expected");
+        };
+        assert!(list[1].is_mode() && list[1].current == "plan");
+    }
+
+    #[test]
+    fn config_options_keep_selects_and_flatten_groups() {
+        // Claude Code's effort select, a grouped model select and a non-select entry.
+        let options = json!([
+            {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": "high",
+             "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}]},
+            {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "b",
+             "options": [{"group": "g1", "name": "Fast", "options": [{"value": "a", "name": "A"}]},
+                         {"group": "g2", "name": "Smart", "options": [{"value": "b", "name": "B"}]}]},
+            {"id": "verbose", "type": "boolean", "currentValue": true},
+            {"id": "odd", "type": "select", "options": []}
+        ]);
+        let list = parse_config_options(&options);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].current_name(), "High");
+        assert_eq!(list[0].category.as_deref(), Some("thought_level"));
+        let values: Vec<&str> = list[1].values.iter().map(|v| v.value.as_str()).collect();
+        assert_eq!(values, ["a", "b"]);
+        assert_eq!(list[1].current_name(), "B");
+        assert!(!list[1].is_mode());
+        assert_eq!(
+            set_config_option_params("s", "model", "a"),
+            json!({"sessionId": "s", "configId": "model", "value": "a"})
+        );
     }
 
     #[test]

@@ -24,6 +24,12 @@ pub enum Error {
     Timeout { method: String },
     #[error("{method}: the agent closed the connection")]
     Disconnected { method: String },
+    #[error("{agent} is not signed in ({message}). {hint}")]
+    NotSignedIn {
+        agent: String,
+        message: String,
+        hint: String,
+    },
     #[error("{agent} exited: {stderr_tail}")]
     AgentExited { agent: String, stderr_tail: String },
     #[error("not supported: {0}")]

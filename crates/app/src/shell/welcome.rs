@@ -6,7 +6,7 @@ use gpui_kit::component::Icon;
 use super::*;
 use crate::device_panel::Platform;
 use crate::ui::components::{AgentMark, UiButton, card};
-use crate::ui::{ActiveTokens as _, FONT_MONO, TypeScale as _};
+use crate::ui::{ActiveTokens as _, TypeScale as _};
 
 impl HangarApp {
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -36,7 +36,7 @@ impl HangarApp {
                 .border_1()
                 .border_color(t.acc)
                 .text_color(t.acc)
-                .font_family(FONT_MONO)
+                .font_mono()
                 .text_size(px(11.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(n)
@@ -67,7 +67,7 @@ impl HangarApp {
                     .child(div().flex_1().child(c.name.clone()))
                     .child(
                         div()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(11.))
                             .text_color(match (detected, c.installed) {
                                 (false, _) => t.tx3,
@@ -102,7 +102,7 @@ impl HangarApp {
                     ))
                     .child(
                         div()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(11.))
                             .text_color(t.tx3)
                             .child(format!("{ready} running")),

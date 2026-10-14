@@ -12,7 +12,7 @@ use super::status::DiffCounts;
 use super::*;
 use crate::ui::components::{AgentMark, Delta, StateGlyph, UiButton};
 use crate::ui::{
-    ActiveTokens as _, FONT_MONO, RADIUS_CONTROL, ROW_HEIGHT, ROW_HEIGHT_DENSE, SIDEBAR_WIDTH,
+    ActiveTokens as _, RADIUS_CONTROL, ROW_HEIGHT, ROW_HEIGHT_DENSE, SIDEBAR_WIDTH, TypeScale as _,
 };
 
 #[derive(Clone)]
@@ -119,7 +119,7 @@ impl HangarApp {
         };
         let trailing = if row.busy {
             div()
-                .font_family(FONT_MONO)
+                .font_mono()
                 .text_size(px(11.))
                 .text_color(t.tx3)
                 .child("…")
@@ -372,7 +372,7 @@ impl HangarApp {
                         .prefix(Icon::new(IconName::Search).size(px(12.)).text_color(t.tx3))
                         .suffix(
                             div()
-                                .font_family(FONT_MONO)
+                                .font_mono()
                                 .text_size(px(10.))
                                 .text_color(t.tx3)
                                 .child("⌘P"),
@@ -435,7 +435,7 @@ impl HangarApp {
                     .child(div().flex_1().child("Add project"))
                     .child(
                         div()
-                            .font_family(FONT_MONO)
+                            .font_mono()
                             .text_size(px(10.))
                             .text_color(t.tx3)
                             .child("⌘O"),

@@ -5,7 +5,9 @@ use gpui_kit::component::TitleBar;
 
 use super::*;
 use crate::ui::components::{Chip, StateGlyph, UiButton};
-use crate::ui::{ActiveTokens as _, FONT_MONO, RADIUS_CONTROL, STATUS_BAR_HEIGHT, TITLEBAR_HEIGHT};
+use crate::ui::{
+    ActiveTokens as _, RADIUS_CONTROL, STATUS_BAR_HEIGHT, TITLEBAR_HEIGHT, TypeScale as _,
+};
 
 /// Title bar options matching the 38 px custom title bar (traffic lights vertically centered).
 pub fn titlebar_options() -> TitlebarOptions {
@@ -115,7 +117,7 @@ impl HangarApp {
                             )
                             .child(
                                 div()
-                                    .font_family(FONT_MONO)
+                                    .font_mono()
                                     .text_size(px(10.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("⌘K"),
@@ -235,7 +237,7 @@ impl HangarApp {
             .bg(t.panel)
             .border_t_1()
             .border_color(t.line)
-            .font_family(FONT_MONO)
+            .font_mono()
             .text_size(px(11.))
             .text_color(t.tx2)
             .whitespace_nowrap()
