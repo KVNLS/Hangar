@@ -52,6 +52,7 @@ use crate::device_pool::{DevicePool, NoticeLevel, PoolEvent, WorkspaceRef};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
 use crate::paths;
+use crate::setting_keys;
 use crate::state::{
     CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, MAX_PANES, PaneLayout,
     Panes, ProjectEntry, ProjectList, changes_width, device_width, pane_shares, sanitize_shares,
@@ -63,6 +64,7 @@ pub use dev::DevOptions;
 use dev::run_dev_hooks;
 pub use device_api::{DeviceFrame, DeviceStatusInfo};
 use dialogs::DeleteWorkspaceDialog;
+pub use run::RunConfig;
 use view::agent_options;
 
 /// Width of the sidebar; the panes share the rest.

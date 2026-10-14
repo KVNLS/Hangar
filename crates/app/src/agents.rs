@@ -96,15 +96,87 @@ pub fn preset(id: &str) -> Option<AgentPreset> {
     all_presets().into_iter().find(|preset| preset.id() == id)
 }
 
-pub fn kind(id: &str) -> AgentKind {
-    match id {
-        "claude" | "claude-acp" => AgentKind::Claude,
-        "codex" | "codex-acp" => AgentKind::Codex,
-        "opencode" | "opencode-acp" => AgentKind::OpenCode,
-        "gemini" | "gemini-acp" => AgentKind::Gemini,
-        "shell" => AgentKind::Shell,
-        other => AgentKind::Custom(other.to_owned()),
+/// How an agent is given the `hangar` MCP server (see [`mcp_launch`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpWiring {
+    /// Only the bridge environment: no known per-process MCP mechanism.
+    EnvOnly,
+    /// Claude Code: `--mcp-config <inline JSON>`.
+    ClaudeFlag,
+    /// Structured agents: the server goes into ACP `session/new`.
+    AcpSession,
+    /// OpenCode: inline config in `OPENCODE_CONFIG_CONTENT`.
+    OpenCodeEnv,
+    /// Codex CLI: `-c mcp_servers.hangar=…`.
+    CodexOverride,
+    /// Gemini CLI: a system defaults file and `--skip-trust`.
+    GeminiDefaults,
+}
+
+/// What the app knows about a built-in agent beyond how to start it. Adding an agent means
+/// adding its preset and a row in [`PROFILES`]; nothing else matches on agent ids.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentProfile {
+    pub id: &'static str,
+    pub kind: AgentKind,
+    pub mcp: McpWiring,
+    /// Can run on Ollama models through [`apply_ollama`].
+    pub ollama: bool,
+}
+
+const fn profile(id: &'static str, kind: AgentKind, mcp: McpWiring, ollama: bool) -> AgentProfile {
+    AgentProfile {
+        id,
+        kind,
+        mcp,
+        ollama,
     }
+}
+
+pub const PROFILES: &[AgentProfile] = &[
+    profile("claude", AgentKind::Claude, McpWiring::ClaudeFlag, false),
+    profile(
+        "claude-acp",
+        AgentKind::Claude,
+        McpWiring::AcpSession,
+        false,
+    ),
+    profile("codex", AgentKind::Codex, McpWiring::CodexOverride, false),
+    profile("codex-acp", AgentKind::Codex, McpWiring::AcpSession, false),
+    profile(
+        "opencode",
+        AgentKind::OpenCode,
+        McpWiring::OpenCodeEnv,
+        true,
+    ),
+    profile(
+        "opencode-acp",
+        AgentKind::OpenCode,
+        McpWiring::AcpSession,
+        true,
+    ),
+    profile(
+        "gemini",
+        AgentKind::Gemini,
+        McpWiring::GeminiDefaults,
+        false,
+    ),
+    profile(
+        "gemini-acp",
+        AgentKind::Gemini,
+        McpWiring::AcpSession,
+        false,
+    ),
+    profile("shell", AgentKind::Shell, McpWiring::EnvOnly, false),
+];
+
+/// The profile of a built-in agent; `None` for custom commands.
+pub fn agent_profile(id: &str) -> Option<&'static AgentProfile> {
+    PROFILES.iter().find(|p| p.id == id)
+}
+
+pub fn kind(id: &str) -> AgentKind {
+    agent_profile(id).map_or_else(|| AgentKind::Custom(id.to_owned()), |p| p.kind.clone())
 }
 
 /// What a session adds on top of the agent preset: arguments, environment, and files to write
@@ -135,7 +207,7 @@ const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
 
 /// Whether `agent_id` can run on Ollama models through [`apply_ollama`].
 pub fn supports_ollama(agent_id: &str) -> bool {
-    matches!(agent_id, "opencode" | "opencode-acp")
+    agent_profile(agent_id).is_some_and(|p| p.ollama)
 }
 
 /// Adds `provider` (from `hangar_agents::ollama::opencode_provider`) to an OpenCode agent's
@@ -199,23 +271,22 @@ pub fn mcp_launch(
         .push((hangar_mcp::SOCKET_ENV.to_owned(), socket.to_owned()));
     let stdio_server =
         json!({ "mcpServers": { SERVER_NAME: { "command": exe, "args": [BRIDGE_ARG] } } });
-    match agent_id {
-        "claude" => {
+    let wiring = agent_profile(agent_id).map_or(McpWiring::EnvOnly, |p| p.mcp);
+    match wiring {
+        McpWiring::ClaudeFlag => {
             extras.args.push("--mcp-config".to_owned());
             extras.args.push(stdio_server.to_string());
         }
-        "claude-acp" | "codex-acp" | "gemini-acp" | "opencode-acp" => {
-            extras.mcp_servers.push(McpServer {
-                name: SERVER_NAME.to_owned(),
-                command: exe.to_owned(),
-                args: vec![BRIDGE_ARG.to_owned()],
-                env: vec![
-                    (hangar_mcp::SESSION_ENV.to_owned(), bridge.session.clone()),
-                    (hangar_mcp::SOCKET_ENV.to_owned(), socket.to_owned()),
-                ],
-            })
-        }
-        "opencode" => {
+        McpWiring::AcpSession => extras.mcp_servers.push(McpServer {
+            name: SERVER_NAME.to_owned(),
+            command: exe.to_owned(),
+            args: vec![BRIDGE_ARG.to_owned()],
+            env: vec![
+                (hangar_mcp::SESSION_ENV.to_owned(), bridge.session.clone()),
+                (hangar_mcp::SOCKET_ENV.to_owned(), socket.to_owned()),
+            ],
+        }),
+        McpWiring::OpenCodeEnv => {
             let config = json!({
                 "$schema": "https://opencode.ai/config.json",
                 "mcp": { SERVER_NAME: { "type": "local", "command": [exe, BRIDGE_ARG], "enabled": true } },
@@ -224,7 +295,7 @@ pub fn mcp_launch(
                 .env
                 .push((OPENCODE_CONFIG_ENV.to_owned(), config.to_string()));
         }
-        "codex" => {
+        McpWiring::CodexOverride => {
             extras.args.push("-c".to_owned());
             extras.args.push(format!(
                 "mcp_servers.{SERVER_NAME}={{command={},args=[{}],env_vars=[{},{}]}}",
@@ -234,7 +305,7 @@ pub fn mcp_launch(
                 toml_string(hangar_mcp::SOCKET_ENV),
             ));
         }
-        "gemini" => {
+        McpWiring::GeminiDefaults => {
             let file = bridge
                 .config_dir
                 .join(format!("{}.gemini.json", bridge.workspace));
@@ -247,7 +318,7 @@ pub fn mcp_launch(
                 .push(("GEMINI_CLI_SYSTEM_DEFAULTS_PATH".to_owned(), path));
             extras.args.push("--skip-trust".to_owned());
         }
-        _ => {}
+        McpWiring::EnvOnly => {}
     }
     Ok(extras)
 }
@@ -279,8 +350,8 @@ fn toml_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentChoice, AgentExtras, AgentPreset, BridgeLaunch, apply_ollama, choices, default_agent,
-        is_installed, kind, mcp_launch, preset, toml_string,
+        AgentChoice, AgentExtras, AgentPreset, BridgeLaunch, McpWiring, PROFILES, apply_ollama,
+        choices, default_agent, is_installed, kind, mcp_launch, preset, toml_string,
     };
     use hangar_core::AgentKind;
     use serde_json::{Value, json};
@@ -324,6 +395,15 @@ mod tests {
         }
         assert_eq!(kind("aider"), AgentKind::Custom("aider".into()));
         assert!(preset("nope").is_none());
+        let mut profiled: Vec<&str> = PROFILES.iter().map(|p| p.id).collect();
+        let mut listed: Vec<&str> = all.iter().map(|c| c.id.as_str()).collect();
+        profiled.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(profiled, listed, "every preset has exactly one profile");
+        for p in PROFILES {
+            let acp = matches!(preset(p.id), Some(AgentPreset::Acp(_)));
+            assert_eq!(acp, p.mcp == McpWiring::AcpSession, "{}", p.id);
+        }
         let ids: Vec<String> = all.iter().map(|c| c.id.clone()).collect();
         let at = |id: &str| ids.iter().position(|i| i == id);
         for cli in ["claude", "codex", "opencode", "gemini"] {

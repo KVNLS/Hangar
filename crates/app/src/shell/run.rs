@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use super::*;
-use crate::device_panel::Platform;
 use crate::device_pool::Lease;
 use crate::device_view::DeviceHandle;
+use crate::setting_keys;
 
 /// Expo prints this once the app is open on the device and the dev server is attached.
 const EXPO_LAUNCHED: &str = "Logs for your project will appear below";
@@ -38,13 +38,9 @@ pub(super) enum PaneTab {
 
 /// Saved per workspace under [`run_key`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct RunConfig {
+pub struct RunConfig {
     port: Option<u16>,
     scheme: Option<String>,
-}
-
-fn run_key(id: WorkspaceId) -> String {
-    format!("run:{id}")
 }
 
 pub(super) struct RunTab {
@@ -165,15 +161,11 @@ fn prepare(
     taken: &[u16],
     path: Option<String>,
 ) -> anyhow::Result<Prepared> {
-    use hangar_devices::Platform as P;
     let stacks = hangar_runner::detect(root);
     let stack = hangar_runner::pick_stack(&stacks, target.platform).ok_or_else(|| {
         anyhow!(
             "no app to run on {} in {} (looked for Expo, React Native, Xcode and Gradle projects)",
-            match target.platform {
-                P::Ios => "iOS",
-                P::Android => "Android",
-            },
+            target.platform.label(),
             root.display()
         )
     })?;
@@ -297,7 +289,11 @@ impl HangarApp {
         let store = self.store.clone();
         let saved: RunConfig = store
             .as_ref()
-            .and_then(|s| s.get_setting(&run_key(workspace.id)).ok().flatten())
+            .and_then(|s| {
+                s.get_setting(&setting_keys::run(workspace.id))
+                    .ok()
+                    .flatten()
+            })
             .unwrap_or_default();
         let taken: Vec<u16> = self
             .runs
@@ -329,10 +325,7 @@ impl HangarApp {
             let name: SharedString = info.name.clone().into();
             let handle = acquired.session.handle();
             let target = hangar_runner::Target {
-                platform: match acquired.platform {
-                    Platform::Ios => hangar_devices::Platform::Ios,
-                    Platform::Android => hangar_devices::Platform::Android,
-                },
+                platform: acquired.platform,
                 id: info.udid.clone(),
                 avd: acquired.avd.clone(),
             };
@@ -367,7 +360,7 @@ impl HangarApp {
                     port: Some(prepared.port),
                     scheme: prepared.scheme.clone(),
                 };
-                if let Err(err) = store.set_setting(&run_key(id), &config) {
+                if let Err(err) = store.set_setting(&setting_keys::run(id), &config) {
                     tracing::warn!(%err, "run: failed to save the run config");
                 }
             }
@@ -789,7 +782,7 @@ impl HangarApp {
     /// Drops the saved port so another workspace can take it (delete).
     pub(super) fn forget_run_config(&self, id: WorkspaceId) {
         if let Some(store) = &self.store
-            && let Err(err) = store.delete_setting(&run_key(id))
+            && let Err(err) = store.delete_setting(&setting_keys::run(id))
         {
             tracing::warn!(%err, "failed to forget the run config");
         }

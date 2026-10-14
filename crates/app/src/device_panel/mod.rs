@@ -28,7 +28,8 @@ use crate::ui::{ActiveTokens as _, TypeScale as _};
 pub use logs::LogsSettings;
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
 pub use platform::{
-    BackendReason, Control, Listing, Opened, Platform, list_all, open_with_fallback,
+    BackendReason, Control, Listing, Opened, Platform, PlatformDevices, PlatformUi, list_all,
+    open_with_fallback,
 };
 
 pub enum DevicePanelEvent {

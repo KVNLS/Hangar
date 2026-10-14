@@ -1,17 +1,10 @@
-//! Device platforms the panel knows: how to list their devices, open one, and which hardware
-//! controls they support. A new platform (Android) plugs in by adding a variant here; every
-//! function in this module does process or framework I/O, so call them off the UI thread.
+//! What the device panel adds to [`Platform`] (defined in `hangar-devices` with its rules):
+//! the hardware controls it draws, and how it lists, opens and boots devices. Listing, opening
+//! and booting do process or framework I/O, so call them off the UI thread.
 
 use gpui_kit::assets::IconName;
+pub use hangar_devices::Platform;
 use hangar_devices::{Device, DeviceInfo, Input};
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Platform {
-    Ios,
-    Android,
-}
 
 /// A hardware control shown under the screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,65 +102,22 @@ pub struct Listing {
     pub errors: Vec<(Platform, String)>,
 }
 
-impl Platform {
-    pub const ALL: [Platform; 2] = [Platform::Ios, Platform::Android];
+/// The panel's view of a platform: controls and hints it shows.
+pub trait PlatformUi {
+    fn controls(self) -> &'static [Control];
+    /// Shown when no device of this platform is ready.
+    fn not_ready_hint(self) -> String;
+}
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Ios => "iOS",
-            Self::Android => "Android",
-        }
-    }
-
-    /// Stable identifier used in picker values.
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Ios => "ios",
-            Self::Android => "android",
-        }
-    }
-
-    /// Whether the device can be opened right away (booted simulator, online emulator).
-    pub fn is_ready(self, info: &DeviceInfo) -> bool {
-        match self {
-            Self::Ios => info.state == "Booted",
-            Self::Android => info.state == hangar_devices::android::state::BOOTED,
-        }
-    }
-
-    pub fn controls(self) -> &'static [Control] {
+impl PlatformUi for Platform {
+    fn controls(self) -> &'static [Control] {
         match self {
             Self::Ios => IOS_CONTROLS,
             Self::Android => ANDROID_CONTROLS,
         }
     }
 
-    /// Whether Hangar can boot this listed device: shut-down iOS simulators and Android AVDs
-    /// that are not running.
-    pub fn can_boot(self, info: &DeviceInfo) -> bool {
-        match self {
-            Self::Ios => info.state == IOS_SHUTDOWN,
-            Self::Android => info.state == hangar_devices::android::state::SHUTDOWN,
-        }
-    }
-
-    /// Whether an opened device of this platform can be shut down from Hangar: every iOS
-    /// simulator, and Android emulators only (adb serials `emulator-<port>`); physical devices
-    /// cannot be powered off over adb.
-    pub fn can_shutdown(self, info: &DeviceInfo) -> bool {
-        match self {
-            Self::Ios => true,
-            Self::Android => info.udid.starts_with("emulator-"),
-        }
-    }
-
-    /// Whether the panel offers a Rotate control (`Device::set_orientation` is Android-only).
-    pub fn can_rotate(self) -> bool {
-        matches!(self, Self::Android)
-    }
-
-    /// Shown when no device of this platform is ready.
-    pub fn not_ready_hint(self) -> String {
+    fn not_ready_hint(self) -> String {
         match self {
             Self::Ios => "Select a simulator and press Boot to start it from Hangar, or boot \
                  one yourself (`xcrun simctl boot <UDID>`), then refresh."
@@ -177,28 +127,39 @@ impl Platform {
                 .to_owned(),
         }
     }
+}
 
+/// Blocking device I/O per platform.
+pub trait PlatformDevices {
     /// Lists this platform's devices. Blocking.
-    pub fn list(self) -> anyhow::Result<Vec<DeviceInfo>> {
+    fn list(self) -> anyhow::Result<Vec<DeviceInfo>>;
+
+    /// Opens a device. iOS tries the private backend first and falls back to `simctl` (frames
+    /// only) when it fails; Android emulators try gRPC, then adb. `forced` (`private` or
+    /// `simctl`; `grpc` or `adb`) skips the fallback. Blocking.
+    fn open(self, info: DeviceInfo, forced: Option<&str>) -> anyhow::Result<Opened>;
+
+    /// Boots a shut-down device and returns it as listed once it is up, reporting each stage
+    /// (`booting Android`) to `progress`. Blocks for the whole boot (seconds to minutes).
+    fn boot(self, info: &DeviceInfo, progress: &dyn Fn(String)) -> anyhow::Result<DeviceInfo>;
+}
+
+impl PlatformDevices for Platform {
+    fn list(self) -> anyhow::Result<Vec<DeviceInfo>> {
         match self {
             Self::Ios => list_ios(),
             Self::Android => Ok(hangar_devices::android::list()?),
         }
     }
 
-    /// Opens a device. iOS tries the private backend first and falls back to `simctl` (frames
-    /// only) when it fails; Android emulators try gRPC, then adb. `forced` (`private` or
-    /// `simctl`; `grpc` or `adb`) skips the fallback. Blocking.
-    pub fn open(self, info: DeviceInfo, forced: Option<&str>) -> anyhow::Result<Opened> {
+    fn open(self, info: DeviceInfo, forced: Option<&str>) -> anyhow::Result<Opened> {
         match self {
             Self::Ios => open_ios(info, forced),
             Self::Android => open_android(&info, forced),
         }
     }
 
-    /// Boots a shut-down device and returns it as listed once it is up, reporting each stage
-    /// (`booting Android`) to `progress`. Blocks for the whole boot (seconds to minutes).
-    pub fn boot(self, info: &DeviceInfo, progress: &dyn Fn(String)) -> anyhow::Result<DeviceInfo> {
+    fn boot(self, info: &DeviceInfo, progress: &dyn Fn(String)) -> anyhow::Result<DeviceInfo> {
         match self {
             Self::Android => Ok(hangar_devices::android::boot_with_progress(
                 &info.udid,
@@ -213,15 +174,12 @@ impl Platform {
     }
 }
 
-/// `simctl` state of a simulator that can be booted.
-const IOS_SHUTDOWN: &str = "Shutdown";
-
 /// Orders simulators for the picker: booted first, then newest runtime first; `simctl` order
 /// is kept within a runtime (phones before tablets).
 pub fn sort_ios(devices: &mut [DeviceInfo]) {
     devices.sort_by_key(|d| {
         (
-            d.state != "Booted",
+            d.state != hangar_devices::simctl::state::BOOTED,
             std::cmp::Reverse(runtime_version(&d.runtime)),
         )
     });
@@ -332,7 +290,7 @@ fn list_ios() -> anyhow::Result<Vec<DeviceInfo>> {
 fn boot_ios(info: &DeviceInfo) -> anyhow::Result<DeviceInfo> {
     hangar_devices::ios::boot(&info.udid)?;
     Ok(DeviceInfo {
-        state: "Booted".to_owned(),
+        state: hangar_devices::simctl::state::BOOTED.to_owned(),
         ..info.clone()
     })
 }

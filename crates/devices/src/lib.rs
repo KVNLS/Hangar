@@ -34,10 +34,64 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum Platform {
     Ios,
     Android,
+}
+
+impl Platform {
+    pub const ALL: [Platform; 2] = [Platform::Ios, Platform::Android];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ios => "iOS",
+            Self::Android => "Android",
+        }
+    }
+
+    /// Stable identifier (picker values, saved settings).
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Ios => "ios",
+            Self::Android => "android",
+        }
+    }
+
+    /// Whether the listed device can be opened right away (booted simulator, online emulator).
+    pub fn is_ready(self, info: &DeviceInfo) -> bool {
+        match self {
+            Self::Ios => info.state == simctl::state::BOOTED,
+            Self::Android => info.state == android::state::BOOTED,
+        }
+    }
+
+    /// Whether Hangar can boot this listed device: shut-down iOS simulators and Android AVDs
+    /// that are not running.
+    pub fn can_boot(self, info: &DeviceInfo) -> bool {
+        match self {
+            Self::Ios => info.state == simctl::state::SHUTDOWN,
+            Self::Android => info.state == android::state::SHUTDOWN,
+        }
+    }
+
+    /// Whether an opened device can be shut down from Hangar: every iOS simulator, and Android
+    /// emulators only (adb serials `emulator-<port>`); physical devices cannot be powered off
+    /// over adb.
+    pub fn can_shutdown(self, info: &DeviceInfo) -> bool {
+        match self {
+            Self::Ios => true,
+            Self::Android => info.udid.starts_with("emulator-"),
+        }
+    }
+
+    /// Whether [`Device::set_orientation`] can work on this platform (not on iOS, Xcode 27).
+    pub fn can_rotate(self) -> bool {
+        matches!(self, Self::Android)
+    }
 }
 
 /// Physical description of the main screen.

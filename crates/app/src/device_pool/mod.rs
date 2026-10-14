@@ -20,30 +20,20 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use gpui_kit::*;
-use hangar_core::{Store, WorkspaceId};
+use hangar_core::{Setting, Store, WorkspaceId};
 use hangar_devices::capacity::{self, DeviceCost, HostResources, Pressure};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::device_panel::{BackendReason, DeviceKey, Platform};
 use crate::device_view::DeviceSession;
+use crate::setting_keys;
 use backend::Target;
 use policy::{Acquire, Assignment, Capacity, LEASE_TIMEOUT, LeaseQueue, Limit, Slot};
 
-const LIMIT_SETTING: &str = "device_pool:limit";
-const ALERT_SETTING: &str = "device_pool:single_alert_shown";
-const LAST_TARGET_SETTING: &str = "device_pool:last_target";
 /// How often memory pressure, lease timeouts and the cap are checked.
 const MONITOR_TICK: Duration = Duration::from_secs(10);
 /// How often a boot waiting for a free slot looks again.
 const SLOT_POLL: Duration = Duration::from_secs(1);
-
-fn assignment_key(id: WorkspaceId) -> String {
-    format!("device:{id}")
-}
-
-fn base_key(platform: Platform) -> String {
-    format!("device_pool:base:{}", platform.id())
-}
 
 /// What the pool needs to know about a workspace.
 #[derive(Clone, Debug)]
@@ -397,7 +387,7 @@ impl DevicePool {
         if let Some(store) = self.store.clone() {
             cx.background_executor()
                 .spawn(async move {
-                    if let Err(err) = store.set_setting(ALERT_SETTING, &true) {
+                    if let Err(err) = store.set_setting(&setting_keys::SINGLE_DEVICE_ALERT_SHOWN, &true) {
                         tracing::warn!(target: "device_pool", %err, "failed to save the alert flag");
                     }
                 })
@@ -478,7 +468,7 @@ impl DevicePool {
         }
         tracing::info!(target: "device_pool", ?limit, "devices at once changed");
         self.limit = limit;
-        self.save(LIMIT_SETTING, limit, cx);
+        self.save(setting_keys::DEVICE_LIMIT, limit, cx);
         self.enforce_limit(cx);
         cx.notify();
     }
@@ -487,7 +477,7 @@ impl DevicePool {
     pub fn set_platform_base(&mut self, platform: Platform, id: String, cx: &mut Context<Self>) {
         tracing::info!(target: "device_pool", platform = platform.label(), %id, "base device set");
         self.bases.insert(platform, id.clone());
-        self.save(&base_key(platform), id, cx);
+        self.save(setting_keys::device_base(platform), id, cx);
         if platform == Platform::Android {
             self.detect_host(cx);
         }
@@ -496,17 +486,17 @@ impl DevicePool {
 
     fn save<T: serde::Serialize + Send + 'static>(
         &self,
-        key: &str,
+        setting: Setting<T>,
         value: T,
         cx: &mut Context<Self>,
     ) {
         let Some(store) = self.store.clone() else {
             return;
         };
-        let key = key.to_owned();
         cx.background_executor()
             .spawn(async move {
-                if let Err(err) = store.set_setting(&key, &value) {
+                if let Err(err) = store.set_setting(&setting, &value) {
+                    let key = setting.key();
                     tracing::error!(target: "device_pool", %key, %err, "failed to save");
                 }
             })
@@ -547,10 +537,10 @@ impl DevicePool {
         tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), %base, "device assigned");
         let assignment = Assignment::new(platform, base.clone());
         self.assignments.insert(ws, assignment.clone());
-        self.save(&assignment_key(ws), assignment, cx);
+        self.save(setting_keys::device_assignment(ws), assignment, cx);
         let last = DeviceKey { platform, id: base };
         self.last_target = Some(last.clone());
-        self.save(LAST_TARGET_SETTING, last, cx);
+        self.save(setting_keys::LAST_DEVICE_TARGET, last, cx);
         if let Some(previous) = previous {
             self.drop_own_device(ws, previous, cx);
         }
@@ -1289,7 +1279,7 @@ impl DevicePool {
         }
         if *a != before {
             let a = a.clone();
-            self.save(&assignment_key(ws), a, cx);
+            self.save(setting_keys::device_assignment(ws), a, cx);
         }
     }
 
@@ -1468,7 +1458,7 @@ impl DevicePool {
             if !known && let Some(store) = store {
                 let saved = cx
                     .background_executor()
-                    .spawn(async move { store.get_setting::<Assignment>(&assignment_key(ws)) })
+                    .spawn(async move { store.get_setting(&setting_keys::device_assignment(ws)) })
                     .await?;
                 if let Some(a) = saved {
                     this.update(cx, |pool, _| {
@@ -1555,7 +1545,7 @@ impl DevicePool {
             cx.background_executor()
                 .spawn(async move {
                     if let Some(store) = store {
-                        store.delete_setting(&assignment_key(ws))?;
+                        store.delete_setting(&setting_keys::device_assignment(ws))?;
                     }
                     match assignment {
                         Some(Assignment {
@@ -1594,7 +1584,7 @@ impl DevicePool {
         if let Some(a) = self.assignments.get_mut(&ws) {
             a.own = None;
             let a = a.clone();
-            self.save(&assignment_key(ws), a, cx);
+            self.save(setting_keys::device_assignment(ws), a, cx);
         }
         cx.notify();
         cx.spawn(async move |_, cx| {
@@ -1747,13 +1737,13 @@ struct Saved {
 fn load_settings(store: &Store, workspaces: &[WorkspaceId]) -> anyhow::Result<Saved> {
     let mut bases = BTreeMap::new();
     for platform in Platform::ALL {
-        if let Some(id) = store.get_setting::<String>(&base_key(platform))? {
+        if let Some(id) = store.get_setting(&setting_keys::device_base(platform))? {
             bases.insert(platform, id);
         }
     }
     let mut assignments = HashMap::new();
     for ws in workspaces {
-        match store.get_setting::<Assignment>(&assignment_key(*ws)) {
+        match store.get_setting(&setting_keys::device_assignment(*ws)) {
             Ok(Some(a)) => {
                 assignments.insert(*ws, a);
             }
@@ -1764,10 +1754,12 @@ fn load_settings(store: &Store, workspaces: &[WorkspaceId]) -> anyhow::Result<Sa
         }
     }
     Ok(Saved {
-        limit: store.get_setting(LIMIT_SETTING)?,
+        limit: store.get_setting(&setting_keys::DEVICE_LIMIT)?,
         bases,
-        alert_shown: store.get_setting(ALERT_SETTING)?.unwrap_or(false),
-        last_target: store.get_setting(LAST_TARGET_SETTING)?,
+        alert_shown: store
+            .get_setting(&setting_keys::SINGLE_DEVICE_ALERT_SHOWN)?
+            .unwrap_or(false),
+        last_target: store.get_setting(&setting_keys::LAST_DEVICE_TARGET)?,
         assignments,
     })
 }
@@ -1779,10 +1771,10 @@ fn default_assignment(
     root: &std::path::Path,
     bases: &BTreeMap<Platform, String>,
 ) -> anyhow::Result<Assignment> {
-    if let Some(a) = store.get_setting::<Assignment>(&assignment_key(ws))? {
+    if let Some(a) = store.get_setting(&setting_keys::device_assignment(ws))? {
         return Ok(a);
     }
-    let last = store.get_setting::<DeviceKey>(LAST_TARGET_SETTING)?;
+    let last = store.get_setting(&setting_keys::LAST_DEVICE_TARGET)?;
     let builds_for = backend::stack_platforms(root);
     let platform = choose_platform(last.as_ref().map(|k| k.platform), &builds_for);
     let base = match (
@@ -1803,7 +1795,7 @@ fn default_assignment(
             })?,
     };
     let a = Assignment::new(platform, base);
-    store.set_setting(&assignment_key(ws), &a)?;
+    store.set_setting(&setting_keys::device_assignment(ws), &a)?;
     tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), base = %a.base, "default device assigned");
     Ok(a)
 }

@@ -41,10 +41,7 @@ pub(super) fn start(window: &mut Window, cx: &mut Context<HangarApp>) -> Option<
 
 fn status(info: DeviceStatusInfo) -> hangar_mcp::DeviceStatus {
     hangar_mcp::DeviceStatus {
-        platform: match info.platform {
-            Platform::Ios => hangar_devices::Platform::Ios,
-            Platform::Android => hangar_devices::Platform::Android,
-        },
+        platform: info.platform,
         name: info.name,
         id: info.id,
         booted: info.booted,

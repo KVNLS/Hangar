@@ -1,7 +1,7 @@
 //! SQLite persistence for projects, workspaces, sessions and app settings.
 //!
 //! [`Store`] is synchronous: every call takes a lock and does disk I/O. Never call it from the UI thread;
-//! use `tokio::task::spawn_blocking` (or a dedicated thread) and share it via `Arc<Store>`.
+//! run it on a background thread or executor and share it via `Arc<Store>`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, ffi, params};
 use uuid::Uuid;
 
+use crate::Setting;
 use crate::model::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
     WorkspaceId, WorkspaceStatus,
@@ -323,12 +324,17 @@ impl Store {
     }
 
     /// Reads a JSON-encoded setting; `None` when the key was never set.
-    pub fn get_setting<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+    pub fn get_setting<T: serde::de::DeserializeOwned>(
+        &self,
+        setting: &Setting<T>,
+    ) -> Result<Option<T>> {
         let value: Option<String> = self
             .conn()
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [setting.key()],
+                |row| row.get(0),
+            )
             .optional()?;
         value
             .map(|v| serde_json::from_str(&v))
@@ -336,21 +342,21 @@ impl Store {
             .map_err(StoreError::from)
     }
 
-    /// Stores `value` as JSON under `key`, replacing any previous value.
-    pub fn set_setting<T: serde::Serialize + ?Sized>(&self, key: &str, value: &T) -> Result<()> {
+    /// Stores `value` as JSON under `setting`, replacing any previous value.
+    pub fn set_setting<T: serde::Serialize>(&self, setting: &Setting<T>, value: &T) -> Result<()> {
         let encoded = serde_json::to_string(value)?;
         self.conn().execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, encoded],
+            params![setting.key(), encoded],
         )?;
         Ok(())
     }
 
-    /// Removes the setting under `key`; removing a missing key is not an error.
-    pub fn delete_setting(&self, key: &str) -> Result<()> {
+    /// Removes `setting`; removing a missing one is not an error.
+    pub fn delete_setting<T>(&self, setting: &Setting<T>) -> Result<()> {
         self.conn()
-            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
+            .execute("DELETE FROM settings WHERE key = ?1", [setting.key()])?;
         Ok(())
     }
 }

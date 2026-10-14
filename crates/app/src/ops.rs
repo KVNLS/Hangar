@@ -17,6 +17,7 @@ use hangar_terminal::ExitInfo;
 
 use crate::agents::{self, AgentExtras};
 use crate::paths::{BRANCH_PREFIX, branch_name, unique_slug, worktree_path};
+use crate::setting_keys;
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
 use crate::ui::theme::Appearance;
 
@@ -25,19 +26,6 @@ pub fn open_store(path: &Path) -> anyhow::Result<Arc<Store>> {
         Store::open(path).with_context(|| format!("failed to open database {}", path.display()))?;
     Ok(Arc::new(store))
 }
-
-/// Setting key of the saved [`PaneLayout`].
-pub const LAYOUT_SETTING: &str = "layout";
-/// Setting key of the agent picked for new workspaces.
-pub const AGENT_SETTING: &str = "agent";
-/// Setting key of the saved [`ChangesLayout`].
-pub const CHANGES_SETTING: &str = "changes_panel";
-/// Setting key of the saved [`DeviceLayout`].
-pub const DEVICE_SETTING: &str = "device_panel";
-/// Setting key of the saved [`Appearance`].
-pub const APPEARANCE_SETTING: &str = "appearance";
-/// Setting key of the saved [`OllamaSettings`].
-pub const OLLAMA_SETTING: &str = "ollama";
 
 /// Local models served by Ollama, offered to OpenCode as an extra provider.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -63,7 +51,7 @@ pub struct Loaded {
     pub settings_error: Option<anyhow::Error>,
 }
 
-/// The ACP conversation a workspace can resume, saved under [`chat_key`].
+/// The ACP conversation a workspace can resume, saved under [`setting_keys::chat`].
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SavedChat {
     /// The preset that ran it; only that preset resumes it.
@@ -71,20 +59,10 @@ pub struct SavedChat {
     pub session: String,
 }
 
-pub fn chat_key(id: WorkspaceId) -> String {
-    format!("chat:{id}")
-}
-
-/// Model, effort and other non-mode choices made in an agent's chat, re-applied to its next
-/// sessions. The mode is left out: it decides what the agent may do without asking.
-pub fn agent_config_key(agent: &str) -> String {
-    format!("agent_config:{agent}")
-}
-
 /// `(config id, value)` pairs in the order they were chosen.
 pub fn saved_agent_config(store: &Store, agent: &str) -> Vec<(String, String)> {
     store
-        .get_setting(&agent_config_key(agent))
+        .get_setting(&setting_keys::agent_config(agent))
         .unwrap_or_else(|err| {
             tracing::warn!(agent, "cannot read saved agent settings: {err}");
             None
@@ -101,7 +79,7 @@ pub fn remember_agent_config(
     let mut saved = saved_agent_config(store, agent);
     saved.retain(|(id, _)| id != config_id);
     saved.push((config_id.to_owned(), value.to_owned()));
-    Ok(store.set_setting(&agent_config_key(agent), &saved)?)
+    Ok(store.set_setting(&setting_keys::agent_config(agent), &saved)?)
 }
 
 /// Loads every project with its workspaces (active and archived) and the saved settings.
@@ -113,7 +91,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     for project in store.list_projects()? {
         let workspaces = store.list_workspaces(project.id)?;
         for ws in &workspaces {
-            match store.get_setting::<SavedChat>(&chat_key(ws.id)) {
+            match store.get_setting(&setting_keys::chat(ws.id)) {
                 Ok(Some(chat)) => {
                     chats.insert(ws.id, chat);
                 }
@@ -139,9 +117,9 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         });
     }
     let settings = (|| {
-        let layout = store.get_setting::<PaneLayout>(LAYOUT_SETTING)?;
-        let agent = store.get_setting::<String>(AGENT_SETTING)?;
-        let changes = store.get_setting::<ChangesLayout>(CHANGES_SETTING)?;
+        let layout = store.get_setting(&setting_keys::LAYOUT)?;
+        let agent = store.get_setting(&setting_keys::AGENT)?;
+        let changes = store.get_setting(&setting_keys::CHANGES)?;
         anyhow::Ok((layout, agent, changes))
     })()
     .context("failed to read saved layout");
@@ -151,7 +129,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     };
     // Read on its own so a bad device setting does not reset the pane layout.
     let device = match store
-        .get_setting::<DeviceLayout>(DEVICE_SETTING)
+        .get_setting(&setting_keys::DEVICE)
         .context("failed to read the device panel settings")
     {
         Ok(device) => device,
@@ -161,7 +139,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         }
     };
     let appearance = match store
-        .get_setting::<Appearance>(APPEARANCE_SETTING)
+        .get_setting(&setting_keys::APPEARANCE)
         .context("failed to read the appearance setting")
     {
         Ok(appearance) => appearance,
@@ -171,7 +149,7 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         }
     };
     let ollama = match store
-        .get_setting::<OllamaSettings>(OLLAMA_SETTING)
+        .get_setting(&setting_keys::OLLAMA)
         .context("failed to read the Ollama settings")
     {
         Ok(ollama) => ollama,
@@ -195,37 +173,37 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
 
 pub fn save_layout(store: &Store, layout: &PaneLayout) -> anyhow::Result<()> {
     store
-        .set_setting(LAYOUT_SETTING, layout)
+        .set_setting(&setting_keys::LAYOUT, layout)
         .context("failed to save pane layout")
 }
 
 pub fn save_changes(store: &Store, changes: &ChangesLayout) -> anyhow::Result<()> {
     store
-        .set_setting(CHANGES_SETTING, changes)
+        .set_setting(&setting_keys::CHANGES, changes)
         .context("failed to save the changes panel layout")
 }
 
 pub fn save_device(store: &Store, device: &DeviceLayout) -> anyhow::Result<()> {
     store
-        .set_setting(DEVICE_SETTING, device)
+        .set_setting(&setting_keys::DEVICE, device)
         .context("failed to save the device panel settings")
 }
 
 pub fn save_appearance(store: &Store, appearance: Appearance) -> anyhow::Result<()> {
     store
-        .set_setting(APPEARANCE_SETTING, &appearance)
+        .set_setting(&setting_keys::APPEARANCE, &appearance)
         .context("failed to save the appearance")
 }
 
 pub fn save_ollama(store: &Store, ollama: &OllamaSettings) -> anyhow::Result<()> {
     store
-        .set_setting(OLLAMA_SETTING, ollama)
+        .set_setting(&setting_keys::OLLAMA, ollama)
         .context("failed to save the Ollama settings")
 }
 
 pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {
     store
-        .set_setting(AGENT_SETTING, agent)
+        .set_setting(&setting_keys::AGENT, &agent.to_owned())
         .context("failed to save the selected agent")
 }
 
@@ -780,7 +758,7 @@ pub fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::agents;
-    use hangar_core::{SessionStatus, Store};
+    use hangar_core::{SessionStatus, Setting, Store};
     use hangar_terminal::ExitInfo;
     use std::path::Path;
     use std::process::Command;
@@ -960,7 +938,9 @@ mod tests {
             agent: "claude-acp".into(),
             session: "s-1".into(),
         };
-        store.set_setting(&chat_key(ws.id), &chat).unwrap();
+        store
+            .set_setting(&setting_keys::chat(ws.id), &chat)
+            .unwrap();
         let loaded = load(&store).unwrap();
         assert_eq!(loaded.chats.get(&ws.id), Some(&chat));
     }
@@ -1338,7 +1318,7 @@ mod tests {
         save_changes(&f.store, &changes).unwrap();
         assert_eq!(load(&f.store).unwrap().changes, Some(changes));
 
-        f.store.set_setting(LAYOUT_SETTING, &42).unwrap();
+        f.store.set_setting(&Setting::new("layout"), &42).unwrap();
         let loaded = load(&f.store).unwrap();
         assert!(loaded.layout.is_none());
         assert!(loaded.settings_error.is_some());
@@ -1392,7 +1372,7 @@ mod tests {
         }
         f.store
             .set_setting(
-                DEVICE_SETTING,
+                &Setting::new("device_panel"),
                 &Saved {
                     open: true,
                     width: 400.0,
@@ -1421,7 +1401,7 @@ mod tests {
         }
         f.store
             .set_setting(
-                DEVICE_SETTING,
+                &Setting::new("device_panel"),
                 &Old {
                     open: false,
                     width: 300.0,
@@ -1437,7 +1417,9 @@ mod tests {
 
         // A broken device setting is reported but leaves the other settings alone.
         save_agent(&f.store, "codex").unwrap();
-        f.store.set_setting(DEVICE_SETTING, &"nope").unwrap();
+        f.store
+            .set_setting(&Setting::new("device_panel"), &"nope")
+            .unwrap();
         let loaded = load(&f.store).unwrap();
         assert!(loaded.device.is_none());
         assert!(loaded.settings_error.is_some());

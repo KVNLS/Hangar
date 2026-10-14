@@ -266,7 +266,7 @@ impl HangarApp {
         };
         self.saved_chats.insert(workspace_id, chat.clone());
         self.persist(window, cx, move |store| {
-            Ok(store.set_setting(&ops::chat_key(workspace_id), &chat)?)
+            Ok(store.set_setting(&setting_keys::chat(workspace_id), &chat)?)
         });
         let root = self
             .projects
@@ -333,7 +333,7 @@ impl HangarApp {
     fn forget_chat(&mut self, workspace_id: WorkspaceId) {
         self.saved_chats.remove(&workspace_id);
         if let Some(store) = &self.store
-            && let Err(err) = store.delete_setting(&ops::chat_key(workspace_id))
+            && let Err(err) = store.delete_setting(&setting_keys::chat(workspace_id))
         {
             tracing::warn!(%err, "failed to forget the saved conversation");
         }
