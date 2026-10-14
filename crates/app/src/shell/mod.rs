@@ -411,6 +411,7 @@ impl HangarApp {
             window,
             |this, _, event: &ChangesEvent, window, cx| match event {
                 ChangesEvent::ExitReview => this.set_screen(Screen::Workspace, window, cx),
+                ChangesEvent::OpenReview => this.set_screen(Screen::Review, window, cx),
             },
         );
         let device_pool = cx.new(DevicePool::new);

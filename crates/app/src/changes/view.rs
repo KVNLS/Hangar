@@ -120,6 +120,8 @@ pub struct ReviewStats {
 pub enum ChangesEvent {
     /// The review screen's back button or Escape.
     ExitReview,
+    /// The side panel's "Full review" button.
+    OpenReview,
 }
 
 impl EventEmitter<ChangesEvent> for ChangesPanel {}
@@ -163,10 +165,28 @@ impl ChangesPanel {
     pub fn set_wide(&mut self, wide: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.wide != wide {
             self.wide = wide;
+            if wide {
+                self.reveal_selected();
+            }
             cx.notify();
         }
         if wide {
             window.focus(&self.focus, cx);
+        }
+    }
+
+    /// Scrolls the file list to the selected file (the review screen lists more rows).
+    fn reveal_selected(&self) {
+        let Some(selected) = self.selected.as_deref() else {
+            return;
+        };
+        let index = self
+            .list
+            .iter()
+            .position(|e| matches!(e, ListEntry::File(f) if f.path == selected));
+        if let Some(index) = index {
+            self.list_scroll
+                .scroll_to_item(index, ScrollStrategy::Center);
         }
     }
 
@@ -431,6 +451,15 @@ impl ChangesPanel {
             })
             .when(self.source.is_some(), |this| {
                 this.child(
+                    UiButton::new("changes-full-review")
+                        .label("Full review")
+                        .kbd("⌘⇧R")
+                        .ghost()
+                        .small()
+                        .tooltip("Review every change full width")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangesEvent::OpenReview))),
+                )
+                .child(
                     UiButton::new("changes-refresh")
                         .icon(Lucide::RefreshCw)
                         .ghost()
