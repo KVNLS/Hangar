@@ -168,6 +168,46 @@ pub struct Cost {
     pub currency: String,
 }
 
+/// Tokens an agent reports for a turn. Cache reads and writes are counted apart from `input`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TokenCount {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+impl TokenCount {
+    pub fn total(&self) -> u64 {
+        self.input + self.output + self.cache_read + self.cache_write
+    }
+}
+
+impl std::ops::AddAssign for TokenCount {
+    fn add_assign(&mut self, other: Self) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+    }
+}
+
+/// What one model spent in a session since the previous entry: one row of the usage ledger.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UsageEntry {
+    pub session_id: crate::SessionId,
+    pub at: crate::Timestamp,
+    /// The model id as the agent names it (`claude-sonnet-4-5`, `ollama/qwen3-coder:30b`);
+    /// `None` when unknown.
+    pub model: Option<String>,
+    /// Served by a local model (Ollama), so it cost nothing.
+    pub local: bool,
+    /// `None` when the agent reports no cost.
+    pub cost: Option<Cost>,
+    /// `None` when the agent reports no tokens.
+    pub tokens: Option<TokenCount>,
+}
+
 /// Size of a workspace's diff: changed files, inserted and deleted lines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DiffStat {

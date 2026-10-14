@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, Row, ffi, params};
 use uuid::Uuid;
 
-use hangar_core::changes::{Cost, DiffStat};
+use hangar_core::changes::{Cost, DiffStat, TokenCount, UsageEntry};
 use hangar_core::ports::{PortError, PortResult};
 use hangar_core::{
     AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Setting, Timestamp,
@@ -83,6 +83,28 @@ ALTER TABLE sessions ADD COLUMN deletions INTEGER;
     r#"
 ALTER TABLE sessions ADD COLUMN cost_amount REAL;
 ALTER TABLE sessions ADD COLUMN cost_currency TEXT;
+"#,
+    // v8: the usage ledger (what each model spent, per turn). Sessions that already had a cost
+    // become one row each, model unknown.
+    r#"
+CREATE TABLE usage (
+    session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    at            INTEGER NOT NULL,
+    model         TEXT,
+    local         INTEGER NOT NULL,
+    cost_amount   REAL,
+    cost_currency TEXT,
+    input         INTEGER,
+    output        INTEGER,
+    cache_read    INTEGER,
+    cache_write   INTEGER
+);
+
+CREATE INDEX usage_at ON usage(at);
+
+INSERT INTO usage (session_id, at, model, local, cost_amount, cost_currency)
+SELECT id, COALESCE(ended_at, created_at), NULL, 0, cost_amount, cost_currency
+FROM sessions WHERE cost_amount IS NOT NULL AND cost_currency IS NOT NULL;
 "#,
 ];
 
@@ -399,6 +421,50 @@ impl Store {
         ensure_changed(changed, "session", id)
     }
 
+    /// Appends a row to the usage ledger.
+    pub fn record_usage(&self, entry: &UsageEntry) -> Result<()> {
+        let tokens = entry.tokens;
+        self.conn()
+            .execute(
+                "INSERT INTO usage
+                 (session_id, at, model, local, cost_amount, cost_currency, input, output,
+                  cache_read, cache_write)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    entry.session_id.0.to_string(),
+                    entry.at.0,
+                    entry.model,
+                    entry.local,
+                    entry.cost.as_ref().map(|c| c.amount),
+                    entry.cost.as_ref().map(|c| c.currency.as_str()),
+                    tokens.map(|t| sql_count(t.input)),
+                    tokens.map(|t| sql_count(t.output)),
+                    tokens.map(|t| sql_count(t.cache_read)),
+                    tokens.map(|t| sql_count(t.cache_write)),
+                ],
+            )
+            .map_err(|e| {
+                map_write_error(
+                    e,
+                    || "usage row already exists".to_owned(),
+                    Some(not_found("session", entry.session_id)),
+                )
+            })?;
+        Ok(())
+    }
+
+    /// Ledger rows at or after `since`, oldest first.
+    pub fn list_usage_since(&self, since: Timestamp) -> Result<Vec<UsageEntry>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, at, model, local, cost_amount, cost_currency, input, output,
+                    cache_read, cache_write
+             FROM usage WHERE at >= ?1 ORDER BY at, rowid",
+        )?;
+        let rows = stmt.query_map([since.0], usage_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The raw JSON stored under `key`; `None` when it was never set.
     pub fn read_setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self
@@ -610,6 +676,39 @@ fn workspace_from_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
 const SESSION_COLUMNS: &str = "id, workspace_id, agent, command, args, status, created_at, \
      ended_at, prompt, files, insertions, deletions, cost_amount, cost_currency";
 
+fn usage_from_row(row: &Row<'_>) -> rusqlite::Result<UsageEntry> {
+    let cost_amount: Option<f64> = row.get(4)?;
+    let cost_currency: Option<String> = row.get(5)?;
+    let input: Option<i64> = row.get(6)?;
+    let output: Option<i64> = row.get(7)?;
+    let cache_read: Option<i64> = row.get(8)?;
+    let cache_write: Option<i64> = row.get(9)?;
+    Ok(UsageEntry {
+        session_id: SessionId(uuid_at(row, 0)?),
+        at: Timestamp(row.get(1)?),
+        model: row.get(2)?,
+        local: row.get(3)?,
+        cost: cost_amount
+            .zip(cost_currency)
+            .map(|(amount, currency)| Cost { amount, currency }),
+        tokens: input.zip(output).map(|(input, output)| TokenCount {
+            input: count_from_sql(input),
+            output: count_from_sql(output),
+            cache_read: cache_read.map_or(0, count_from_sql),
+            cache_write: cache_write.map_or(0, count_from_sql),
+        }),
+    })
+}
+
+/// SQLite integers are signed; token counts never come near `i64::MAX`.
+fn sql_count(n: u64) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+fn count_from_sql(n: i64) -> u64 {
+    u64::try_from(n).unwrap_or_default()
+}
+
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
     let files: Option<u32> = row.get(9)?;
     let insertions: Option<u32> = row.get(10)?;
@@ -701,6 +800,14 @@ impl hangar_core::ports::Store for Store {
 
     fn record_session_cost(&self, id: SessionId, cost: &Cost) -> PortResult<()> {
         Store::record_session_cost(self, id, cost).map_err(PortError::new)
+    }
+
+    fn record_usage(&self, entry: &UsageEntry) -> PortResult<()> {
+        Store::record_usage(self, entry).map_err(PortError::new)
+    }
+
+    fn list_usage_since(&self, since: Timestamp) -> PortResult<Vec<UsageEntry>> {
+        Store::list_usage_since(self, since).map_err(PortError::new)
     }
 
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {

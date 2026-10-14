@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::changes::{Cost, DiffOptions, DiffStat, FileDiff, GitDirs, Status};
+use crate::changes::{Cost, DiffOptions, DiffStat, FileDiff, GitDirs, Status, UsageEntry};
 use crate::review::{
     CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
     Upstream,
@@ -58,6 +58,10 @@ pub trait Store: Send + Sync {
     fn list_sessions_since(&self, since: Timestamp) -> PortResult<Vec<Session>>;
     /// Records what a session has cost so far.
     fn record_session_cost(&self, id: SessionId, cost: &Cost) -> PortResult<()>;
+    /// Appends a row to the usage ledger.
+    fn record_usage(&self, entry: &UsageEntry) -> PortResult<()>;
+    /// Ledger rows at or after `since`, oldest first.
+    fn list_usage_since(&self, since: Timestamp) -> PortResult<Vec<UsageEntry>>;
 
     /// The JSON stored under `key`; `None` when it was never set.
     fn read_setting(&self, key: &str) -> PortResult<Option<String>>;
@@ -118,6 +122,12 @@ impl<S: Store + ?Sized> Store for std::sync::Arc<S> {
     }
     fn record_session_cost(&self, id: SessionId, cost: &Cost) -> PortResult<()> {
         (**self).record_session_cost(id, cost)
+    }
+    fn record_usage(&self, entry: &UsageEntry) -> PortResult<()> {
+        (**self).record_usage(entry)
+    }
+    fn list_usage_since(&self, since: Timestamp) -> PortResult<Vec<UsageEntry>> {
+        (**self).list_usage_since(since)
     }
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
         (**self).read_setting(key)
