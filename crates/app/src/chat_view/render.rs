@@ -10,6 +10,7 @@ use gpui_kit::component::{Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_agents::acp::protocol::{ConfigOption, PlanStatus, ToolContent, ToolStatus};
+use hangar_agents::acp::subagents::SubagentStatus;
 use hangar_core::AgentState;
 
 use super::{ChatView, Item, Outcome};
@@ -27,10 +28,23 @@ impl Render for ChatView {
         if self.follow {
             self.scroll.scroll_to_bottom();
         }
-        let items: Vec<AnyElement> = (0..self.items.len())
+        let subagent = self.focus.as_deref().and_then(|id| self.subagent(id));
+        let mut items: Vec<AnyElement> = (0..self.items.len())
+            .filter(|&i| self.visible(i))
             .filter_map(|i| self.render_item(i, cx))
             .collect();
-        let working = self.running && self.pending_permission().is_none();
+        let working = match &subagent {
+            Some(sub) => sub.status == SubagentStatus::Running,
+            None => self.running && self.pending_permission().is_none(),
+        };
+        if let Some(sub) = &subagent {
+            if let Some(task) = self.render_subagent_task(&sub.id, cx) {
+                items.insert(0, task);
+            }
+            if let Some(result) = self.render_subagent_result(sub, cx) {
+                items.push(result);
+            }
+        }
 
         div()
             .key_context(super::CONTEXT)
@@ -41,6 +55,9 @@ impl Render for ChatView {
             .bg(t.app)
             .text_color(t.tx)
             .type_body()
+            .when_some(subagent.as_ref(), |d, sub| {
+                d.child(self.render_subagent_header(sub, cx))
+            })
             .child(
                 div()
                     .id("chat-scroll")
@@ -66,7 +83,9 @@ impl Render for ChatView {
                             .px(SPACE_6)
                             .py(SPACE_4)
                             .children(items)
-                            .children(self.render_done_card(cx))
+                            .when(subagent.is_none(), |this| {
+                                this.children(self.render_done_card(cx))
+                            })
                             .when(working, |this| {
                                 this.child(
                                     div()
@@ -77,12 +96,20 @@ impl Render for ChatView {
                                         .type_mono()
                                         .text_color(t.tx3)
                                         .child(Spinner::new().with_size(px(10.)).color(t.acc))
-                                        .child("Working · esc to interrupt"),
+                                        // In a subagent's view esc goes back instead.
+                                        .child(if subagent.is_some() {
+                                            "Working…"
+                                        } else {
+                                            "Working · esc to interrupt"
+                                        }),
                                 )
                             }),
                     )),
             )
-            .child(self.render_composer(cx))
+            .map(|d| match &subagent {
+                Some(_) => d.child(self.render_subagent_footer(cx)),
+                None => d.child(self.render_composer(cx)),
+            })
     }
 }
 
@@ -188,7 +215,7 @@ impl ChatView {
                 .font_features(crate::ui::mono_features())
                 .child(TextView::new(view).selectable(true))
                 .into_any_element(),
-            Item::Thought { text, open } => {
+            Item::Thought { text, open, .. } => {
                 let open = *open;
                 div()
                     .flex()
@@ -368,7 +395,19 @@ impl ChatView {
                     .when(call.status == ToolStatus::InProgress, |d| {
                         d.child(Spinner::new().with_size(px(10.)).color(t.acc))
                     })
-                    .child(div().text_size(px(11.)).text_color(meta_color).child(meta)),
+                    .child(div().text_size(px(11.)).text_color(meta_color).child(meta))
+                    .when(call.is_subagent() && self.focus.is_none(), |d| {
+                        let id = call.id.clone();
+                        d.child(
+                            UiButton::new(("open-subagent", index))
+                                .small()
+                                .label("Open")
+                                .icon(Lucide::ChevronRight)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.focus_subagent(Some(&id), cx)
+                                })),
+                        )
+                    }),
             )
             .when(!locations.is_empty(), |d| {
                 d.child(

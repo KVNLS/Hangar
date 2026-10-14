@@ -2,6 +2,9 @@
 //! transcript, and a composer.
 
 mod render;
+mod subagent;
+
+pub use subagent::subagent_state;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +18,7 @@ use gpui_kit::*;
 use hangar_agents::acp::protocol::{
     AvailableCommand, ConfigOption, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
 };
+use hangar_agents::acp::subagents::{PendingPermission, Subagent, owner, subagents};
 use hangar_agents::acp::{AcpEvent, AcpSession, PermissionRequest};
 use hangar_core::AcpTurn;
 
@@ -33,13 +37,16 @@ pub fn init(cx: &mut App) {
 
 enum Item {
     User(SharedString),
+    /// `parent`, here and on tool calls: the subagent launch it came from (`None`: the agent).
     Agent {
         text: String,
         view: Entity<TextViewState>,
+        parent: Option<String>,
     },
     Thought {
         text: String,
         open: bool,
+        parent: Option<String>,
     },
     Tool(ToolCall),
     Plan(Vec<PlanEntry>),
@@ -109,6 +116,10 @@ pub struct ChatView {
     scroll: ScrollHandle,
     /// Keep the newest item in view; turned off when the user scrolls up.
     follow: bool,
+    /// The first item of the current (or last) prompt turn.
+    turn_start: usize,
+    /// The subagent shown instead of the agent's own transcript (its launch call id).
+    focus: Option<String>,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -172,6 +183,8 @@ impl ChatView {
             diff: None,
             scroll: ScrollHandle::new(),
             follow: true,
+            turn_start: 0,
+            focus: None,
             _tasks: vec![pump],
             _subscriptions: subscriptions,
         };
@@ -192,13 +205,15 @@ impl ChatView {
     /// The latest thing worth showing in a one-line summary (overview cards).
     pub fn last_line(&self) -> Option<SharedString> {
         self.items.iter().rev().find_map(|item| match item {
-            Item::Agent { text, .. } => text
+            Item::Agent {
+                text, parent: None, ..
+            } => text
                 .lines()
                 .rev()
                 .map(str::trim)
                 .find(|l| !l.is_empty())
                 .map(|l| SharedString::from(l.to_owned())),
-            Item::Tool(call) => Some(call.title.clone().into()),
+            Item::Tool(call) if call.parent.is_none() => Some(call.title.clone().into()),
             Item::Permission {
                 title,
                 outcome: None,
@@ -206,6 +221,97 @@ impl ChatView {
             } => Some(format!("Wants to: {title}").into()),
             _ => None,
         })
+    }
+
+    /// The subagents launched in the current (or last) turn.
+    pub fn subagents(&self) -> Vec<Subagent> {
+        let pending = self.pending();
+        let calls = self.items[self.turn_start.min(self.items.len())..]
+            .iter()
+            .filter_map(|item| match item {
+                Item::Tool(call) => Some(call),
+                _ => None,
+            });
+        subagents(calls, pending)
+    }
+
+    /// Shows subagent `id`'s transcript (its launch call id), or the agent's own with `None`.
+    pub fn focus_subagent(&mut self, id: Option<&str>, cx: &mut Context<Self>) {
+        let id = id.filter(|id| self.launch(id).is_some_and(ToolCall::is_subagent));
+        self.focus = id.map(str::to_owned);
+        self.follow = true;
+        cx.notify();
+    }
+
+    /// The tool call `id`, if reported.
+    fn launch(&self, id: &str) -> Option<&ToolCall> {
+        match self.items.get(*self.tools.get(id)?)? {
+            Item::Tool(call) => Some(call),
+            _ => None,
+        }
+    }
+
+    /// The subagent `id`, wherever it was launched in the session.
+    fn subagent(&self, id: &str) -> Option<Subagent> {
+        let pending = self.pending();
+        let calls = self.items.iter().filter_map(|item| match item {
+            Item::Tool(call) => Some(call),
+            _ => None,
+        });
+        subagents(calls, pending).into_iter().find(|s| s.id == id)
+    }
+
+    fn pending(&self) -> Option<PendingPermission<'_>> {
+        self.pending_permission()
+            .and_then(|i| match &self.items[i] {
+                Item::Permission { request, title, .. } => Some(PendingPermission {
+                    call: &request.tool_call,
+                    title: title.as_ref(),
+                }),
+                _ => None,
+            })
+    }
+
+    /// The top-level subagent item `index` belongs to; `None` for the agent's own items.
+    fn owner(&self, index: usize) -> Option<&str> {
+        let parent = match self.items.get(index)? {
+            Item::Agent { parent, .. } | Item::Thought { parent, .. } => parent.as_deref(),
+            Item::Tool(call) => call.parent.as_deref(),
+            Item::Permission { request, .. } => request.tool_call.parent.as_deref().or_else(|| {
+                self.launch(&request.tool_call.id)
+                    .and_then(|c| c.parent.as_deref())
+            }),
+            Item::User(_) | Item::Plan(_) | Item::Notice { .. } => None,
+        };
+        owner(parent, |id| self.launch(id))
+    }
+
+    /// Shown in the current view. Permission prompts also show in the agent's own transcript:
+    /// the whole agent waits on them.
+    fn visible(&self, index: usize) -> bool {
+        let owner = self.owner(index);
+        match &self.focus {
+            None => owner.is_none() || matches!(self.items[index], Item::Permission { .. }),
+            Some(focus) => owner == Some(focus.as_str()),
+        }
+    }
+
+    /// The index of the latest item from `parent` if it is text of the same kind, else `None`.
+    fn open_text(&self, parent: Option<&str>, thought: bool) -> Option<usize> {
+        let (i, item) = self.items.iter().enumerate().rev().find(|(_, item)| {
+            let from = match item {
+                Item::Agent { parent, .. } | Item::Thought { parent, .. } => parent.as_deref(),
+                Item::Tool(call) => call.parent.as_deref(),
+                Item::Permission { request, .. } => request.tool_call.parent.as_deref(),
+                Item::User(_) | Item::Plan(_) | Item::Notice { .. } => None,
+            };
+            from == parent
+        })?;
+        match item {
+            Item::Agent { .. } if !thought => Some(i),
+            Item::Thought { .. } if thought => Some(i),
+            _ => None,
+        }
     }
 
     /// Sends `text` as the next prompt. Fails while a turn runs or after the agent exited.
@@ -224,6 +330,7 @@ impl ChatView {
             );
         }
         self.session.prompt(text)?;
+        self.turn_start = self.items.len();
         self.items.push(Item::User(text.to_owned().into()));
         self.running = true;
         self.turn_done = false;
@@ -316,7 +423,9 @@ impl ChatView {
     }
 
     fn on_escape(&mut self, _: &ChatEscape, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.pending_permission() {
+        if self.focus.is_some() {
+            self.focus_subagent(None, cx);
+        } else if let Some(index) = self.pending_permission() {
             let option = self.first_option(index, |k| k == PermissionKind::RejectOnce);
             self.answer(index, option, cx);
         } else if self.running {
@@ -480,25 +589,41 @@ impl ChatView {
 
     fn apply_update(&mut self, update: SessionUpdate, cx: &mut Context<Self>) {
         match update {
-            SessionUpdate::AgentMessage(chunk) => {
-                if let Some(Item::Agent { text, view }) = self.items.last_mut() {
-                    text.push_str(&chunk);
-                    view.update(cx, |state, cx| state.push_str(&chunk, cx));
-                } else {
-                    let view = cx.new(|cx| TextViewState::markdown(&chunk, cx));
-                    self.items.push(Item::Agent { text: chunk, view });
+            // Parallel subagents interleave: a chunk continues the latest text of its sender.
+            SessionUpdate::AgentMessage {
+                text: chunk,
+                parent,
+            } => match self.open_text(parent.as_deref(), false) {
+                Some(i) => {
+                    if let Some(Item::Agent { text, view, .. }) = self.items.get_mut(i) {
+                        text.push_str(&chunk);
+                        view.update(cx, |state, cx| state.push_str(&chunk, cx));
+                    }
                 }
-            }
-            SessionUpdate::AgentThought(chunk) => {
-                if let Some(Item::Thought { text, .. }) = self.items.last_mut() {
-                    text.push_str(&chunk);
-                } else {
-                    self.items.push(Item::Thought {
+                None => {
+                    let view = cx.new(|cx| TextViewState::markdown(&chunk, cx));
+                    self.items.push(Item::Agent {
                         text: chunk,
-                        open: false,
+                        view,
+                        parent,
                     });
                 }
-            }
+            },
+            SessionUpdate::AgentThought {
+                text: chunk,
+                parent,
+            } => match self.open_text(parent.as_deref(), true) {
+                Some(i) => {
+                    if let Some(Item::Thought { text, .. }) = self.items.get_mut(i) {
+                        text.push_str(&chunk);
+                    }
+                }
+                None => self.items.push(Item::Thought {
+                    text: chunk,
+                    open: false,
+                    parent,
+                }),
+            },
             SessionUpdate::UserMessage(chunk) => {
                 if let Some(Item::User(text)) = self.items.last_mut() {
                     *text = format!("{text}{chunk}").into();

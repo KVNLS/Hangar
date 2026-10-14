@@ -5,10 +5,12 @@ use hangar_core::Timestamp;
 
 use super::status::age_label;
 use super::*;
+use crate::chat_view::{ChatView, subagent_state};
 use crate::ui::components::{
     AgentMark, Delta, Segmented, StateGlyph, UiButton, card, state_colors,
 };
 use gpui_kit::component::Icon;
+use hangar_agents::acp::subagents::{Subagent, SubagentStatus};
 
 use crate::ui::{ActiveTokens as _, TypeScale as _};
 
@@ -44,6 +46,27 @@ pub(super) fn card_action_tinted(state: AgentState) -> bool {
     )
 }
 
+/// Subagent rows shown on a card before "+N more".
+const MAX_SUBAGENT_ROWS: usize = 4;
+
+/// "3 subagents · 1 done · 1 running · 1 waiting for approval"; zero counts are left out.
+fn subagent_summary(list: &[Subagent]) -> String {
+    let n = list.len();
+    let mut parts = vec![format!("{n} subagent{}", if n == 1 { "" } else { "s" })];
+    for (status, label) in [
+        (SubagentStatus::Done, "done"),
+        (SubagentStatus::Running, "running"),
+        (SubagentStatus::Approval, "waiting for approval"),
+        (SubagentStatus::Failed, "failed"),
+    ] {
+        let count = list.iter().filter(|s| s.status == status).count();
+        if count > 0 {
+            parts.push(format!("{count} {label}"));
+        }
+    }
+    parts.join(" · ")
+}
+
 impl HangarApp {
     fn run_card_action(
         &mut self,
@@ -69,6 +92,107 @@ impl HangarApp {
             let agent = self.agent_setup.agent.to_string();
             self.start_session(id, agent, true, window, cx).detach();
         }
+    }
+
+    fn chat_view(&self, id: WorkspaceId) -> Option<&Entity<ChatView>> {
+        match &self.live.sessions.get(&id)?.surface {
+            AgentSurface::Chat { view, .. } => Some(view),
+            _ => None,
+        }
+    }
+
+    fn subagent_block(
+        &self,
+        id: WorkspaceId,
+        list: &[Subagent],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = cx.tokens();
+        let rows = list.iter().take(MAX_SUBAGENT_ROWS).map(|sub| {
+            let sub_id = sub.id.clone();
+            h_flex()
+                .id(SharedString::from(format!("overview-sub-{id}-{}", sub.id)))
+                .gap_2()
+                .px_2()
+                .py(px(6.))
+                .items_start()
+                .border_t_1()
+                .border_color(t.line)
+                .hover(|s| s.bg(t.hover))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.select_workspace(id, window, cx);
+                    this.set_screen(Screen::Workspace, window, cx);
+                    if let Some(view) = this.chat_view(id).cloned() {
+                        view.update(cx, |view, cx| view.focus_subagent(Some(&sub_id), cx));
+                    }
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .h(px(18.))
+                        .w(px(14.))
+                        .items_center()
+                        .justify_center()
+                        .child(StateGlyph::new(subagent_state(sub.status))),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().type_body().truncate().child(sub.name.clone()))
+                        .children(sub.activity.clone().map(|a| {
+                            div()
+                                .type_mono_small()
+                                .text_color(t.tx3)
+                                .truncate()
+                                .child(a)
+                        })),
+                )
+                .child(
+                    div().flex().h(px(18.)).items_center().child(
+                        Icon::new(Lucide::ChevronRight)
+                            .size(px(12.))
+                            .text_color(t.tx3),
+                    ),
+                )
+        });
+        let more = list.len().saturating_sub(MAX_SUBAGENT_ROWS);
+        v_flex()
+            .rounded(px(4.))
+            .border_1()
+            .border_color(t.line)
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .px_2()
+                    .py(px(5.))
+                    .items_center()
+                    .bg(t.panel)
+                    .child(Icon::new(Lucide::GitFork).size(px(12.)).text_color(t.tx3))
+                    .child(
+                        div()
+                            .type_secondary()
+                            .text_color(t.tx2)
+                            .truncate()
+                            .child(subagent_summary(list)),
+                    ),
+            )
+            .children(rows)
+            .when(more > 0, |this| {
+                this.child(
+                    div()
+                        .px_2()
+                        .py(px(5.))
+                        .border_t_1()
+                        .border_color(t.line)
+                        .type_mono_small()
+                        .text_color(t.tx3)
+                        .child(format!("+{more} more")),
+                )
+            })
+            .into_any_element()
     }
 
     fn overview_card(&self, ws: &Workspace, cx: &mut Context<Self>) -> AnyElement {
@@ -97,6 +221,10 @@ impl HangarApp {
                 }
             });
         let counts = self.diff_counts(id, cx);
+        let subagents = self
+            .chat_view(id)
+            .map(|v| v.read(cx).subagents())
+            .unwrap_or_default();
         let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
         let (action_label, action) = card_action(state);
         let (action_fg, action_bg, action_border) = if card_action_tinted(state) {
@@ -161,6 +289,9 @@ impl HangarApp {
                     .truncate()
                     .child(last),
             )
+            .when(!subagents.is_empty(), |this| {
+                this.child(self.subagent_block(id, &subagents, cx))
+            })
             .child(
                 h_flex()
                     .gap_2()
@@ -219,8 +350,26 @@ impl HangarApp {
             .collect();
         let needs_you = states.iter().filter(|s| s.needs_you()).count();
         let to_review = states.iter().filter(|s| **s == AgentState::Review).count();
+        let subagents_running: usize = workspaces
+            .iter()
+            .filter_map(|ws| self.chat_view(ws.id))
+            .map(|v| {
+                v.read(cx)
+                    .subagents()
+                    .iter()
+                    .filter(|s| {
+                        matches!(s.status, SubagentStatus::Running | SubagentStatus::Approval)
+                    })
+                    .count()
+            })
+            .sum();
+        let subagents = if subagents_running > 0 {
+            format!(" · {subagents_running} subagents running")
+        } else {
+            String::new()
+        };
         let summary = format!(
-            "{} agent{} · {needs_you} need you · {to_review} to review",
+            "{} agent{}{subagents} · {needs_you} need you · {to_review} to review",
             workspaces.len(),
             if workspaces.len() == 1 { "" } else { "s" }
         );
