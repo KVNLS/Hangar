@@ -94,7 +94,7 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
 6. **`Device::capabilities()`** — done
    - Declared per backend, checked by `devices::contract`, read by the device panel (buttons,
      rotate, shutdown) and by MCP input, which now gets a typed `Unsupported`.
-7. **Split `HangarApp` and `DevicePool`** — started
+7. **Split `HangarApp` and `DevicePool`** — done (on-screen checks pending)
    - Done: `HangarApp` groups its state into `Layout`, `AgentSetup`, `LiveState` and
      `WorkState` (55 fields to 14), field paths only.
    - Done: the agent queue and attention policies live in `usecases::agents`; `app` only applies
@@ -111,8 +111,16 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
      `DevicePool` entity keeps its API and only feeds it and runs its commands through
      `DeviceCatalog` and `HostMonitor` on the background executor. To check on macOS with the dev
      hooks and real simulators/emulators before merging.
-   - Next (M10 in PLAN.md): make those groups entities (controllers) with services passed in, so
-     views do no I/O.
+   - Done (M10, shell side): views do no store or process I/O. Run configs, the saved chat, session
+     cost, the usage ledger and settings and the co-author trailer are `app::ops` functions
+     (`ops/run_config.rs`, `ops/chats.rs`, tested in `ops/tests/`) run on the background executor
+     (`HangarApp::persist` or a spawned task); agent `--version` is `adapters::program_version`.
+     `architecture.rs` checks that views call no settings or ledger method. `HangarApp` has 14
+     fields: the pool, the device panel and the dev device limit form `Devices` (it loads the pool
+     with the store and points pool and panel at the focused workspace), the toast joins `Layout`,
+     attention joins `LiveState`. Services stay passed in, not looked up: `DevicePool` and
+     `ChangesPanel` get the store when it opens. The groups did not become GPUI entities; they
+     share too much state with the shell for an entity to simplify anything.
 8. **Docs and cleanup** — done for this round: PLAN.md crate table, CLAUDE.md rules, large test
    modules moved to sibling files.
    - File layout (2026-10-08): `foo.rs` next to `foo/` everywhere (no `mod.rs`), large unit-test
@@ -129,7 +137,7 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
   from `core::device`; the rest (`Device`, `LogStream`, `android`, `simctl`, `ios`, ...) is
   re-exported by `adapters::devices` (git helpers by `adapters::vcs`), so `app` still uses those
   types, only through one module. `architecture.rs` enforces it.
-- [ ] `HangarApp` has at most 15 fields (18 again as of M10).
+- [x] `HangarApp` has at most 15 fields (14 as of M10).
 - [x] No source file over about 800 lines (M10 split).
 - [x] Every port is tested against its real adapter.
 
