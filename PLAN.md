@@ -105,11 +105,22 @@ Git access is the `git` CLI with porcelain output, not a library.
   backends, private-backend `Lock`/`VolumeUp`/`VolumeDown` and `send_text` through Indigo HID
   (spikes/m5-ios-notes.md).
 
+- M4 Android: SDK discovery, headless emulator boot/shutdown, gRPC frames/input (adb fallback), device panel
+  with Boot/Shutdown, Back/Home/Apps/Power/Volume, keyboard text + `Input::Key`, rotation with landscape-aware
+  input (spikes/m4-android-notes.md).
+- M5 panel: iOS boot/shutdown from the panel (all simulators listed, booted first), Home/Lock/Volume, keyboard
+  text + keys. Rotation not available on iOS (Xcode 27).
+- Device logs: `Device::logs` stream (adb logcat, simctl log stream) and a logs pane in the device panel
+  (spikes/device-logs-notes.md).
+
 ## Remaining gaps
 - Archived rows: click does nothing (restore via menu). Layout saved without debounce.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
 - Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
+- Devices: device panel controls, logs pane and Rotate never checked visually (no screen capture in agent
+  sessions); Android Lock/Volume not run live; picker key for running emulators is the adb serial (changes
+  per boot); no boot progress; logs pane fixed height, no horizontal scroll.
 
 ## Next
-- Then M4 Android device panel.
+- Manual pass over the device panel (both platforms), then M6 mobile run loop.
