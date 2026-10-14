@@ -37,7 +37,17 @@ use crate::setting_keys;
 use backend::Target;
 use policy::{Assignment, LeaseQueue, Limit};
 
-/// How often memory pressure, lease timeouts and the cap are checked.
+#[cfg(target_os = "macos")]
+async fn booted_simulators() -> hangar_devices::Result<Vec<String>> {
+    hangar_devices::simctl::booted_udids()
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn booted_simulators() -> hangar_devices::Result<Vec<String>> {
+    Ok(Vec::new())
+}
+
+/// How often memory pressure, lease timeouts, the cap and open simulators are checked.
 const MONITOR_TICK: Duration = Duration::from_secs(10);
 /// How often a boot waiting for a free slot looks again.
 const SLOT_POLL: Duration = Duration::from_secs(1);
@@ -262,8 +272,23 @@ impl DevicePool {
                     .background_executor()
                     .spawn(async { capacity::pressure_with_override() })
                     .await;
+                let Ok(open) = this.update(cx, |pool, _| pool.open_simulators()) else {
+                    break;
+                };
+                let booted = if open.is_empty() {
+                    None
+                } else {
+                    Some(cx.background_executor().spawn(booted_simulators()).await)
+                };
                 if this
-                    .update(cx, |pool, cx| pool.on_monitor(pressure, cx))
+                    .update(cx, |pool, cx| {
+                        pool.on_monitor(pressure, cx);
+                        match booted {
+                            Some(Ok(booted)) => pool.close_gone_simulators(&booted, cx),
+                            Some(Err(err)) => tracing::debug!(target: "device_pool", "cannot list booted simulators: {err}"),
+                            None => {}
+                        }
+                    })
                     .is_err()
                 {
                     break;
