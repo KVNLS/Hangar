@@ -71,6 +71,10 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Device and changes are tabs of one right panel.
+        if open && self.device.open {
+            self.set_device_open(false, window, cx);
+        }
         if self.changes.open != open {
             self.changes.open = open;
             tracing::info!(open, "changes panel");
@@ -154,6 +158,9 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if open && self.changes.open {
+            self.set_changes_open(false, window, cx);
+        }
         if self.device.open != open {
             self.device.open = open;
             tracing::info!(open, "device panel");

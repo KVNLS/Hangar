@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::Icon;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::TextareaState;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, Theme, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, StyledExt as _, Theme, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -30,11 +30,14 @@ use super::model::{
 use super::review::{ReviewInfo, ReviewTarget, StageState};
 pub use actions::Busy;
 
-const LIST_ROW_HEIGHT: f32 = 22.;
-const DIFF_ROW_HEIGHT: f32 = 18.;
+use crate::ui::components::{Delta, UiButton};
+use crate::ui::{ActiveTokens as _, FONT_MONO, TypeScale as _};
+
+const LIST_ROW_HEIGHT: f32 = 28.;
+const DIFF_ROW_HEIGHT: f32 = 19.;
 /// File list rows shown before it scrolls.
 const LIST_MAX_ROWS: usize = 12;
-const GUTTER_WIDTH: f32 = 40.;
+const GUTTER_WIDTH: f32 = 36.;
 
 pub enum ChangesEvent {
     Close,
@@ -332,89 +335,69 @@ impl ChangesPanel {
         }
     }
 
+    /// `branch → base` with the totals and a refresh button; errors below it.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        h_flex()
-            .h_8()
-            .px_2()
+        let t = cx.tokens();
+        let diff = self.source.as_ref().map(|s| s.diff.read(cx));
+        let summary = diff.and_then(|d| d.summary().cloned());
+        let error = diff.and_then(|d| d.error().cloned());
+        let line = h_flex()
+            .h(px(36.))
+            .px_3()
             .gap_2()
             .flex_shrink_0()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .text_xs()
-            .child(div().font_semibold().child("Changes"))
-            .when_some(self.source.as_ref(), |this, source| {
-                this.child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.muted_foreground)
-                        .child(source.name.clone()),
-                )
+            .font_family(FONT_MONO)
+            .text_size(px(11.))
+            .text_color(t.tx2)
+            .map(|this| match (&self.source, &summary) {
+                (None, _) => this.child("No workspace"),
+                (Some(_), None) => this.child("Computing diff…"),
+                (Some(source), Some(summary)) => this
+                    .child(Icon::new(Lucide::GitBranch).size(px(12.)))
+                    .child(
+                        div().min_w_0().truncate().text_color(t.tx).child(
+                            summary
+                                .status
+                                .branch
+                                .clone()
+                                .unwrap_or_else(|| source.name.to_string()),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(t.tx3)
+                            .child(format!("→ {}", short_sha(&summary.merge_base))),
+                    ),
             })
             .child(div().flex_1())
+            .when_some(summary.as_ref(), |this, summary| {
+                let n = |v: u64| usize::try_from(v).unwrap_or(usize::MAX);
+                this.child(Delta::new(n(summary.insertions), n(summary.deletions)))
+            })
             .when(self.source.is_some(), |this| {
                 this.child(
-                    Button::new("changes-refresh")
+                    UiButton::new("changes-refresh")
+                        .icon(Lucide::RefreshCw)
                         .ghost()
-                        .xsmall()
-                        .icon(IconName::RefreshCw)
+                        .small()
                         .tooltip("Recompute the diff")
                         .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                 )
-            })
-            .child(
-                Button::new("changes-close")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::PanelRightClose)
-                    .tooltip("Hide changes (⌘⇧D)")
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangesEvent::Close))),
-            )
-    }
-
-    fn render_summary(&self, diff: &WorkspaceDiff, cx: &App) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        let line = h_flex()
-            .px_2()
-            .py_1()
-            .gap_2()
-            .flex_shrink_0()
-            .text_xs()
-            .text_color(theme.muted_foreground);
-        let line = match diff.summary() {
-            None => line.child("Computing diff…"),
-            Some(summary) => line
-                .when_some(summary.status.branch.clone(), |this, branch| {
-                    this.child(div().text_color(theme.foreground).truncate().child(branch))
-                })
-                .child(format!("base {}", short_sha(&summary.merge_base)))
-                .child(format!(
-                    "{} file{}",
-                    summary.files,
-                    if summary.files == 1 { "" } else { "s" }
-                ))
-                .child(
-                    div()
-                        .text_color(theme.success)
-                        .child(format!("+{}", summary.insertions)),
-                )
-                .child(
-                    div()
-                        .text_color(theme.danger)
-                        .child(format!("−{}", summary.deletions)),
-                ),
-        };
+            });
         v_flex()
+            .flex_shrink_0()
+            .border_b_1()
+            .border_color(t.line)
             .child(line)
-            .when_some(diff.error().cloned(), |this, err| {
+            .when_some(error, |this, err| {
                 this.child(
                     div()
-                        .px_2()
-                        .pb_1()
-                        .text_xs()
-                        .text_color(theme.danger)
+                        .px_3()
+                        .pb_1p5()
+                        .text_size(px(11.))
+                        .text_color(t.red)
                         .child(err),
                 )
             })
@@ -424,8 +407,10 @@ impl ChangesPanel {
         let count = self.list.len();
         let height = px(LIST_ROW_HEIGHT * count.min(LIST_MAX_ROWS) as f32);
         div()
-            .h(height)
+            .h(height + px(8.))
             .flex_shrink_0()
+            .px_1p5()
+            .py_1()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
@@ -457,15 +442,16 @@ impl ChangesPanel {
             .id(("changes-file", ix))
             .h(px(LIST_ROW_HEIGHT))
             .w_full()
-            .px_2()
+            .px_1p5()
             .gap_2()
             .items_center()
-            .text_xs();
+            .rounded(px(4.))
+            .text_size(px(12.));
         match entry {
             ListEntry::Header { group, count } => row
-                .text_color(theme.muted_foreground)
-                .font_semibold()
-                .child(format!("{} ({count})", group.label()))
+                .text_color(cx.tokens().tx3)
+                .type_label()
+                .child(format!("{} ({count})", group.label().to_uppercase()))
                 .into_any_element(),
             ListEntry::File(file) => {
                 let selected = self.selected.as_deref() == Some(file.path.as_path());
@@ -506,6 +492,8 @@ impl ChangesPanel {
                         div()
                             .w_3()
                             .flex_shrink_0()
+                            .font_family(FONT_MONO)
+                            .text_size(px(10.))
                             .font_semibold()
                             .text_color(status_color(file.status, cx))
                             .child(status_letter(file.status)),
@@ -516,17 +504,16 @@ impl ChangesPanel {
                             .min_w_0()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .child(div().flex_shrink_0().child(name))
                             .when(!dir.is_empty(), |this| {
                                 this.child(
                                     div()
-                                        .ml_2()
                                         .min_w_0()
                                         .truncate()
-                                        .text_color(theme.muted_foreground)
-                                        .child(dir),
+                                        .text_color(cx.tokens().tx3)
+                                        .child(format!("{dir}/")),
                                 )
-                            }),
+                            })
+                            .child(div().flex_shrink_0().child(name)),
                     )
                     .child(counts(file, cx))
                     .into_any_element()
@@ -553,12 +540,14 @@ impl ChangesPanel {
         };
         let file = &shown.file;
         let title = h_flex()
-            .h_8()
-            .px_2()
+            .h(px(28.))
+            .px(px(10.))
             .gap_2()
             .flex_shrink_0()
             .items_center()
-            .text_xs()
+            .font_family(FONT_MONO)
+            .text_size(px(11.))
+            .text_color(cx.tokens().tx2)
             .border_b_1()
             .border_color(theme.border)
             .child(
@@ -594,8 +583,9 @@ impl ChangesPanel {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_size(px(12.))
+                    .bg(cx.tokens().app)
+                    .font_family(FONT_MONO)
+                    .text_size(px(11.5))
                     .child(list),
             )
             .into_any_element()
@@ -619,12 +609,10 @@ impl Render for ChangesPanel {
                 .into_any_element(),
             Some(source) => {
                 let diff = source.diff.read(cx);
-                let summary = self.render_summary(diff, cx).into_any_element();
                 let empty = diff.summary().is_some() && self.list.is_empty();
                 v_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(summary)
                     .children(review)
                     .when(empty, |this| {
                         this.child(
@@ -644,14 +632,14 @@ impl Render for ChangesPanel {
         };
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(cx.tokens().panel)
             .child(header)
             .child(body)
     }
 }
 
 fn render_row(shown: &Shown, ix: usize, cx: &App) -> Option<AnyElement> {
-    let theme = cx.theme();
+    let t = cx.tokens();
     let row = h_flex()
         .h(px(DIFF_ROW_HEIGHT))
         .min_w_full()
@@ -664,33 +652,33 @@ fn render_row(shown: &Shown, ix: usize, cx: &App) -> Option<AnyElement> {
             .flex_shrink_0()
             .pr_1()
             .text_right()
-            .text_color(theme.muted_foreground)
+            .text_color(t.tx3)
             .children(n.map(|n| n.to_string()))
     };
     let element = match *shown.rows.get(ix)? {
         DiffRow::Hunk { hunk } => {
             let hunk = shown.file.hunks.get(hunk)?;
-            row.bg(theme.secondary)
-                .text_color(theme.info)
+            row.bg(t.accbg)
+                .text_color(t.acc)
                 .child(div().w(px(GUTTER_WIDTH * 2. + 14.)).flex_shrink_0())
                 .child(hunk_header(hunk))
                 .into_any_element()
         }
         DiffRow::Notice(notice) => row
             .px_2()
-            .text_color(theme.muted_foreground)
+            .text_color(t.tx3)
             .child(notice.text())
             .into_any_element(),
         DiffRow::Line { hunk, line } => {
             let line = shown.file.hunks.get(hunk)?.lines.get(line)?;
             let (bg, sign, sign_color) = match line.kind {
-                LineKind::Added => (Some(theme.success.opacity(0.14)), "+", theme.success),
-                LineKind::Removed => (Some(theme.danger.opacity(0.14)), "−", theme.danger),
-                LineKind::Context | LineKind::NoNewlineAtEof => (None, " ", theme.muted_foreground),
+                LineKind::Added => (Some(t.addbg), "+", t.grn),
+                LineKind::Removed => (Some(t.delbg), "−", t.red),
+                LineKind::Context | LineKind::NoNewlineAtEof => (None, " ", t.tx3),
             };
             let body: AnyElement = if line.kind == LineKind::NoNewlineAtEof {
                 div()
-                    .text_color(theme.muted_foreground)
+                    .text_color(t.tx3)
                     .child("\\ No newline at end of file")
                     .into_any_element()
             } else {
@@ -723,34 +711,25 @@ fn render_row(shown: &Shown, ix: usize, cx: &App) -> Option<AnyElement> {
     Some(element)
 }
 
-fn counts(file: &FileDiff, cx: &App) -> impl IntoElement + use<> {
-    let theme = cx.theme();
-    h_flex()
-        .gap_1()
-        .flex_shrink_0()
-        .when(file.binary, |this| {
-            this.text_color(theme.muted_foreground).child("bin")
-        })
-        .when(!file.binary, |this| {
-            this.child(
-                div()
-                    .text_color(theme.success)
-                    .child(format!("+{}", file.insertions)),
-            )
-            .child(
-                div()
-                    .text_color(theme.danger)
-                    .child(format!("−{}", file.deletions)),
-            )
-        })
+fn counts(file: &FileDiff, cx: &App) -> AnyElement {
+    if file.binary {
+        return div()
+            .flex_none()
+            .font_family(FONT_MONO)
+            .text_size(px(11.))
+            .text_color(cx.tokens().tx3)
+            .child("bin")
+            .into_any_element();
+    }
+    Delta::new(file.insertions as usize, file.deletions as usize).into_any_element()
 }
 
 fn status_color(status: FileStatus, cx: &App) -> Hsla {
-    let theme = cx.theme();
+    let t = cx.tokens();
     match status {
-        FileStatus::Added | FileStatus::Untracked | FileStatus::Copied => theme.success,
-        FileStatus::Deleted | FileStatus::Unmerged => theme.danger,
-        FileStatus::Modified | FileStatus::Renamed | FileStatus::TypeChanged => theme.warning,
+        FileStatus::Added | FileStatus::Untracked | FileStatus::Copied => t.grn,
+        FileStatus::Deleted | FileStatus::Unmerged => t.red,
+        FileStatus::Modified | FileStatus::Renamed | FileStatus::TypeChanged => t.amb,
     }
 }
 

@@ -52,7 +52,7 @@ use dialogs::DeleteWorkspaceDialog;
 use view::agent_options;
 
 /// Width of the sidebar; the panes share the rest.
-const SIDEBAR_WIDTH: f32 = 260.;
+const SIDEBAR_WIDTH: f32 = 256.;
 /// How long a killed agent gets to exit before its worktree is removed.
 const KILL_GRACE: Duration = Duration::from_secs(3);
 /// The panes keep at least this much width when the changes panel is dragged wider.
@@ -69,7 +69,9 @@ actions!(
         ToggleSidebar,
         NewWorkspace,
         FilterWorkspaces,
-        AddProject
+        AddProject,
+        ShowDeviceTab,
+        ShowChangesTab
     ]
 );
 
@@ -82,6 +84,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-n", NewWorkspace, None),
         KeyBinding::new("cmd-p", FilterWorkspaces, None),
         KeyBinding::new("cmd-o", AddProject, None),
+        KeyBinding::new("cmd-1", ShowDeviceTab, None),
+        KeyBinding::new("cmd-2", ShowChangesTab, None),
     ]);
 }
 
@@ -402,6 +406,10 @@ impl HangarApp {
                             panel.set_visible(true, window, cx);
                         }
                     });
+                }
+                // One right panel, one tab: layouts saved before the merge may have both open.
+                if self.device.open {
+                    self.changes.open = false;
                 }
                 self.sync_diffs(cx);
                 if let Some(agent) = loaded.agent.filter(|a| agents::preset(a).is_some()) {

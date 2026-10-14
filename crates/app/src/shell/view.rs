@@ -3,8 +3,8 @@
 use gpui_kit::assets::IconName as Lucide;
 
 use super::*;
-use crate::ui::components::{EmptyState, StateGlyph, TabStyle, UiButton, UiTab};
-use crate::ui::{ActiveTokens as _, FONT_MONO, PANE_TAB_HEIGHT};
+use crate::ui::components::{CountBadge, EmptyState, StateGlyph, TabStyle, UiButton, UiTab};
+use crate::ui::{ActiveTokens as _, FONT_MONO, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT};
 
 impl Render for HangarApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -12,48 +12,7 @@ impl Render for HangarApp {
         for pane in 0..PANE_COUNT {
             panes = panes.child(resizable_panel().child(self.render_pane(pane, cx)));
         }
-        let changes = self.changes.open.then(|| {
-            div()
-                .relative()
-                .h_full()
-                .w(px(self.changes.width))
-                .flex_shrink_0()
-                .border_l_1()
-                .border_color(cx.theme().border)
-                .child(self.changes_panel.clone())
-                .child(
-                    div()
-                        .id("changes-resize")
-                        .absolute()
-                        .left(px(-3.))
-                        .top_0()
-                        .h_full()
-                        .w(px(6.))
-                        .cursor_col_resize()
-                        .on_drag(ChangesResize, |_, _, _, cx| cx.new(|_| ChangesResize)),
-                )
-        });
-        let device = self.device.open.then(|| {
-            div()
-                .relative()
-                .h_full()
-                .w(px(self.device.width))
-                .flex_shrink_0()
-                .border_l_1()
-                .border_color(cx.theme().border)
-                .child(self.device_panel.clone())
-                .child(
-                    div()
-                        .id("device-resize")
-                        .absolute()
-                        .left(px(-3.))
-                        .top_0()
-                        .h_full()
-                        .w(px(6.))
-                        .cursor_col_resize()
-                        .on_drag(DeviceResize, |_, _, _, cx| cx.new(|_| DeviceResize)),
-                )
-        });
+        let right_panel = self.render_right_panel(cx);
         let main = h_flex()
             .flex_1()
             .min_h_0()
@@ -61,8 +20,7 @@ impl Render for HangarApp {
                 this.child(self.render_sidebar(cx))
             })
             .child(div().flex_1().min_w_0().h_full().child(panes))
-            .children(changes)
-            .children(device);
+            .children(right_panel);
         v_flex()
             .id("hangar")
             .key_context("Hangar")
@@ -239,6 +197,100 @@ impl HangarApp {
             )
             .child(tab_bar)
             .child(body)
+    }
+
+    /// Device and changes as tabs of one right panel; each tab keeps its own width.
+    fn render_right_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let device_tab = self.device.open;
+        if !device_tab && !self.changes.open {
+            return None;
+        }
+        let t = cx.tokens();
+        let width = if device_tab {
+            self.device.width
+        } else {
+            self.changes.width
+        };
+        let files = self
+            .panes
+            .slot(self.panes.focused())
+            .and_then(|id| self.diff_counts(id, cx))
+            .map(|c| c.files)
+            .filter(|n| *n > 0);
+        let tabs = h_flex()
+            .flex_none()
+            .h(PANEL_TAB_HEIGHT)
+            .px_1p5()
+            .gap(px(2.))
+            .items_center()
+            .border_b_1()
+            .border_color(t.line)
+            .child(
+                UiTab::new("tab-device", TabStyle::Panel, "Device")
+                    .icon(Lucide::Smartphone)
+                    .kbd("⌘1")
+                    .active(device_tab)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.set_device_open(true, window, cx)),
+                    ),
+            )
+            .child(
+                UiTab::new("tab-changes", TabStyle::Panel, "Changes")
+                    .icon(Lucide::GitCommitHorizontal)
+                    .when_some(files, |this, n| {
+                        this.trailing(CountBadge::new(n.to_string()))
+                    })
+                    .kbd("⌘2")
+                    .active(!device_tab)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.set_changes_open(true, window, cx)),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                UiButton::new("right-panel-close")
+                    .icon(Lucide::PanelRightClose)
+                    .ghost()
+                    .small()
+                    .tooltip("Hide panel")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.set_device_open(false, window, cx);
+                        this.set_changes_open(false, window, cx);
+                    })),
+            );
+        let handle = div()
+            .id("right-panel-resize")
+            .absolute()
+            .left(px(-3.))
+            .top_0()
+            .h_full()
+            .w(px(6.))
+            .cursor_col_resize();
+        let handle = if device_tab {
+            handle.on_drag(DeviceResize, |_, _, _, cx| cx.new(|_| DeviceResize))
+        } else {
+            handle.on_drag(ChangesResize, |_, _, _, cx| cx.new(|_| ChangesResize))
+        };
+        Some(
+            v_flex()
+                .relative()
+                .h_full()
+                .w(px(width))
+                .flex_none()
+                .bg(t.panel)
+                .border_l_1()
+                .border_color(t.line)
+                .child(tabs)
+                .child(div().flex_1().min_h_0().map(|this| {
+                    if device_tab {
+                        this.child(self.device_panel.clone())
+                    } else {
+                        this.child(self.changes_panel.clone())
+                    }
+                }))
+                .child(handle)
+                .into_any_element(),
+        )
     }
 
     pub(super) fn agent_display_name(&self) -> String {
