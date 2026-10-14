@@ -913,6 +913,11 @@ impl DevicePanel {
     fn render_backend(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, view, reason) = self.shown(cx)?;
         let backend = view.read(cx).backend();
+        // A workspace device is not the base shown in the select: name it.
+        let backend = match self.workspace {
+            Some(_) => format!("{} · {backend}", view.read(cx).info().name),
+            None => backend.to_owned(),
+        };
         let t = cx.tokens();
         let (label, color, why) = match reason {
             None => (format!("backend: {backend}"), t.grn, None),
@@ -927,7 +932,7 @@ impl DevicePanel {
                 Some(why.clone()),
             ),
         };
-        let note = (backend == "simctl")
+        let note = (view.read(cx).backend() == "simctl")
             .then_some("simctl captures ~2 fps screenshots; input may be unavailable.");
         Some(
             v_flex()

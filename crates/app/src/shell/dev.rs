@@ -581,7 +581,7 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
     let shown = this.update_in(cx, |this, window, cx| {
         let settings = |tab| (Screen::Settings, Some(tab));
         let (screen, tab) = match name {
-            "workspace" => (Screen::Workspace, None),
+            "workspace" | "device" => (Screen::Workspace, None),
             "review" | "review-inline" => (Screen::Review, None),
             "overview" => (Screen::Overview, None),
             "settings" | "settings-agents" => settings(SettingsTab::Agents),
@@ -601,6 +601,7 @@ async fn dev_show(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWindow
                 .update(cx, |panel, cx| panel.set_split_view(split, cx));
         }
         match name {
+            "device" => this.set_device_open(true, window, cx),
             "palette" => this.open_palette(window, cx),
             "sheet" => match this.current_project() {
                 Some(project) => this.open_new_workspace(project, window, cx),
