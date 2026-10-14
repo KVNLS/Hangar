@@ -67,6 +67,15 @@ pub fn device_to_unit(x: f64, y: f64, screen_w_pt: f64, screen_h_pt: f64) -> (f6
     (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0))
 }
 
+/// Device points → integer device pixels (`point * scale`), clamped to the screen.
+pub fn device_to_pixels(x: f64, y: f64, screen: &crate::ScreenSpec) -> (i32, i32) {
+    let clamp = |v: f64, max_px: u32| -> i32 {
+        let max = f64::from(max_px.saturating_sub(1));
+        (v * screen.scale).round().clamp(0.0, max) as i32
+    };
+    (clamp(x, screen.width_px), clamp(y, screen.height_px))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +127,25 @@ mod tests {
     fn degenerate_sizes() {
         assert!(view_to_device(1.0, 1.0, 0.0, 0.0, 402.0, 874.0).is_none());
         assert_eq!(device_to_unit(10.0, 10.0, 0.0, 0.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn points_to_pixels() {
+        let s = crate::ScreenSpec {
+            width_px: 1280,
+            height_px: 2856,
+            scale: 3.0,
+        };
+        assert_eq!(device_to_pixels(100.0, 200.0, &s), (300, 600));
+        assert_eq!(
+            device_to_pixels(s.width_pt(), s.height_pt(), &s),
+            (1279, 2855)
+        );
+        assert_eq!(device_to_pixels(-1.0, 0.4, &s), (0, 1));
+        // A click mapped by view_to_device in a half-size view lands on the same pixel.
+        let (x, y) =
+            view_to_device(106.0, 238.0, 213.333, 476.0, s.width_pt(), s.height_pt()).unwrap();
+        assert_eq!(device_to_pixels(x, y, &s), (636, 1428));
     }
 
     #[test]
