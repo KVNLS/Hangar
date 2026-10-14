@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use hangar_core::changes::{Cost, DiffStat};
+use hangar_core::changes::{Cost, DiffStat, UsageEntry};
 use hangar_core::ports::{
     BranchTip, ChangeCounts, ListedWorktree, NewWorktree, PortError, PortResult, Store,
     VersionControl,
@@ -20,6 +20,7 @@ pub struct FakeStore {
     pub workspaces: Mutex<Vec<Workspace>>,
     pub sessions: Mutex<Vec<Session>>,
     pub settings: Mutex<HashMap<String, String>>,
+    pub usage: Mutex<Vec<UsageEntry>>,
     /// `insert_workspace` fails.
     pub refuse_workspaces: bool,
     /// `insert_session` fails.
@@ -151,6 +152,22 @@ impl Store for FakeStore {
             .ok_or_else(|| missing("session"))?;
         session.cost = Some(cost.clone());
         Ok(())
+    }
+    fn record_usage(&self, entry: &UsageEntry) -> PortResult<()> {
+        self.usage.lock().unwrap().push(entry.clone());
+        Ok(())
+    }
+    fn list_usage_since(&self, since: Timestamp) -> PortResult<Vec<UsageEntry>> {
+        let mut rows: Vec<UsageEntry> = self
+            .usage
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.at >= since)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|e| e.at);
+        Ok(rows)
     }
     fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
         Ok(self.settings.lock().unwrap().get(key).cloned())

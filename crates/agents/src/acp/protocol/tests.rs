@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn parses_turn_usage_as_claude_agent_acp_sends_it() {
+    let result = json!({
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 12, "outputTokens": 340, "cachedReadTokens": 21000,
+                  "cachedWriteTokens": 800, "totalTokens": 22152},
+        "_meta": {"quota": {
+            "token_count": {"totalTokens": 22152},
+            "model_usage": [
+                {"model": "claude-sonnet-4-5", "token_count": {"totalTokens": 22152, "inputTokens": 12}},
+                {"model": "claude-haiku-4-5", "token_count": {"totalTokens": 900}},
+                {"model": "", "token_count": {"totalTokens": 5}},
+                {"model": "broken"}
+            ]
+        }}
+    });
+    assert_eq!(
+        parse_turn_usage(&result),
+        Some(TurnUsage {
+            tokens: Some(TurnTokens {
+                input: 12,
+                output: 340,
+                cache_read: 21_000,
+                cache_write: 800,
+            }),
+            models: vec![
+                ("claude-sonnet-4-5".into(), 22_152),
+                ("claude-haiku-4-5".into(), 900),
+            ],
+        })
+    );
+    // An agent that only reports totals per model, or nothing at all.
+    let only_models = json!({"_meta": {"quota": {"model_usage": [
+        {"model": "gpt-5-codex", "token_count": {"totalTokens": 10}}
+    ]}}});
+    assert_eq!(parse_turn_usage(&only_models).unwrap().tokens, None);
+    assert_eq!(parse_turn_usage(&json!({"stopReason": "end_turn"})), None);
+    assert_eq!(
+        parse_turn_usage(&json!({"usage": {"inputTokens": "12"}})),
+        None
+    );
+}
+
+#[test]
 fn parses_chunks_and_non_text_blocks() {
     let u =
         json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"}});

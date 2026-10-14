@@ -11,7 +11,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::protocol::{
-    self, METHOD_NOT_FOUND, PermissionOption, SessionUpdate, StopReason, ToolCallUpdate,
+    self, METHOD_NOT_FOUND, PermissionOption, SessionUpdate, StopReason, ToolCallUpdate, TurnUsage,
+    parse_turn_usage,
 };
 use crate::UpdateHook;
 use crate::error::{Error, Result};
@@ -38,8 +39,11 @@ pub enum AcpEvent {
     Update(SessionUpdate),
     /// The agent waits for an answer through [`AcpConnection::answer_permission`].
     PermissionRequest(PermissionRequest),
-    /// The prompt turn finished.
-    TurnEnded(StopReason),
+    /// The prompt turn finished; `usage` when the agent reports what it spent.
+    TurnEnded {
+        reason: StopReason,
+        usage: Option<TurnUsage>,
+    },
     /// The prompt request failed; the turn is over.
     TurnFailed(String),
     /// A message that could not be understood. The connection stays up.
@@ -323,7 +327,10 @@ fn handle_response<W: Write>(shared: &Shared<W>, id: &Value, message: &Value) {
             Ok(result) => {
                 let reason = result["stopReason"].as_str().unwrap_or_default();
                 match StopReason::parse(reason) {
-                    Some(reason) => shared.emit(AcpEvent::TurnEnded(reason)),
+                    Some(reason) => shared.emit(AcpEvent::TurnEnded {
+                        reason,
+                        usage: parse_turn_usage(&result),
+                    }),
                     None => shared.emit(AcpEvent::TurnFailed(format!(
                         "unknown stop reason `{reason}`"
                     ))),

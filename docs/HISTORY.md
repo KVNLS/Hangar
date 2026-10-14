@@ -446,3 +446,21 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
     started yesterday and still running counts fully today. Seen on screen: "$0.27 live · $0.27 today",
     and "$0.27 today" again after a relaunch; card chip "ctx 4% · $0.27".
 
+## Usage & cost dashboard (2026-10-08, branch `cost-dashboard`)
+- **Ledger**: `core::changes::UsageEntry` (session, time, model, local, cost, `TokenCount`), schema v8
+  `usage` table (sessions that already had a cost become one row each, model unknown),
+  `Store::record_usage` / `list_usage_since`.
+- **Per-turn usage**: `acp::protocol::parse_turn_usage` reads the prompt response's `usage` and
+  `_meta.quota.model_usage` (claude-agent-acp, codex-acp); `AcpEvent::TurnEnded { reason, usage }`.
+  `SessionUsage::take_cost_delta` hands each reported amount out once (a restarted total included).
+- **Booking**: `ChatView::take_spend` after a turn ends (or a cost arrives between turns, or the agent
+  exits); `usecases::usage::book_turn` writes one row per model, splitting cost and tokens by each model's
+  token share, else one row for the `model` config option. `ollama/…` models are local.
+- **Settings › Usage & cost**: Day / Week / Month / Year (Monday weeks, local time) with ‹ › to step back;
+  cost, turns, tokens, local share and estimated saving; cost per hour/day/month bar chart
+  (gpui-component `BarChart`, per-model breakdown in the tooltip); per-model table; Local vs cloud card
+  with the reference model picker (auto: the priced cloud model with the most tokens) and an editable
+  $/Mtok saved as a custom price (`usage` setting). `usecases::usage::pricing::BUILT_IN`: Anthropic list
+  prices as of 2026-10-06. `HANGAR_DEV_SHOW=settings-usage`.
+- Seen on screen with seeded rows (Day view: $4.47, 6 turns, 11% local, ≈$1.07 saved vs Opus 5.5). Not run
+  live with a paying agent or with Ollama on this branch.

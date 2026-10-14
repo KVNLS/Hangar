@@ -2,6 +2,7 @@
 
 mod agents_tab;
 mod devices_tab;
+mod usage_tab;
 
 use std::cell::Cell;
 use std::io::Read as _;
@@ -31,14 +32,16 @@ pub(super) enum SettingsTab {
     #[default]
     Agents,
     Devices,
+    Usage,
     Appearance,
     Keybindings,
 }
 
 impl SettingsTab {
-    pub(super) const ALL: [SettingsTab; 4] = [
+    pub(super) const ALL: [SettingsTab; 5] = [
         Self::Agents,
         Self::Devices,
+        Self::Usage,
         Self::Appearance,
         Self::Keybindings,
     ];
@@ -47,6 +50,7 @@ impl SettingsTab {
         match self {
             Self::Agents => "Agents & providers",
             Self::Devices => "Devices",
+            Self::Usage => "Usage & cost",
             Self::Appearance => "Appearance",
             Self::Keybindings => "Keybindings",
         }
@@ -56,6 +60,7 @@ impl SettingsTab {
         match self {
             Self::Agents => Lucide::Bot,
             Self::Devices => Lucide::Smartphone,
+            Self::Usage => Lucide::ChartColumn,
             Self::Appearance => Lucide::SunMoon,
             Self::Keybindings => Lucide::Keyboard,
         }
@@ -122,6 +127,7 @@ pub(super) struct SettingsUi {
     _max_agents_sub: Subscription,
     /// The settings page's scroll position.
     pub(super) scroll: ScrollHandle,
+    pub(super) usage: usage_tab::UsageUi,
 }
 
 impl SettingsUi {
@@ -140,6 +146,7 @@ impl SettingsUi {
                 max_agents,
                 _max_agents_sub: max_agents_sub,
                 scroll: ScrollHandle::new(),
+                usage: usage_tab::UsageUi::new(window, cx),
             },
             sub,
         )
@@ -250,6 +257,9 @@ impl HangarApp {
             && self.agent_setup.ollama.status != ollama::OllamaStatus::Loading
         {
             self.refresh_ollama(window, cx);
+        }
+        if tab == SettingsTab::Usage {
+            self.load_usage(window, cx);
         }
         if tab == SettingsTab::Devices && !self.device_panel.read(cx).picker().listed() {
             self.device_panel
@@ -393,6 +403,7 @@ impl HangarApp {
         let page = match self.layout.settings_tab {
             SettingsTab::Agents => self.render_settings_agents(cx),
             SettingsTab::Devices => self.render_settings_devices(cx),
+            SettingsTab::Usage => self.render_settings_usage(cx),
             SettingsTab::Appearance => self.render_settings_appearance(cx),
             SettingsTab::Keybindings => self.render_settings_keys(cx),
         };

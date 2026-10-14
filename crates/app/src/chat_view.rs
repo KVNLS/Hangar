@@ -7,7 +7,9 @@ mod subagent;
 mod usage;
 
 pub use subagent::subagent_state;
-pub use usage::{costs_label, stored_cost, stored_costs_label, usage_label};
+pub use usage::{
+    cost_label, costs_label, stored_cost, stored_costs_label, turn_spend, usage_label,
+};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +22,8 @@ use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use hangar_agents::acp::approval::{self, ApprovalLevel};
 use hangar_agents::acp::protocol::{
-    AvailableCommand, ConfigOption, PermissionKind, PlanEntry, SessionUpdate, StopReason, ToolCall,
+    AvailableCommand, ConfigOption, Cost, PermissionKind, PlanEntry, SessionUpdate, StopReason,
+    ToolCall, TurnUsage,
 };
 use hangar_agents::acp::subagents::{PendingPermission, Subagent, owner, subagents};
 use hangar_agents::acp::usage::SessionUsage;
@@ -85,6 +88,14 @@ struct Outcome {
     label: SharedString,
 }
 
+/// What a chat spent since the shell last asked ([`ChatView::take_spend`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Spend {
+    pub cost: Option<Cost>,
+    pub turn: Option<TurnUsage>,
+    pub model: Option<String>,
+}
+
 /// Emitted by [`ChatView`].
 #[derive(Clone, Debug)]
 pub enum ChatEvent {
@@ -128,6 +139,10 @@ pub struct ChatView {
     /// Slash commands the agent offers (`/name` at the start of a prompt).
     commands: Vec<AvailableCommand>,
     usage: SessionUsage,
+    /// What the last turn spent, until the shell books it.
+    turn_usage: Option<TurnUsage>,
+    /// A turn ended since the shell last booked the spend.
+    turn_ended: bool,
     composer: Entity<TextareaState>,
     /// The last turn ended normally: a "Ready for review" card follows it while the workspace
     /// has changes.
@@ -213,6 +228,8 @@ impl ChatView {
             config: Vec::new(),
             commands: Vec::new(),
             usage: SessionUsage::default(),
+            turn_usage: None,
+            turn_ended: false,
             composer,
             turn_done: false,
             diff: None,
@@ -258,6 +275,27 @@ impl ChatView {
     /// Context use and cost as the agent last reported them.
     pub fn usage(&self) -> &SessionUsage {
         &self.usage
+    }
+
+    /// What was spent since the last call, once a turn ended or while idle (a cost reported
+    /// between turns), with the model the agent is set to. Mid-turn costs wait for the turn's
+    /// end so a turn is booked as one row.
+    pub fn take_spend(&mut self) -> Option<Spend> {
+        if self.running && !self.turn_ended && !self.exited {
+            return None;
+        }
+        self.turn_ended = false;
+        let cost = self.usage.take_cost_delta();
+        let turn = self.turn_usage.take();
+        if cost.is_none() && turn.is_none() {
+            return None;
+        }
+        let model = self
+            .config
+            .iter()
+            .find(|o| o.category.as_deref() == Some("model"))
+            .map(|o| o.current.clone());
+        Some(Spend { cost, turn, model })
     }
 
     /// The latest thing worth showing in a one-line summary (overview cards).
@@ -718,8 +756,10 @@ impl ChatView {
                     }
                 }
             }
-            AcpEvent::TurnEnded(reason) => {
+            AcpEvent::TurnEnded { reason, usage } => {
                 self.running = false;
+                self.turn_ended = true;
+                self.turn_usage = usage;
                 self.turn_done = reason == StopReason::EndTurn;
                 let note = match reason {
                     StopReason::EndTurn => None,

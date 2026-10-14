@@ -373,9 +373,13 @@ impl HangarApp {
                     }
                     let cost = view.read(cx).usage().cost();
                     this.save_session_cost(workspace_id, cost, window, cx);
+                    let spend = view.update(cx, |chat, _| chat.take_spend());
+                    this.book_spend(workspace_id, spend, window, cx);
                     cx.notify()
                 }
                 ChatEvent::Exited { code, stderr_tail } => {
+                    let spend = view.update(cx, |chat, _| chat.take_spend());
+                    this.book_spend(workspace_id, spend, window, cx);
                     if !stderr_tail.is_empty() {
                         tracing::info!(workspace = %workspace_id, "agent stderr: {stderr_tail}");
                     }
@@ -459,6 +463,38 @@ impl HangarApp {
             store
                 .record_session_cost(session, &cost)
                 .map_err(|err| anyhow!("failed to save the session's cost: {err}"))
+        });
+    }
+
+    /// Adds what the workspace's chat spent to the usage ledger.
+    fn book_spend(
+        &mut self,
+        workspace_id: WorkspaceId,
+        spend: Option<crate::chat_view::Spend>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(spend) = spend else {
+            return;
+        };
+        let Some(live) = self.live.sessions.get(&workspace_id) else {
+            return;
+        };
+        let rows = hangar_usecases::usage::book_turn(
+            live.session.id,
+            hangar_core::Timestamp::now(),
+            crate::chat_view::turn_spend(&spend),
+            spend.model.as_deref(),
+        );
+        if rows.is_empty() {
+            return;
+        }
+        self.persist(window, cx, move |store| {
+            rows.iter().try_for_each(|row| {
+                store
+                    .record_usage(row)
+                    .map_err(|err| anyhow!("failed to save usage: {err}"))
+            })
         });
     }
 

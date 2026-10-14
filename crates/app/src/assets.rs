@@ -15,6 +15,7 @@ gpui_kit::assets::icon_assets!(
         AtSign,
         Brain,
         Camera,
+        ChartColumn,
         Circle,
         CircleDot,
         Columns2,

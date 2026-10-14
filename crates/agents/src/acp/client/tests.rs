@@ -104,7 +104,13 @@ fn prompt_turn_streams_then_ends() {
             kind: "brand_new".into()
         })
     );
-    assert_eq!(next(&rx), AcpEvent::TurnEnded(StopReason::EndTurn));
+    assert_eq!(
+        next(&rx),
+        AcpEvent::TurnEnded {
+            reason: StopReason::EndTurn,
+            usage: None
+        }
+    );
 }
 
 #[test]

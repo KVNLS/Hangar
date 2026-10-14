@@ -175,7 +175,13 @@ fn scripted_agent_handshake_and_turn() {
     session.prompt("go").expect("prompt");
     let wait = |rx: &Receiver<AcpEvent>| rx.recv_timeout(Duration::from_secs(5)).expect("event");
     assert!(matches!(wait(rx), AcpEvent::Update(_)));
-    assert_eq!(wait(rx), AcpEvent::TurnEnded(protocol::StopReason::EndTurn));
+    assert_eq!(
+        wait(rx),
+        AcpEvent::TurnEnded {
+            reason: protocol::StopReason::EndTurn,
+            usage: None
+        }
+    );
     session.kill();
     assert!(matches!(wait(rx), AcpEvent::Exited { .. }));
     assert!(session.wait_for_exit(Duration::from_secs(1)));

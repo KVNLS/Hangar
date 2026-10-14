@@ -705,3 +705,96 @@ fn a_session_records_its_cost() {
     );
     assert!(store.record_session_cost(SessionId::new(), &cost).is_err());
 }
+
+fn usage_entry(session_id: SessionId, at: i64, model: &str, amount: f64) -> UsageEntry {
+    UsageEntry {
+        session_id,
+        at: Timestamp(at),
+        model: Some(model.to_owned()),
+        local: model.starts_with("ollama/"),
+        cost: Some(Cost {
+            amount,
+            currency: "USD".into(),
+        }),
+        tokens: Some(TokenCount {
+            input: 1_200,
+            output: 300,
+            cache_read: 50_000,
+            cache_write: 0,
+        }),
+    }
+}
+
+#[test]
+fn usage_rows_round_trip_from_a_time_on() {
+    let store = store();
+    let p = project("/repos/usage");
+    store.insert_project(&p).unwrap();
+    let w = workspace(p.id, "usage");
+    store.insert_workspace(&w).unwrap();
+    let s = Session::new(w.id, AgentKind::Claude);
+    store.insert_session(&s).unwrap();
+    let old = usage_entry(s.id, 1_000, "claude-sonnet-4-5", 0.1);
+    let later = usage_entry(s.id, 3_000, "claude-opus-4-1", 0.4);
+    let local = UsageEntry {
+        cost: None,
+        tokens: None,
+        ..usage_entry(s.id, 2_000, "ollama/qwen3-coder:30b", 0.0)
+    };
+    store.record_usage(&later).unwrap();
+    store.record_usage(&old).unwrap();
+    store.record_usage(&local).unwrap();
+    assert_eq!(
+        store.list_usage_since(Timestamp(0)).unwrap(),
+        vec![old, local.clone(), later.clone()]
+    );
+    assert_eq!(
+        store.list_usage_since(Timestamp(2_000)).unwrap(),
+        vec![local, later]
+    );
+    assert!(
+        store
+            .record_usage(&usage_entry(SessionId::new(), 1, "x", 0.0))
+            .is_err()
+    );
+    store.delete_workspace(w.id).unwrap();
+    assert!(store.list_usage_since(Timestamp(0)).unwrap().is_empty());
+}
+
+#[test]
+fn v7_session_costs_become_usage_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hangar.db");
+    let p = project("/repos/v7");
+    let w = workspace(p.id, "Old");
+    let mut paid = Session::new(w.id, AgentKind::Claude);
+    paid.ended_at = Some(Timestamp(5_000));
+    paid.cost = Some(Cost {
+        amount: 1.5,
+        currency: "USD".into(),
+    });
+    let free = Session::new(w.id, AgentKind::Claude);
+    {
+        let store = Store::open(&path).unwrap();
+        store.insert_project(&p).unwrap();
+        store.insert_workspace(&w).unwrap();
+        store.insert_session(&paid).unwrap();
+        store.insert_session(&free).unwrap();
+        let conn = store.conn();
+        conn.execute_batch("DROP TABLE usage").unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(
+        store.list_usage_since(Timestamp(0)).unwrap(),
+        vec![UsageEntry {
+            session_id: paid.id,
+            at: Timestamp(5_000),
+            model: None,
+            local: false,
+            cost: paid.cost,
+            tokens: None,
+        }]
+    );
+}

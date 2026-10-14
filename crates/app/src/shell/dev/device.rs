@@ -171,6 +171,7 @@ pub(super) async fn dev_show(
                 settings(SettingsTab::Agents)
             }
             "settings-devices" => settings(SettingsTab::Devices),
+            "settings-usage" => settings(SettingsTab::Usage),
             "settings-appearance" => settings(SettingsTab::Appearance),
             "settings-keybindings" => settings(SettingsTab::Keybindings),
             "palette" | "sheet" => (Screen::Workspace, None),

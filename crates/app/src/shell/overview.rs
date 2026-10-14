@@ -81,7 +81,7 @@ pub(super) struct DoneToday {
 }
 
 /// Seconds local time is ahead of UTC at `at`, per the system time zone; 0 when unknown.
-fn local_utc_offset(at: Timestamp) -> i32 {
+pub(super) fn local_utc_offset(at: Timestamp) -> i32 {
     let secs: libc::time_t = at.as_millis().div_euclid(1000);
     // SAFETY: `tm` is plain integers and a nullable pointer, for which all zeroes is valid.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
