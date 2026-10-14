@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use hangar_devices::{Frame, Input, LogEntry, LogFilter, LogLevel, Orientation};
 
+use super::toast::ToastKind;
 use super::*;
 use crate::device_panel::Platform;
 
@@ -334,9 +335,8 @@ impl HangarApp {
         .detach();
     }
 
-    /// Types "Screenshot: <path>" into a terminal agent's input without sending it. A chat
-    /// composer has no insert API, so there (and without an agent) the path goes to the
-    /// clipboard instead.
+    /// Types "Screenshot: <path>" into the agent's input (terminal or chat composer) without
+    /// sending it; without a running agent the path goes to the clipboard.
     fn attach_screenshot(
         &mut self,
         ws: WorkspaceId,
@@ -355,35 +355,35 @@ impl HangarApp {
             Some(AgentSurface::Terminal { handle, .. }) => {
                 let session = handle.session();
                 let bracketed = session.terminal().modes().bracketed_paste;
-                match session.write(hangar_terminal::encode_paste(&reference, bracketed)) {
-                    Ok(()) => true,
-                    Err(err) => {
-                        tracing::warn!(workspace = %ws, %err, "screenshot path not typed");
-                        false
-                    }
-                }
+                session
+                    .write(hangar_terminal::encode_paste(&reference, bracketed))
+                    .map_err(
+                        |err| tracing::warn!(workspace = %ws, %err, "screenshot path not typed"),
+                    )
+                    .is_ok()
             }
-            _ => false,
+            Some(AgentSurface::Chat { view, .. }) => {
+                view.update(cx, |chat, cx| {
+                    chat.prefill(reference.trim_end(), window, cx)
+                });
+                true
+            }
+            None => false,
         };
         if typed {
-            window.push_notification(
-                Notification::success("Screenshot attached to agent context"),
+            self.show_toast(
+                ToastKind::Success,
+                "Screenshot attached to agent context",
                 cx,
             );
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(reference.trim_end().to_owned()));
-        let message = match live.map(|l| &l.surface) {
-            Some(AgentSurface::Chat { .. }) => {
-                "Screenshot saved; its path is on the clipboard: paste it into the chat (⌘V)."
-                    .to_owned()
-            }
-            _ => format!(
-                "Screenshot saved to {}; the path is on the clipboard (no agent is running here).",
-                path.display()
-            ),
-        };
-        window.push_notification(Notification::info(message), cx);
+        self.show_toast(
+            ToastKind::Info,
+            "Screenshot saved; no agent is running here, so its path is on the clipboard",
+            cx,
+        );
     }
 }
 
