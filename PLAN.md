@@ -131,9 +131,7 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
     checking the worktree can go; best-of-N has no rollback.
   - Review: `.gitignore` edits leave ignored files in the live diff until a full refresh; non-GitHub
     remotes show a permanent PR error; submodule edits, mode-only and CRLF changes are shown poorly.
-  - Run loop and devices: detection misses monorepos and nested projects and silently picks one of several
-    `.xcodeproj`; an Expo run waits for a log line only on the visible screen; Android and the
-    memory-pressure guard unchecked.
+  - Run loop and devices: Android and the memory-pressure guard unchecked.
   - Agents: an `ask_user` whose bridge died while its agent lives stays open until the 30-minute timeout
     (no MCP cancellation); the chat shows only a long message's first 64 KB (no "show all"); resumed
     sessions may book their earlier cost again (unverified).
@@ -149,7 +147,7 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   single-device mode; `HANGAR_DEVICE_ID`/`ANDROID_SERIAL` empty when the agent starts before its device;
   the `backend: …` line is not in the mockup (design call: hide unless fallback, or name the clone in the
   picker).
-- **Run loop:** no Xcode scheme picker; no parsed build progress or crash overlay; `expo run` prebuild
+- **Run loop:** no parsed build progress or crash overlay; `expo run` prebuild
   output lands in the worktree; Expo picks Android devices by AVD name (ambiguous with pool instances);
   React Native CLI unit-tested only; the JDK/Gradle setup is the user's.
 - **Agents / chat:** composer has no images or @-context; no keyboard navigation in the slash list and no

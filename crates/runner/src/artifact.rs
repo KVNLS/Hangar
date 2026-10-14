@@ -77,7 +77,11 @@ pub fn resolve_artifact(root: &Path, artifact: &Artifact) -> Result<Built> {
             existing(parse_build_settings(&out)?)
         }
         Artifact::Gradle { dir, module } => {
-            let outputs = root.join(dir).join(module).join("build/outputs/apk/debug");
+            // `apps:phone` is the Gradle path of `apps/phone`.
+            let outputs = root
+                .join(dir)
+                .join(module.replace(':', "/"))
+                .join("build/outputs/apk/debug");
             let metadata = outputs.join("output-metadata.json");
             let text = std::fs::read_to_string(&metadata)
                 .map_err(|_| Error::ArtifactMissing(metadata.clone()))?;

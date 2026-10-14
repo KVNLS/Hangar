@@ -19,6 +19,8 @@ use crate::setting_keys;
 
 /// Expo prints this once the app is open on the device and the dev server is attached.
 const EXPO_LAUNCHED: &str = "Logs for your project will appear below";
+/// How far back the launch watcher looks for [`EXPO_LAUNCHED`].
+const LAUNCH_SCAN_LINES: usize = 2_000;
 /// Lines of build output quoted when a build fails.
 const FAILURE_LINES: usize = 25;
 
@@ -42,7 +44,40 @@ pub(super) enum PaneTab {
 pub struct RunConfig {
     port: Option<u16>,
     scheme: Option<String>,
+    /// The app picked when the worktree holds several ([`Stack::key`]).
+    #[serde(default)]
+    stack: Option<String>,
 }
+
+/// What the user must pick before a run can be planned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChoiceKind {
+    /// Several apps build for the device.
+    Stack,
+    /// The Xcode container has several schemes and none is named after it.
+    Scheme,
+}
+
+/// `prepare` cannot go on without the user's pick: `options` are (saved value, label).
+#[derive(Debug)]
+struct NeedsChoice {
+    kind: ChoiceKind,
+    options: Vec<(String, String)>,
+}
+
+impl std::fmt::Display for NeedsChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match self.kind {
+            ChoiceKind::Stack => "app to run",
+            ChoiceKind::Scheme => "scheme to build",
+        };
+        write!(f, "pick the {what} (")?;
+        let labels: Vec<&str> = self.options.iter().map(|(_, l)| l.as_str()).collect();
+        write!(f, "{}), then run again", labels.join(", "))
+    }
+}
+
+impl std::error::Error for NeedsChoice {}
 
 pub(super) struct RunTab {
     pub(super) title: SharedString,
@@ -147,6 +182,8 @@ struct Prepared {
     plan: RunPlan,
     setup: Option<hangar_runner::Command>,
     stack: &'static str,
+    /// [`Stack::key`] of what runs, saved so a picked app is picked again.
+    stack_key: String,
     port: u16,
     scheme: Option<String>,
     target: hangar_runner::Target,
@@ -163,20 +200,37 @@ fn prepare(
     path: Option<String>,
 ) -> anyhow::Result<Prepared> {
     let stacks = hangar_runner::detect(root);
-    let stack = hangar_runner::pick_stack(&stacks, target.platform).ok_or_else(|| {
-        anyhow!(
+    let stack = match hangar_runner::choose_stack(&stacks, target.platform, saved.stack.as_deref())
+    {
+        Some(hangar_runner::Choice::Run(stack)) => stack,
+        Some(hangar_runner::Choice::Choose(candidates)) => {
+            return Err(NeedsChoice {
+                kind: ChoiceKind::Stack,
+                options: candidates.iter().map(|s| (s.key(), s.describe())).collect(),
+            }
+            .into());
+        }
+        None => anyhow::bail!(
             "no app to run on {} in {} (looked for Expo, React Native, Xcode and Gradle projects)",
             target.platform.label(),
             root.display()
-        )
-    })?;
+        ),
+    };
+    hangar_runner::check(stack, root)?;
     let scheme = match stack {
         Stack::Xcode { container } => {
             let schemes = hangar_runner::xcode_schemes(root, container)?;
-            Some(
-                hangar_runner::pick_scheme(container, &schemes, saved.scheme.as_deref())
-                    .with_context(|| format!("schemes: {}", schemes.join(", ")))?,
-            )
+            match hangar_runner::pick_scheme(container, &schemes, saved.scheme.as_deref()) {
+                Ok(scheme) => Some(scheme),
+                Err(hangar_runner::Error::SchemeRequired(_)) => {
+                    return Err(NeedsChoice {
+                        kind: ChoiceKind::Scheme,
+                        options: schemes.iter().map(|s| (s.clone(), s.clone())).collect(),
+                    }
+                    .into());
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
         _ => None,
     };
@@ -212,6 +266,7 @@ fn prepare(
         plan,
         setup,
         stack: stack.label(),
+        stack_key: stack.key(),
         port,
         scheme,
         target,
@@ -363,8 +418,15 @@ impl HangarApp {
             let prepared = match prepared {
                 Ok(p) => p,
                 Err(err) => {
-                    tracing::warn!(%err, "run: prepare failed");
                     drop(completion);
+                    if let Some(choice) = err.downcast_ref::<NeedsChoice>() {
+                        let (kind, options) = (choice.kind, choice.options.clone());
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            this.ask_run_choice(id, kind, options, window, cx)
+                        });
+                        return Err(err);
+                    }
+                    tracing::warn!(%err, "run: prepare failed");
                     return fail(&this, err, cx);
                 }
             };
@@ -372,6 +434,7 @@ impl HangarApp {
                 let config = RunConfig {
                     port: Some(prepared.port),
                     scheme: prepared.scheme.clone(),
+                    stack: Some(prepared.stack_key.clone()),
                 };
                 if let Err(err) = store.set_setting(&setting_keys::run(id), &config) {
                     tracing::warn!(%err, "run: failed to save the run config");
@@ -403,6 +466,66 @@ impl HangarApp {
                 .await
                 .unwrap_or_else(|_| Err(anyhow!("the run was dropped")))
         })
+    }
+
+    /// Asks which app (or scheme) workspace `id` runs, saves the answer and runs again.
+    fn ask_run_choice(
+        &mut self,
+        id: WorkspaceId,
+        kind: ChoiceKind,
+        options: Vec<(String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        /// More buttons than this do not fit a dialog.
+        const MAX_OPTIONS: usize = 8;
+        let (message, detail) = match kind {
+            ChoiceKind::Stack => (
+                "Which app should Run start?",
+                "This worktree holds several apps for this device. Hangar remembers the choice \
+                 for this workspace.",
+            ),
+            ChoiceKind::Scheme => (
+                "Which scheme should Run build?",
+                "The Xcode project has several schemes. Hangar remembers the choice for this \
+                 workspace.",
+            ),
+        };
+        let shown = &options[..options.len().min(MAX_OPTIONS)];
+        let mut buttons: Vec<&str> = shown.iter().map(|(_, label)| label.as_str()).collect();
+        buttons.push("Cancel");
+        let answer = window.prompt(PromptLevel::Info, message, Some(detail), &buttons, cx);
+        let shown = shown.to_vec();
+        let store = self.store.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(index) = answer.await else {
+                return;
+            };
+            let Some((value, label)) = shown.into_iter().nth(index) else {
+                return;
+            };
+            tracing::info!(workspace = %id, ?kind, %label, "run choice");
+            if let Some(store) = store {
+                let key = setting_keys::run(id);
+                let mut config: RunConfig =
+                    store.get_setting(&key).ok().flatten().unwrap_or_default();
+                match kind {
+                    ChoiceKind::Stack => {
+                        config.stack = Some(value);
+                        // Another app has its own schemes.
+                        config.scheme = None;
+                    }
+                    ChoiceKind::Scheme => config.scheme = Some(value),
+                }
+                if let Err(err) = store.set_setting(&key, &config) {
+                    tracing::warn!(%err, "run: failed to save the choice");
+                }
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.run_workspace(id, window, cx).detach();
+            });
+        })
+        .detach();
     }
 
     /// Resolves the run's completion (releasing its device lease).
@@ -577,7 +700,13 @@ impl HangarApp {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let done = this.update(cx, |this, cx| {
-                    let launched = terminal_lines(&view, cx)
+                    // The scrollback too: app logs can push the line off screen within the
+                    // second between two checks.
+                    let launched = view
+                        .read(cx)
+                        .session()
+                        .terminal()
+                        .recent_lines(LAUNCH_SCAN_LINES)
                         .iter()
                         .any(|l| l.contains(EXPO_LAUNCHED));
                     if launched {

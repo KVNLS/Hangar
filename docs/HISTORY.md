@@ -545,3 +545,13 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - Tested against real repositories (`app::ops`, `worktree` adapter) and with fakes (`usecases`); not run
   through the UI.
 
+## Run detection (2026-10-12, branch `run-detection`)
+- Detection lists every candidate: JS apps in `apps/*`, `packages/*` and child folders; Xcode containers
+  (folders only; a workspace hides its projects) at the root, in `ios/` and one level down; Gradle
+  application modules from the settings `include`s (`apps:phone`), comments ignored. Dependencies and
+  build output are skipped.
+- Several apps for the device, or several schemes none named after the project: a dialog asks, the pick
+  is saved in the run config (`stack`, `scheme`) and the run starts again. Seen live on a simulator.
+- A missing or non-executable `gradlew` is reported before the build; Expo's launch line is found in the
+  scrollback, not only on screen.
+

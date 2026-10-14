@@ -38,38 +38,112 @@ impl Stack {
     }
 }
 
-/// The first detected stack that builds for `platform`: a repository with native `ios/` and
-/// `android/` apps runs the one matching the open device.
-pub fn pick_stack(stacks: &[Stack], platform: hangar_core::device::Platform) -> Option<&Stack> {
-    stacks.iter().find(|stack| stack.targets(platform))
+impl Stack {
+    /// Identifies the stack across runs, to save which one the user picked.
+    pub fn key(&self) -> String {
+        match self {
+            Self::Expo { dir } => format!("expo:{}", dir.display()),
+            Self::ReactNative { dir } => format!("react-native:{}", dir.display()),
+            Self::Xcode { container } => format!("xcode:{}", container.display()),
+            Self::Gradle { dir, module } => format!("gradle:{}:{module}", dir.display()),
+        }
+    }
+
+    /// What a picker shows for it.
+    pub fn describe(&self) -> String {
+        let place = |kind: &str, dir: &Path| match dir.as_os_str().is_empty() {
+            true => format!("{kind} app"),
+            false => format!("{kind} app in {}", dir.display()),
+        };
+        match self {
+            Self::Expo { dir } => place("Expo", dir),
+            Self::ReactNative { dir } => place("React Native", dir),
+            Self::Xcode { container } => container.display().to_string(),
+            Self::Gradle { dir, module } if dir.as_os_str().is_empty() => {
+                format!("Gradle module {module}")
+            }
+            Self::Gradle { dir, module } => format!("Gradle module {module} in {}", dir.display()),
+        }
+    }
+}
+
+/// What to run on a device.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Choice<'a> {
+    Run(&'a Stack),
+    /// Several apps build for it and none was picked yet: the user chooses.
+    Choose(Vec<&'a Stack>),
+}
+
+/// The stack to run for `platform`: the one `saved` names, else the only candidate, else the
+/// candidates to choose from. `None` when nothing builds for that platform.
+pub fn choose_stack<'a>(
+    stacks: &'a [Stack],
+    platform: hangar_core::device::Platform,
+    saved: Option<&str>,
+) -> Option<Choice<'a>> {
+    let candidates: Vec<&Stack> = stacks.iter().filter(|s| s.targets(platform)).collect();
+    if let Some(picked) = candidates.iter().find(|s| Some(s.key().as_str()) == saved) {
+        return Some(Choice::Run(picked));
+    }
+    match candidates.as_slice() {
+        [] => None,
+        [only] => Some(Choice::Run(only)),
+        _ => Some(Choice::Choose(candidates)),
+    }
 }
 
 /// Native subprojects that cross-platform stacks keep next to their sources.
 const NATIVE_DIRS: [&str; 2] = ["ios", "android"];
+/// Where monorepos keep their apps.
+const APP_PARENTS: [&str; 2] = ["apps", "packages"];
+/// Directories that hold dependencies or build output, never an app of this repository.
+const SKIPPED: [&str; 5] = ["node_modules", "Pods", "build", "DerivedData", "Carthage"];
 
-/// Stacks found at `root` and in its `ios/` and `android/` directories. React Native and Expo
-/// own those directories, so their native projects are not listed separately.
+/// Every app found in `root`, as candidates for a run. A React Native or Expo app at the root
+/// owns `ios/` and `android/`, so it is the only one. Otherwise: JS apps in `apps/*`,
+/// `packages/*` and direct child directories, then Xcode containers and Gradle application
+/// modules at the root, in `ios/`, `android/` and direct child directories.
 pub fn detect(root: &Path) -> Vec<Stack> {
-    if let Some(stack) = js_stack(root) {
+    if let Some(stack) = js_stack(root, PathBuf::new()) {
         return vec![stack];
     }
-    let mut found = Vec::new();
-    for dir in std::iter::once("").chain(NATIVE_DIRS) {
+    let children = child_dirs(root);
+    let nested = APP_PARENTS.iter().flat_map(|parent| {
+        child_dirs(&root.join(parent))
+            .into_iter()
+            .map(move |c| Path::new(parent).join(c))
+    });
+    let mut found: Vec<Stack> = nested
+        .chain(children.iter().map(PathBuf::from))
+        .filter_map(|rel| js_stack(&root.join(&rel), rel))
+        .collect();
+    let native = std::iter::once(String::new())
+        .chain(NATIVE_DIRS.map(str::to_owned))
+        .chain(
+            children
+                .into_iter()
+                .filter(|c| !NATIVE_DIRS.contains(&c.as_str())),
+        );
+    for dir in native {
         let rel = PathBuf::from(dir);
         let abs = root.join(&rel);
-        if let Some(container) = xcode_container(&abs) {
-            found.push(Stack::Xcode {
-                container: rel.join(container),
-            });
-        }
-        if let Some(module) = gradle_app_module(&abs) {
-            found.push(Stack::Gradle { dir: rel, module });
-        }
+        found.extend(xcode_containers(&abs).into_iter().map(|c| Stack::Xcode {
+            container: rel.join(c),
+        }));
+        found.extend(
+            gradle_app_modules(&abs)
+                .into_iter()
+                .map(|module| Stack::Gradle {
+                    dir: rel.clone(),
+                    module,
+                }),
+        );
     }
     found
 }
 
-fn js_stack(dir: &Path) -> Option<Stack> {
+fn js_stack(dir: &Path, rel: PathBuf) -> Option<Stack> {
     let text = fs::read_to_string(dir.join("package.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     let depends_on = |name: &str| {
@@ -78,44 +152,132 @@ fn js_stack(dir: &Path) -> Option<Stack> {
             .any(|section| json.get(section).and_then(|s| s.get(name)).is_some())
     };
     if depends_on("expo") {
-        Some(Stack::Expo {
-            dir: PathBuf::new(),
-        })
+        Some(Stack::Expo { dir: rel })
     } else if depends_on("react-native") {
-        Some(Stack::ReactNative {
-            dir: PathBuf::new(),
-        })
+        Some(Stack::ReactNative { dir: rel })
     } else {
         None
     }
 }
 
-fn xcode_container(dir: &Path) -> Option<PathBuf> {
+/// `.xcworkspace` directories in `dir`, else its `.xcodeproj` directories: a workspace builds
+/// the projects next to it.
+fn xcode_containers(dir: &Path) -> Vec<PathBuf> {
     let names = sorted_names(dir);
-    let with_ext = |ext: &str| names.iter().find(|n| n.ends_with(ext)).map(PathBuf::from);
-    with_ext(".xcworkspace").or_else(|| with_ext(".xcodeproj"))
+    let with_ext = |ext: &str| -> Vec<PathBuf> {
+        names
+            .iter()
+            .filter(|n| n.ends_with(ext) && dir.join(n).is_dir())
+            .map(PathBuf::from)
+            .collect()
+    };
+    let workspaces = with_ext(".xcworkspace");
+    if workspaces.is_empty() {
+        with_ext(".xcodeproj")
+    } else {
+        workspaces
+    }
 }
 
-fn gradle_app_module(dir: &Path) -> Option<String> {
-    let has = |dir: &Path, base: &str| {
-        dir.join(base).is_file() || dir.join(format!("{base}.kts")).is_file()
+/// Gradle paths (`app`, `apps:phone`) of the modules in `dir`'s build that apply the Android
+/// application plugin, `app` first. Modules come from the `include`s of `settings.gradle(.kts)`,
+/// or are its child directories when it includes none.
+fn gradle_app_modules(dir: &Path) -> Vec<String> {
+    let Some(settings) = ["settings.gradle", "settings.gradle.kts"]
+        .iter()
+        .find_map(|f| fs::read_to_string(dir.join(f)).ok())
+    else {
+        return Vec::new();
     };
-    if !has(dir, "settings.gradle") {
-        return None;
+    let mut modules = included_modules(&settings);
+    if modules.is_empty() {
+        modules = sorted_names(dir);
     }
     let applies_app_plugin = |module: &str| {
+        let module_dir = dir.join(module.replace(':', "/"));
         ["build.gradle", "build.gradle.kts"].iter().any(|file| {
-            fs::read_to_string(dir.join(module).join(file)).is_ok_and(|text| {
-                text.contains("com.android.application") || text.contains("android.application")
+            fs::read_to_string(module_dir.join(file)).is_ok_and(|text| {
+                let code = without_comments(&text);
+                code.contains("com.android.application") || code.contains("android.application")
             })
         })
     };
-    let names = sorted_names(dir);
-    names
-        .iter()
-        .find(|name| name.as_str() == "app" && applies_app_plugin(name))
-        .or_else(|| names.iter().find(|name| applies_app_plugin(name)))
-        .cloned()
+    let mut apps: Vec<String> = modules
+        .into_iter()
+        .filter(|m| applies_app_plugin(m))
+        .collect();
+    apps.sort_by_key(|m| m != "app");
+    apps
+}
+
+/// Module paths named in `include` lines (`include ':a', ':b:c'` or `include(":a")`), without
+/// their leading `:`.
+fn included_modules(settings: &str) -> Vec<String> {
+    let mut modules = Vec::new();
+    for line in without_comments(settings).lines() {
+        let line = line.trim();
+        if !line.starts_with("include") {
+            continue;
+        }
+        let mut rest = line;
+        while let Some(start) = rest.find(['"', '\'']) {
+            let quote = rest[start..].chars().next().unwrap_or('"');
+            let after = &rest[start + 1..];
+            let Some(end) = after.find(quote) else {
+                break;
+            };
+            let name = after[..end].trim_start_matches(':');
+            if !name.is_empty() {
+                modules.push(name.to_owned());
+            }
+            rest = &after[end + 1..];
+        }
+    }
+    modules
+}
+
+/// `text` without `//` line comments and `/* */` block comments (strings are not parsed: good
+/// enough to read plugin ids and includes).
+fn without_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        match (rest.find("//"), rest.find("/*")) {
+            (Some(line), block) if block.is_none_or(|b| line < b) => {
+                out.push_str(&rest[..line]);
+                rest = rest[line..]
+                    .find('\n')
+                    .map_or("", |end| &rest[line + end..]);
+            }
+            (_, Some(block)) => {
+                out.push_str(&rest[..block]);
+                rest = rest[block..]
+                    .find("*/")
+                    .map_or("", |end| &rest[block + end + 2..]);
+            }
+            _ => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Child directories of `dir` that may hold an app: not hidden, not dependencies or build
+/// output.
+fn child_dirs(dir: &Path) -> Vec<String> {
+    sorted_names(dir)
+        .into_iter()
+        .filter(|n| {
+            !n.starts_with('.')
+                && !SKIPPED.contains(&n.as_str())
+                // Xcode containers are directories too.
+                && !n.ends_with(".xcodeproj")
+                && !n.ends_with(".xcworkspace")
+                && dir.join(n).is_dir()
+        })
+        .collect()
 }
 
 fn sorted_names(dir: &Path) -> Vec<String> {

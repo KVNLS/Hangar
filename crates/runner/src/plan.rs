@@ -236,6 +236,20 @@ pub fn plan(input: &PlanInput<'_>) -> Result<RunPlan> {
     Ok(plan)
 }
 
+/// Checks the project can be built as planned: a Gradle build needs an executable `gradlew`.
+pub fn check(stack: &Stack, root: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    if let Stack::Gradle { dir, .. } = stack {
+        let wrapper = root.join(dir).join("gradlew");
+        let executable = std::fs::metadata(&wrapper)
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+        if !executable {
+            return Err(Error::GradleWrapper(wrapper));
+        }
+    }
+    Ok(())
+}
+
 /// Dependency install a JS stack needs before Metro or the build can start: worktrees are fresh
 /// checkouts without `node_modules`. The lockfile picks the package manager.
 pub fn setup(stack: &Stack, root: &Path) -> Option<Command> {
