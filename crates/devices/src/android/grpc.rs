@@ -82,19 +82,16 @@ pub fn rgba_to_bgra(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Linux evdev key codes understood by `sendKey` with `KeyCodeType::Evdev`.
-pub mod evdev {
-    /// `KEY_HOMEPAGE`, mapped to Android's HOME by the emulator's key layout.
-    pub const HOME: i32 = 172;
-    /// `KEY_BACK`.
-    pub const BACK: i32 = 158;
+/// W3C `KeyboardEvent.key` values the emulator maps to Android buttons.
+pub mod keys {
+    pub const HOME: &str = "GoHome";
+    pub const BACK: &str = "GoBack";
 }
 
-pub(crate) fn key_press(code: i32) -> proto::KeyboardEvent {
+pub(crate) fn key_press(key: &str) -> proto::KeyboardEvent {
     proto::KeyboardEvent {
-        code_type: proto::keyboard_event::KeyCodeType::Evdev as i32,
         event_type: proto::keyboard_event::KeyEventType::Keypress as i32,
-        key_code: code,
+        key: key.to_owned(),
         ..Default::default()
     }
 }
@@ -107,6 +104,11 @@ pub(crate) fn text_event(text: &str) -> proto::KeyboardEvent {
     }
 }
 
+/// Pressure and contact size the emulator itself uses when it turns a mouse click into a touch
+/// (seen with `getevent`), so injected touches look like ordinary finger contacts.
+const PRESSURE: i32 = 0x400;
+const CONTACT: i32 = 0x500;
+
 /// One finger (identifier 0) at device pixels; `down == false` lifts it (pressure 0).
 pub(crate) fn touch(x: i32, y: i32, down: bool) -> proto::TouchEvent {
     proto::TouchEvent {
@@ -114,7 +116,9 @@ pub(crate) fn touch(x: i32, y: i32, down: bool) -> proto::TouchEvent {
             x,
             y,
             identifier: 0,
-            pressure: i32::from(down),
+            pressure: if down { PRESSURE } else { 0 },
+            touch_major: if down { CONTACT } else { 0 },
+            touch_minor: if down { CONTACT } else { 0 },
             expiration: proto::touch::EventExpiration::NeverExpire as i32,
             ..Default::default()
         }],
@@ -137,9 +141,9 @@ mod tests {
     #[test]
     fn builds_events() {
         let t = touch(10, 20, true);
-        assert_eq!(t.touches[0].pressure, 1);
+        assert_eq!(t.touches[0].pressure, PRESSURE);
         assert_eq!(touch(10, 20, false).touches[0].pressure, 0);
-        assert_eq!(key_press(evdev::BACK).key_code, 158);
+        assert_eq!(key_press(keys::BACK).key, "GoBack");
         assert_eq!(text_event("hi").text, "hi");
     }
 }

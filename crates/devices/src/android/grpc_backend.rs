@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
 use super::emulator::{self, BootOptions, RunningEmulator};
-use super::grpc::{self, Client, evdev, proto};
+use super::grpc::{self, Client, keys, proto};
 use super::sdk::AndroidSdk;
 use crate::geometry::device_to_pixels;
 use crate::{
@@ -169,7 +169,7 @@ async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: FrameSender, size: F
                 loop {
                     match stream.message().await {
                         Ok(Some(img)) => {
-                            let captured_at = Instant::now();
+                            let captured_at = produced_at(img.timestamp_us);
                             let (w, h) =
                                 img.format.as_ref().map_or((0, 0), |f| (f.width, f.height));
                             // An inactive display sends empty images.
@@ -205,6 +205,21 @@ async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: FrameSender, size: F
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Maps the emulator's frame timestamp (unix microseconds, same host clock) to an `Instant`, so
+/// `captured_at` measures from frame production rather than from arrival.
+fn produced_at(timestamp_us: u64) -> Instant {
+    let now = Instant::now();
+    let Ok(since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return now;
+    };
+    let age = since_epoch.saturating_sub(Duration::from_micros(timestamp_us));
+    // A missing or bogus timestamp falls back to arrival time.
+    if timestamp_us == 0 || age > Duration::from_secs(5) {
+        return now;
+    }
+    now.checked_sub(age).unwrap_or(now)
 }
 
 impl Device for GrpcEmulator {
@@ -253,9 +268,9 @@ impl Device for GrpcEmulator {
             Input::TouchUp { x, y } => self.call(touch(&mut c, x, y, false)),
             Input::Home | Input::Back => {
                 let code = if input == Input::Home {
-                    evdev::HOME
+                    keys::HOME
                 } else {
-                    evdev::BACK
+                    keys::BACK
                 };
                 self.call(async move {
                     c.send_key(grpc::key_press(code))

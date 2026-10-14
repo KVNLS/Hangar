@@ -196,6 +196,25 @@ impl Device for AdbDevice {
         self.shell(&format!("input text {}", escape_input_text(text)))
     }
 
+    /// Emulators only (`adb emu kill`); waits until adb no longer lists the serial.
+    fn shutdown(&self) -> Result<()> {
+        let serial = &self.info.udid;
+        if !serial.starts_with("emulator-") {
+            return Err(Error::Unsupported("shutdown of a physical device"));
+        }
+        self.adb.emu(serial, &["kill"])?;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(30) {
+            if !self.adb.devices()?.iter().any(|d| &d.serial == serial) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Err(Error::Command(format!(
+            "{serial} still listed 30 s after `adb emu kill`"
+        )))
+    }
+
     fn install(&self, app_path: &std::path::Path) -> Result<()> {
         self.adb.install(&self.info.udid, app_path)
     }
