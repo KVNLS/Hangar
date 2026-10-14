@@ -260,7 +260,12 @@ impl DevicePool {
             })?;
             cx.background_executor()
                 .spawn(async move {
+                    let mut assignment = assignment;
                     if let Some(store) = store {
+                        // Archived workspaces are not loaded into the pool: read theirs.
+                        if assignment.is_none() {
+                            assignment = store.get_setting(&setting_keys::device_assignment(ws))?;
+                        }
                         store.delete_setting(&setting_keys::device_assignment(ws))?;
                     }
                     match assignment {
