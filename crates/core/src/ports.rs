@@ -9,6 +9,7 @@ use crate::review::{
     CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
     Upstream,
 };
+use crate::setup::ToolFacts;
 use crate::{
     Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace, WorkspaceId,
     WorkspaceStatus,
@@ -23,6 +24,11 @@ pub struct PortError(Box<dyn std::error::Error + Send + Sync>);
 impl PortError {
     pub fn new(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
         Self(err.into())
+    }
+
+    /// The adapter's error, for callers that recognise some of them (e.g. a missing tool).
+    pub fn inner(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self.0.as_ref()
     }
 }
 
@@ -254,4 +260,9 @@ pub trait CodeHost: Send + Sync {
     fn pr_for_branch(&self, worktree: &Path, branch: &str) -> Result<Option<PrInfo>, ReviewError>;
     /// Opens the pull request; returns its URL.
     fn create_pr(&self, worktree: &Path, request: &CreatePr) -> Result<String, ReviewError>;
+}
+
+/// Looks at the tools Hangar relies on outside itself. Runs several short processes.
+pub trait ToolProbe: Send + Sync {
+    fn probe(&self) -> ToolFacts;
 }

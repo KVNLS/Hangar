@@ -473,3 +473,17 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   "New conversation" (an agent picker, installed agents enabled and current one checked, and Start). Picking an
   agent only selects it and the workspace remembers it (`workspace_agents`). The pane header shows the same
   picker next to Restart/Resume while a finished session is shown.
+
+## Setup checklist (2026-10-08, branch `setup-checklist`)
+- `core::setup` turns what a `ToolProbe` finds (login `PATH`, Homebrew, git and its identity, agent CLIs and
+  ACP adapters, `gh` and its sign-in, Xcode and its first launch, iOS runtimes, Android SDK and AVDs, JDK,
+  Node) into grouped checks, each with why it matters and the command that fixes it. Required: git, a git
+  identity and one agent; everything else is optional. Hangar never runs installers: rows have a copy button.
+- The welcome screen's step 2 is now "Your setup": found agents, then the required and Essentials/GitHub items
+  still missing. Settings › Setup (first tab) lists everything. Re-check reads the login `PATH` again; coming
+  back to the front re-checks (at most every 10 s) while either is on screen. The welcome screen scrolls and no
+  longer claims Flutter support.
+- Missing-agent/git/gh errors get an "Open Setup" action; the review screen shows the `gh` blocker with one.
+- Seen on screen: Settings › Setup on a set-up Mac (`HANGAR_DEV_SHOW=settings-setup`, probe ~0.7 s), and the
+  welcome screen with `env -i … SHELL=/bin/false PATH=/usr/bin:/bin` (login PATH, Homebrew, agent and gh rows).
+  The copy button, re-check on activation and the review/notification actions are not yet clicked through.

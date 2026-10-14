@@ -2,6 +2,7 @@
 
 mod agents_tab;
 mod devices_tab;
+mod setup_tab;
 mod usage_tab;
 
 use std::cell::Cell;
@@ -30,6 +31,7 @@ use crate::ui::{ActiveTokens as _, RADIUS_CONTROL, ROW_HEIGHT, TypeScale as _};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SettingsTab {
     #[default]
+    Setup,
     Agents,
     Devices,
     Usage,
@@ -38,7 +40,8 @@ pub(super) enum SettingsTab {
 }
 
 impl SettingsTab {
-    pub(super) const ALL: [SettingsTab; 5] = [
+    pub(super) const ALL: [SettingsTab; 6] = [
+        Self::Setup,
         Self::Agents,
         Self::Devices,
         Self::Usage,
@@ -48,6 +51,7 @@ impl SettingsTab {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Setup => "Setup",
             Self::Agents => "Agents & providers",
             Self::Devices => "Devices",
             Self::Usage => "Usage & cost",
@@ -58,6 +62,7 @@ impl SettingsTab {
 
     fn icon(self) -> Lucide {
         match self {
+            Self::Setup => Lucide::Wrench,
             Self::Agents => Lucide::Bot,
             Self::Devices => Lucide::Smartphone,
             Self::Usage => Lucide::ChartColumn,
@@ -401,6 +406,7 @@ impl HangarApp {
                 .child(tab.label())
         });
         let page = match self.layout.settings_tab {
+            SettingsTab::Setup => self.render_settings_setup(cx),
             SettingsTab::Agents => self.render_settings_agents(cx),
             SettingsTab::Devices => self.render_settings_devices(cx),
             SettingsTab::Usage => self.render_settings_usage(cx),

@@ -64,10 +64,7 @@ impl Render for HangarApp {
                         this.child(self.render_resizable_sidebar(cx))
                     })
                     .map(|this| {
-                        if self.work.projects.is_empty()
-                            && !self.work.loading
-                            && self.work.load_error.is_none()
-                        {
+                        if self.showing_welcome() {
                             this.child(self.render_welcome(cx))
                         } else {
                             this.child(div().flex_1().min_w_0().h_full().child(panes))

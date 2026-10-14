@@ -40,6 +40,16 @@ pub fn developer_dir() -> Result<String, Error> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
+/// Whether Xcode's license is accepted and its first-launch packages are installed
+/// (`xcodebuild -checkFirstLaunchStatus`). Runs a process: call it off the UI thread.
+pub fn first_launch_done() -> bool {
+    Command::new("xcodebuild")
+        .arg("-checkFirstLaunchStatus")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
 /// Handles of the loaded frameworks. Loaded once per process and never unloaded.
 pub(crate) struct Frameworks {
     pub developer_dir: String,

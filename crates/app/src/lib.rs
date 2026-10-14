@@ -18,6 +18,7 @@ pub mod ops;
 pub mod paths;
 pub mod pty;
 pub mod setting_keys;
+pub mod setup_probe;
 pub mod shell;
 pub mod state;
 pub mod terminal_view;

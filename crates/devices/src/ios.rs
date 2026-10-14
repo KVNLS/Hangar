@@ -12,7 +12,7 @@ mod simctl_backend;
 pub use introspect::introspect;
 pub use logs::log_stream;
 pub use private::{LiveFramebuffer, PrivateSimulator};
-pub use runtime::developer_dir;
+pub use runtime::{developer_dir, first_launch_done};
 pub use sim_window::{SimWindow, on_screen_windows, simulator_windows};
 pub use simctl_backend::SimctlSimulator;
 

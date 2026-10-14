@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 
-use hangar_core::ports::{Changes, CodeHost, ReviewOps, Store, VersionControl};
+use hangar_core::ports::{Changes, CodeHost, ReviewOps, Store, ToolProbe, VersionControl};
 use hangar_store_sqlite::Store as SqliteStore;
 use hangar_worktree::{Gh, GitCli};
+
+use crate::setup_probe::SystemProbe;
 
 pub fn version_control() -> &'static dyn VersionControl {
     &GitCli
@@ -30,6 +32,20 @@ pub fn code_host(path_env: impl Into<OsString>, program: Option<OsString>) -> Ar
         gh = gh.with_program(program);
     }
     Arc::new(gh)
+}
+
+/// This Mac's tools, looked up in `path` (the login shell's `PATH`; `path_error` says why it could
+/// not be read, if so); `gh` is checked through `code_host`.
+pub fn tool_probe(
+    path: String,
+    path_error: Option<String>,
+    gh: Arc<dyn CodeHost>,
+) -> Box<dyn ToolProbe> {
+    Box::new(SystemProbe {
+        path,
+        path_error,
+        gh,
+    })
 }
 
 /// Opens (creating and migrating) the SQLite database at `path`.

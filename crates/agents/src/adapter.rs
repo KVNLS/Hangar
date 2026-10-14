@@ -72,6 +72,8 @@ pub struct PtyAdapter {
     pub program: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Shell command that installs the program; empty when there is none.
+    pub install_hint: String,
 }
 
 impl PtyAdapter {
@@ -86,7 +88,13 @@ impl PtyAdapter {
             program: program.into(),
             args: Vec::new(),
             env: Vec::new(),
+            install_hint: String::new(),
         }
+    }
+
+    pub fn with_install_hint(mut self, hint: impl Into<String>) -> Self {
+        self.install_hint = hint.into();
+        self
     }
 
     pub fn with_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -139,10 +147,14 @@ pub fn presets() -> Vec<PtyAdapter> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/bin/zsh".to_owned());
     vec![
-        PtyAdapter::new("claude", "Claude Code", "claude"),
-        PtyAdapter::new("codex", "Codex CLI", "codex"),
-        PtyAdapter::new("opencode", "OpenCode", "opencode"),
-        PtyAdapter::new("gemini", "Gemini CLI", "gemini"),
+        PtyAdapter::new("claude", "Claude Code", "claude")
+            .with_install_hint("curl -fsSL https://claude.ai/install.sh | bash"),
+        PtyAdapter::new("codex", "Codex CLI", "codex")
+            .with_install_hint("npm install -g @openai/codex"),
+        PtyAdapter::new("opencode", "OpenCode", "opencode")
+            .with_install_hint("curl -fsSL https://opencode.ai/install | bash"),
+        PtyAdapter::new("gemini", "Gemini CLI", "gemini")
+            .with_install_hint("npm install -g @google/gemini-cli"),
         PtyAdapter::new("shell", "Shell", shell).with_args(["-l"]),
     ]
 }

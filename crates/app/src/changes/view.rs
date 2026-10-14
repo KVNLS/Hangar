@@ -141,6 +141,8 @@ pub enum ChangesEvent {
         workspace: WorkspaceId,
         text: String,
     },
+    /// Settings › Setup, e.g. to install or sign in to `gh`.
+    OpenSetup,
 }
 
 impl EventEmitter<ChangesEvent> for ChangesPanel {}

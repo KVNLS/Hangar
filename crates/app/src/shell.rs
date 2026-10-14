@@ -19,6 +19,7 @@ mod questions;
 mod queue;
 mod run;
 mod settings;
+mod setup;
 mod sidebar;
 mod status;
 mod toast;
@@ -440,6 +441,7 @@ pub struct HangarApp {
     _subscriptions: Vec<Subscription>,
     layout: Layout,
     agent_setup: AgentSetup,
+    setup: setup::SetupState,
     live: LiveState,
     work: WorkState,
     toast: Option<toast::Toast>,
@@ -475,6 +477,7 @@ impl HangarApp {
             |this, _, event: &ChangesEvent, window, cx| match event {
                 ChangesEvent::ExitReview => this.set_screen(Screen::Workspace, window, cx),
                 ChangesEvent::OpenReview => this.set_screen(Screen::Review, window, cx),
+                ChangesEvent::OpenSetup => this.open_setup(window, cx),
                 ChangesEvent::AskAgent { workspace, text } => {
                     this.prefill_agent(*workspace, text, window, cx)
                 }
@@ -533,6 +536,9 @@ impl HangarApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter workspaces"));
         let filter_sub = cx.subscribe(&sidebar_filter, |_, _, _: &InputEvent, cx| cx.notify());
         let (settings_ui, settings_sub) = settings::SettingsUi::new(window, cx);
+        let activation_sub = cx.observe_window_activation(window, |this, window, cx| {
+            this.on_window_activation(window, cx)
+        });
         let appearance_observer = cx.observe_window_appearance(window, |this, window, cx| {
             if this.layout.appearance == crate::ui::theme::Appearance::System {
                 this.layout.appearance.apply(window, cx);
@@ -612,6 +618,7 @@ impl HangarApp {
                 ollama,
                 orchestration: false,
             },
+            setup: setup::SetupState::default(),
             live: LiveState {
                 sessions: HashMap::new(),
                 saved_chats: HashMap::new(),
@@ -657,6 +664,7 @@ impl HangarApp {
                 filter_sub,
                 pool_sub,
                 pool_observer,
+                activation_sub,
             ]
             .into_iter()
             .chain(ollama_subs)
@@ -666,7 +674,19 @@ impl HangarApp {
 
     fn report(&mut self, err: &anyhow::Error, window: &mut Window, cx: &mut Context<Self>) {
         tracing::error!("{err:#}");
-        window.push_notification(Notification::error(format!("{err:#}")), cx);
+        let mut notification = Notification::error(format!("{err:#}"));
+        if setup::is_missing_tool(err) {
+            let shell = cx.entity().downgrade();
+            notification = notification.action(move |_, _, _| {
+                let shell = shell.clone();
+                gpui_kit::component::button::Button::new("open-setup")
+                    .label("Open Setup")
+                    .on_click(move |_, window, cx| {
+                        let _ = shell.update(cx, |this, cx| this.open_setup(window, cx));
+                    })
+            });
+        }
+        window.push_notification(notification, cx);
     }
 
     /// Runs `job` with the store on the background executor and reports its error, if any.
@@ -853,19 +873,36 @@ impl HangarApp {
                 cx,
             );
         }
+        self.use_path(path, window, cx);
+    }
+
+    /// Applies a resolved `PATH`: `gh`, agent install state and the setup checklist follow it.
+    pub(super) fn use_path(
+        &mut self,
+        path: ResolvedPath,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let gh = crate::adapters::code_host(
             path.value.clone(),
             std::env::var_os("HANGAR_GH").filter(|p| !p.is_empty()),
         );
         self.changes_panel
             .update(cx, |panel, cx| panel.set_gh(gh, cx));
-        // find_program stats files; cheap enough for five presets but keep it off this thread.
-        let value = path.value.clone();
         self.agent_setup.path = Some(path);
         // Starts restored from the last run waited for the PATH their agents are found on.
         if !self.work.loading {
             self.drain_agent_queue(window, cx);
         }
+        self.refresh_agent_choices(window, cx);
+        self.check_setup(cx);
+    }
+
+    fn refresh_agent_choices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(value) = self.agent_setup.path.as_ref().map(|p| p.value.clone()) else {
+            return;
+        };
+        // find_program stats files; cheap enough for five presets but keep it off this thread.
         cx.spawn_in(window, async move |this, cx| {
             let choices = cx
                 .background_executor()

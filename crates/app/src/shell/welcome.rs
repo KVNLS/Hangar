@@ -9,8 +9,9 @@ use gpui_kit::component::Icon;
 use super::new_workspace::tilde;
 use super::*;
 use crate::device_panel::Platform;
-use crate::ui::components::{AgentMark, UiButton, card};
+use crate::ui::components::{AgentMark, UiButton, card, setup_row};
 use crate::ui::{ActiveTokens as _, TypeScale as _};
+use hangar_core::setup::SetupGroup;
 
 /// Where each platform's toolchain lives, looked up once per process off the main thread.
 static TOOLCHAINS: OnceLock<Vec<(Platform, String)>> = OnceLock::new();
@@ -65,6 +66,7 @@ impl HangarApp {
                 .child(
                     v_flex()
                         .flex_1()
+                        .min_w_0()
                         .gap_1p5()
                         .child(div().type_body_strong().child(title))
                         .child(body),
@@ -102,46 +104,55 @@ impl HangarApp {
         let detected = self.agent_setup.path.is_some();
         let agents = v_flex()
             .gap_1()
-            .children(self.agent_setup.agent_choices.iter().map(|c| {
-                h_flex()
-                    .h(px(24.))
-                    .gap(px(10.))
-                    .items_center()
-                    .text_size(px(12.))
-                    .child(AgentMark::new(agents::kind(&c.id).monogram()))
-                    .child(
-                        div()
-                            .w(px(110.))
-                            .flex_none()
-                            .truncate()
-                            .child(c.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_mono()
-                            .text_size(px(11.))
-                            .text_color(t.tx3)
-                            .children(c.path.as_deref().map(tilde)),
-                    )
-                    .child(
-                        div()
-                            .font_mono()
-                            .text_size(px(11.))
-                            .text_color(match (detected, c.installed) {
-                                (false, _) => t.tx3,
-                                (true, true) => t.grn,
-                                (true, false) => t.tx3,
-                            })
-                            .child(match (detected, c.installed) {
-                                (false, _) => "checking…",
-                                (true, true) => "found",
-                                (true, false) => "not on PATH",
-                            }),
-                    )
-            }));
+            // Once detected, missing agents are left to the checklist below.
+            .children(
+                self.agent_setup
+                    .agent_choices
+                    .iter()
+                    .filter(|c| !detected || c.installed)
+                    .map(|c| {
+                        h_flex()
+                            .h(px(24.))
+                            .gap(px(10.))
+                            .items_center()
+                            .text_size(px(12.))
+                            .child(AgentMark::new(agents::kind(&c.id).monogram()))
+                            .child(
+                                div()
+                                    .w(px(110.))
+                                    .flex_none()
+                                    .truncate()
+                                    .child(c.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_mono()
+                                    .text_size(px(11.))
+                                    .text_color(t.tx3)
+                                    .children(c.path.as_deref().map(tilde)),
+                            )
+                            .child(
+                                div()
+                                    .font_mono()
+                                    .text_size(px(11.))
+                                    .text_color(match (detected, c.installed) {
+                                        (false, _) => t.tx3,
+                                        (true, true) => t.grn,
+                                        (true, false) => t.tx3,
+                                    })
+                                    .child(match (detected, c.installed) {
+                                        (false, _) => "checking…",
+                                        (true, true) => "found",
+                                        (true, false) => "not on PATH",
+                                    }),
+                            )
+                    }),
+            );
+        let ready = self.setup.report.as_ref().is_some_and(|r| r.is_ready());
+        let setup = agents.child(self.render_welcome_todo(cx));
         let toolchains = Platform::ALL.map(|platform| self.toolchain_path(platform, cx));
         let picker = self.device_panel.read(cx).picker();
         let devices =
@@ -190,15 +201,20 @@ impl HangarApp {
             .map(|text| div().text_size(px(12.)).text_color(t.amb).child(text));
         let devices = devices.children(single);
         div()
+            .id("welcome")
             .flex()
+            .flex_col()
             .flex_1()
             .min_w_0()
             .h_full()
+            .overflow_y_scroll()
             .items_center()
-            .justify_center()
             .bg(t.app)
             .child(
+                // Auto margins center it vertically while it fits and let it scroll once not.
                 v_flex()
+                    .my_auto()
+                    .py_8()
                     .w(px(560.))
                     .gap_6()
                     .child(
@@ -231,7 +247,7 @@ impl HangarApp {
                                     v_flex()
                                         .gap(px(10.))
                                         .child(div().type_secondary().text_color(t.tx2).child(
-                                            "An Xcode, Gradle, React Native or Flutter repository.",
+                                            "An Xcode, Gradle, React Native or Expo repository.",
                                         ))
                                         .child(
                                             h_flex().child(
@@ -249,7 +265,7 @@ impl HangarApp {
                                 .border_color(t.line),
                             )
                             .child(
-                                step(if detected { done() } else { number("2") }, "Agents detected", agents)
+                                step(if ready { done() } else { number("2") }, "Your setup", setup)
                                     .border_b_1()
                                     .border_color(t.line),
                             )
@@ -264,6 +280,73 @@ impl HangarApp {
                             .child("⌘N new workspace")
                             .child("⌘, settings"),
                     ),
+            )
+    }
+
+    /// What still needs doing: required items and the optional ones every user meets (Essentials,
+    /// GitHub); the platform-specific rest is counted and left to Settings › Setup.
+    fn render_welcome_todo(&self, cx: &mut Context<Self>) -> Div {
+        let t = cx.tokens();
+        let Some(report) = self.setup.report.as_ref() else {
+            return div();
+        };
+        let failing = report.failing();
+        let (shown, later): (Vec<_>, Vec<_>) = failing.into_iter().partition(|c| {
+            c.required || matches!(c.group, SetupGroup::Essentials | SetupGroup::GitHub)
+        });
+        let later = later
+            .iter()
+            .filter(|c| c.group != SetupGroup::Agents)
+            .count();
+        let summary = match (shown.is_empty(), later) {
+            (true, 0) => "Everything is set up.".to_owned(),
+            (true, n) => format!(
+                "Ready. {n} optional item{} for iOS, Android or builds.",
+                if n == 1 { "" } else { "s" }
+            ),
+            (false, 0) => String::new(),
+            (false, n) => format!(
+                "{n} more optional item{} in Setup.",
+                if n == 1 { "" } else { "s" }
+            ),
+        };
+        v_flex()
+            .mt_2()
+            .gap_1()
+            .children(
+                shown
+                    .into_iter()
+                    .map(|check| setup_row("welcome", check, cx).px_0().py_1p5()),
+            )
+            .child(
+                h_flex()
+                    .mt_1()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        UiButton::new("welcome-recheck")
+                            .icon(Lucide::RefreshCw)
+                            .label(if self.setup.checking {
+                                "Checking…"
+                            } else {
+                                "Re-check"
+                            })
+                            .small()
+                            .disabled(self.setup.checking)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.recheck_setup(window, cx)),
+                            ),
+                    )
+                    .child(
+                        UiButton::new("welcome-open-setup")
+                            .label("Open Setup")
+                            .ghost()
+                            .small()
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_setup(window, cx)),
+                            ),
+                    )
+                    .child(div().text_size(px(12.)).text_color(t.tx3).child(summary)),
             )
     }
 }

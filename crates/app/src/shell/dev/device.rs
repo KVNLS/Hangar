@@ -170,6 +170,7 @@ pub(super) async fn dev_show(
             "settings" | "settings-agents" | "settings-permissions" => {
                 settings(SettingsTab::Agents)
             }
+            "settings-setup" => settings(SettingsTab::Setup),
             "settings-devices" => settings(SettingsTab::Devices),
             "settings-usage" => settings(SettingsTab::Usage),
             "settings-appearance" => settings(SettingsTab::Appearance),
