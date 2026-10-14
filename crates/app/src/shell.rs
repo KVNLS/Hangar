@@ -440,6 +440,8 @@ struct LiveState {
     workspace_agents: HashMap<WorkspaceId, String>,
     /// Build and dev-server tabs per workspace (⌘R).
     runs: HashMap<WorkspaceId, run::WorkspaceRun>,
+    /// Dev-server ports picked for runs still preparing, until the run is in `runs`.
+    port_holds: HashMap<WorkspaceId, u16>,
     /// The tab each workspace's pane shows (agent, dev server or build).
     pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
     /// Live diffs of active workspaces, started when first shown in a pane or compared.
@@ -655,6 +657,7 @@ impl HangarApp {
                 saved_chats: HashMap::new(),
                 workspace_agents: HashMap::new(),
                 runs: HashMap::new(),
+                port_holds: HashMap::new(),
                 pane_tabs: HashMap::new(),
                 diffs: HashMap::new(),
                 agent_queue: Default::default(),

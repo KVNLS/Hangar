@@ -159,7 +159,7 @@ fn prepare(
     build_dir: &Path,
     mut target: hangar_runner::Target,
     saved: RunConfig,
-    taken: &[u16],
+    port: u16,
     path: Option<String>,
 ) -> anyhow::Result<Prepared> {
     let stacks = hangar_runner::detect(root);
@@ -179,10 +179,6 @@ fn prepare(
             )
         }
         _ => None,
-    };
-    let port = match saved.port.filter(|p| !taken.contains(p)) {
-        Some(port) => port,
-        None => hangar_runner::allocate_port(taken)?,
     };
     // The serial of a running emulator changes per boot: look it up by AVD when not known.
     if let Some(avd) = &target.avd
@@ -298,13 +294,25 @@ impl HangarApp {
                     .flatten()
             })
             .unwrap_or_default();
+        // Picked here, not while preparing, so two runs started together get different ports.
         let taken: Vec<u16> = self
             .live
             .runs
             .iter()
+            .map(|(id, run)| (id, run.port))
+            .chain(self.live.port_holds.iter().map(|(id, port)| (id, *port)))
             .filter(|(id, _)| **id != workspace.id)
-            .map(|(_, run)| run.port)
+            .map(|(_, port)| port)
             .collect();
+        let port = match hangar_runner::pick_port(saved.port, &taken) {
+            Ok(port) => port,
+            Err(err) => {
+                let err = anyhow::Error::from(err);
+                self.report(&err, window, cx);
+                return Task::ready(Err(err));
+            }
+        };
+        self.live.port_holds.insert(id, port);
         let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
         let root = workspace.worktree_path.clone();
         tracing::info!(workspace = %id, "run requested");
@@ -313,6 +321,7 @@ impl HangarApp {
         cx.spawn_in(window, async move |this, cx| {
             let fail = |this: &WeakEntity<Self>, err: anyhow::Error, cx: &mut AsyncWindowContext| {
                 let _ = this.update_in(cx, |this, window, cx| {
+                    this.live.port_holds.remove(&id);
                     this.report(&err, window, cx);
                     cx.notify();
                 });
@@ -348,7 +357,7 @@ impl HangarApp {
                 .background_executor()
                 .spawn({
                     let root = root.clone();
-                    async move { prepare(&root, &build_dir, target, saved, &taken, path) }
+                    async move { prepare(&root, &build_dir, target, saved, port, path) }
                 })
                 .await;
             let prepared = match prepared {
@@ -387,6 +396,7 @@ impl HangarApp {
                 }
             }
             let _ = this.update_in(cx, |this, window, cx| {
+                this.live.port_holds.remove(&id);
                 this.start_run(id, root, prepared, name, handle, completion, window, cx)
             });
             done_rx
