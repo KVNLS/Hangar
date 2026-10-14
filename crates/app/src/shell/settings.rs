@@ -72,7 +72,7 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Build and run on the device", "cmd-r", "Workspace"),
     ("Stop the run", "cmd-.", "Workspace"),
     ("Split pane right", "cmd-d", "Workspace"),
-    ("Split pane right", "cmd-\\", "Workspace"),
+    ("Split pane right (alternate)", "cmd-\\", "Workspace"),
     ("Split pane down", "cmd-|", "Workspace"),
     ("Focus pane 1", "cmd-alt-1", "Workspace"),
     ("Focus pane 2", "cmd-alt-2", "Workspace"),
@@ -184,14 +184,16 @@ pub(super) fn shortcut_matches(label: &str, keys: &str, context: &str, query: &s
 pub(super) fn key_caps(keystroke: &str) -> Vec<String> {
     keystroke
         .split('-')
-        .map(|part| match part {
-            "cmd" => "⌘".to_owned(),
-            "shift" => "⇧".to_owned(),
-            "alt" => "⌥".to_owned(),
-            "ctrl" => "⌃".to_owned(),
-            "enter" => "⏎".to_owned(),
-            "escape" => "esc".to_owned(),
-            other => other.to_uppercase(),
+        .flat_map(|part| match part {
+            "cmd" => vec!["⌘".to_owned()],
+            "shift" => vec!["⇧".to_owned()],
+            "alt" => vec!["⌥".to_owned()],
+            "ctrl" => vec!["⌃".to_owned()],
+            "enter" => vec!["⏎".to_owned()],
+            "escape" => vec!["esc".to_owned()],
+            // macOS reports ⇧\ as `|`; show the keys the user presses.
+            "|" => vec!["⇧".to_owned(), "\\".to_owned()],
+            other => vec![other.to_uppercase()],
         })
         .collect()
 }
@@ -345,14 +347,8 @@ impl HangarApp {
                         }),
                 )
                 .child(if is_default {
-                    // The default row says so instead of showing a disabled button.
-                    div()
-                        .px_2()
-                        .font_mono()
-                        .text_size(px(11.))
-                        .text_color(t.acc)
-                        .child("Default")
-                        .into_any_element()
+                    // The badge next to the name already says so.
+                    div().into_any_element()
                 } else {
                     UiButton::new(SharedString::from(format!("default-{}", choice.id)))
                         .label("Make default")
@@ -1033,6 +1029,7 @@ mod tests {
         assert_eq!(key_caps("cmd-shift-r"), ["⌘", "⇧", "R"]);
         assert_eq!(key_caps("escape"), ["esc"]);
         assert_eq!(key_caps("cmd-,"), ["⌘", ","]);
+        assert_eq!(key_caps("cmd-|"), ["⌘", "⇧", "\\"]);
     }
 
     /// The keybindings page lists exactly what `init` binds.

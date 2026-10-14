@@ -310,6 +310,15 @@ Git access is the `git` CLI with porcelain output, not a library.
   - ⌘R stays Run (the design uses it for Reload).
   - ⌘⏎ is missing from the Settings keybinding table.
   - The review title stays the workspace name, because workspaces store no task.
+- On-screen pass (2026-10-07, dark + light, `HANGAR_DEV_SHOW` on a scratch repo):
+  - Seen: workspace, review, overview, palette, new-workspace sheet, Settings › Agents / Devices / Keybindings, Device tab.
+  - Fixed after the pass:
+    - An idle agent that is still alive reads "Open" on overview cards, not "Resume".
+    - Palette "Split pane down".
+    - Keybindings show ⌘⇧\ for split down, and the ⌘\ row is labelled "(alternate)".
+    - Agents settings no longer show "Default" twice.
+  - Open: the device select names the base model's state ("Shutdown") while the label beside it shows the workspace device ("Booting").
+  - Not yet seen on screen: the done card, ⌘S screenshot, the in-use overlay, toasts.
 - `changes/review.rs` calls `hangar_worktree::base_branch_name` directly instead of through a `ReviewOps` port.
 
 ## Device panel visual pass (2026-10-05)

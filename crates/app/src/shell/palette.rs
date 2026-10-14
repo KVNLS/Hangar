@@ -126,6 +126,7 @@ impl HangarApp {
             ),
             command("Show files", Lucide::Folder, Box::new(ShowFilesTab)),
             command("Split pane right", Lucide::Columns2, Box::new(SplitPane)),
+            command("Split pane down", Lucide::Rows2, Box::new(SplitPaneDown)),
             command("Close pane", Lucide::X, Box::new(ClosePane)),
             command("Toggle sidebar", Lucide::PanelLeft, Box::new(ToggleSidebar)),
             command(

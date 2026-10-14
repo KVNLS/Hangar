@@ -26,9 +26,10 @@ pub(super) enum CardAction {
 }
 
 /// Button label and action of an overview card. Approval and input are answered in the agent's
-/// pane, so they open it.
-pub(super) fn card_action(state: AgentState) -> (&'static str, CardAction) {
+/// pane, so they open it. An idle agent that is still alive (quiet terminal) is opened, not resumed.
+pub(super) fn card_action(state: AgentState, alive: bool) -> (&'static str, CardAction) {
     match state {
+        AgentState::Idle if alive => ("Open", CardAction::Open),
         AgentState::Approval => ("Review request", CardAction::Open),
         AgentState::Input => ("Reply", CardAction::Open),
         AgentState::Failed => ("Retry", CardAction::Restart),
@@ -226,7 +227,8 @@ impl HangarApp {
             .map(|v| v.read(cx).subagents())
             .unwrap_or_default();
         let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
-        let (action_label, action) = card_action(state);
+        let (action_label, action) =
+            card_action(state, live.is_some_and(|l| !l.session.status.is_terminal()));
         let (action_fg, action_bg, action_border) = if card_action_tinted(state) {
             let (fg, bg) = state_colors(state, t);
             (fg, bg, bg)
@@ -517,7 +519,7 @@ mod tests {
     fn action_labels_follow_the_state() {
         let labels: Vec<&str> = AgentState::ORDER
             .into_iter()
-            .map(|s| card_action(s).0)
+            .map(|s| card_action(s, false).0)
             .collect();
         assert_eq!(
             labels,
@@ -530,10 +532,11 @@ mod tests {
                 "Resume"
             ]
         );
-        assert_eq!(card_action(Review).1, CardAction::Review);
-        assert_eq!(card_action(Failed).1, CardAction::Restart);
-        assert_eq!(card_action(Idle).1, CardAction::Restart);
-        assert_eq!(card_action(Approval).1, CardAction::Open);
+        assert_eq!(card_action(Review, false).1, CardAction::Review);
+        assert_eq!(card_action(Failed, false).1, CardAction::Restart);
+        assert_eq!(card_action(Idle, false).1, CardAction::Restart);
+        assert_eq!(card_action(Idle, true), ("Open", CardAction::Open));
+        assert_eq!(card_action(Approval, false).1, CardAction::Open);
     }
 
     #[test]
