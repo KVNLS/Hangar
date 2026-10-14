@@ -70,7 +70,7 @@ fn main() {
     let dev = DevOptions::from_env();
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(hangar_app::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             hangar_app::terminal_view::init(cx);

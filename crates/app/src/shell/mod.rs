@@ -1526,7 +1526,6 @@ impl HangarApp {
                     } else {
                         IconName::PanelRightOpen
                     })
-                    .label("Device")
                     .selected(device_open)
                     .tooltip(if device_open {
                         "Hide device (⌘⇧P)"

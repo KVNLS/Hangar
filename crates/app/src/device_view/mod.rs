@@ -433,10 +433,12 @@ impl Render for DeviceView {
 
         let overlay = self.stats.borrow().overlay();
         let theme = cx.theme();
-        div()
+        let screen_box = div()
             .id("device-screen")
             .relative()
-            .size_full()
+            .flex_1()
+            .min_h_0()
+            .w_full()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
@@ -459,22 +461,26 @@ impl Render for DeviceView {
                         .text_color(theme.muted_foreground)
                         .child("Waiting for the first frame…"),
                 )
-            })
+            });
+        // Stats sit above the screen, not on it: an overlay would hide the device's status bar.
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
             .when_some(overlay, |this, text| {
                 this.child(
                     div()
-                        .absolute()
-                        .top_1()
-                        .left_1()
+                        .flex_shrink_0()
+                        .w_full()
                         .px_1()
-                        .rounded_sm()
-                        .bg(black().opacity(0.6))
-                        .text_color(white())
+                        .truncate()
                         .text_xs()
                         .font_family("Menlo")
+                        .text_color(theme.muted_foreground)
                         .child(text),
                 )
             })
+            .child(screen_box)
     }
 }
 

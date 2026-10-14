@@ -2,6 +2,7 @@
 //! controls they support. A new platform (Android) plugs in by adding a variant here; every
 //! function in this module does process or framework I/O, so call them off the UI thread.
 
+use gpui_kit::assets::IconName;
 use hangar_devices::{Device, DeviceInfo, Input};
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,7 @@ pub struct Control {
     pub id: &'static str,
     pub label: &'static str,
     pub tooltip: &'static str,
+    pub icon: IconName,
     pub input: Input,
 }
 
@@ -25,6 +27,7 @@ const HOME: Control = Control {
     id: "home",
     label: "Home",
     tooltip: "Home button",
+    icon: IconName::House,
     input: Input::Home,
 };
 
@@ -32,6 +35,7 @@ const VOLUME_UP: Control = Control {
     id: "volume-up",
     label: "Vol +",
     tooltip: "Volume up",
+    icon: IconName::Volume2,
     input: Input::VolumeUp,
 };
 
@@ -39,6 +43,7 @@ const VOLUME_DOWN: Control = Control {
     id: "volume-down",
     label: "Vol \u{2212}",
     tooltip: "Volume down",
+    icon: IconName::Volume1,
     input: Input::VolumeDown,
 };
 
@@ -48,6 +53,7 @@ const IOS_CONTROLS: &[Control] = &[
         id: "lock",
         label: "Lock",
         tooltip: "Side button: lock the screen",
+        icon: IconName::Lock,
         input: Input::Lock,
     },
     VOLUME_UP,
@@ -59,6 +65,7 @@ const ANDROID_CONTROLS: &[Control] = &[
         id: "back",
         label: "Back",
         tooltip: "Back button",
+        icon: IconName::ArrowLeft,
         input: Input::Back,
     },
     HOME,
@@ -66,12 +73,14 @@ const ANDROID_CONTROLS: &[Control] = &[
         id: "app-switch",
         label: "Apps",
         tooltip: "App switcher (recents)",
+        icon: IconName::LayoutGrid,
         input: Input::AppSwitch,
     },
     Control {
         id: "lock",
         label: "Power",
         tooltip: "Power button: toggle the screen",
+        icon: IconName::Power,
         input: Input::Lock,
     },
     VOLUME_UP,

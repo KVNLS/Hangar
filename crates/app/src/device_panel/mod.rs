@@ -802,7 +802,8 @@ impl DevicePanel {
             let input = control.input;
             Button::new(SharedString::from(format!("device-control-{}", control.id)))
                 .xsmall()
-                .label(control.label)
+                .ghost()
+                .icon(control.icon)
                 .tooltip(control.tooltip)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.send(input, cx);
@@ -840,7 +841,12 @@ impl DevicePanel {
                                     let view = rotate_view.clone();
                                     Button::new(SharedString::from(format!("device-rotate-{left}")))
                                         .xsmall()
-                                        .label(if left { "⟲" } else { "⟳" })
+                                        .ghost()
+                                        .icon(if left {
+                                            gpui_kit::assets::IconName::RotateCcw
+                                        } else {
+                                            gpui_kit::assets::IconName::RotateCw
+                                        })
                                         .tooltip(label)
                                         .on_click(move |_, _, cx| {
                                             view.update(cx, |view, _| view.rotate(left));
