@@ -12,15 +12,21 @@ impl Render for HangarApp {
         for pane in 0..PANE_COUNT {
             panes = panes.child(resizable_panel().child(self.render_pane(pane, cx)));
         }
-        let right_panel = self.render_right_panel(cx);
-        let main = h_flex()
-            .flex_1()
-            .min_h_0()
-            .when(self.sidebar_open, |this| {
-                this.child(self.render_sidebar(cx))
-            })
-            .child(div().flex_1().min_w_0().h_full().child(panes))
-            .children(right_panel);
+        let main = match self.screen {
+            Screen::Review => div().flex_1().min_h_0().child(self.changes_panel.clone()),
+            Screen::Workspace => {
+                let right_panel = self.render_right_panel(cx);
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .when(self.sidebar_open, |this| {
+                        this.child(self.render_sidebar(cx))
+                    })
+                    .child(div().flex_1().min_w_0().h_full().child(panes))
+                    .children(right_panel)
+            }
+        };
         v_flex()
             .id("hangar")
             .key_context("Hangar")

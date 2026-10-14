@@ -19,6 +19,9 @@
 //! - `HANGAR_DEV_REMOVE_PROJECT=<repo>` — forget the project (refused while it has active
 //!   workspaces). Never touches the repository.
 //!
+//! `HANGAR_DEV_REVIEW=1` opens the full-width review screen once files are listed (after the
+//! review hooks below), logs its row counts, renders the inline mode, then goes back.
+//!
 //! `HANGAR_DEV_CHANGES=1` opens the changes panel before the hooks above run; a
 //! worktree-relative path instead of `1` also selects that file once it shows up.
 //!

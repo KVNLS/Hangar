@@ -34,7 +34,7 @@ use hangar_worktree::MergeStrategy;
 
 use crate::agents::{self, AgentChoice};
 use crate::changes::review::ReviewTarget;
-use crate::changes::{ChangesPanel, PanelSource, WorkspaceDiff};
+use crate::changes::{ChangesEvent, ChangesPanel, ExitReview, PanelSource, WorkspaceDiff};
 use crate::device_panel::{DevicePanel, DevicePanelEvent};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
@@ -71,7 +71,8 @@ actions!(
         FilterWorkspaces,
         AddProject,
         ShowDeviceTab,
-        ShowChangesTab
+        ShowChangesTab,
+        OpenReview
     ]
 );
 
@@ -86,6 +87,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-o", AddProject, None),
         KeyBinding::new("cmd-1", ShowDeviceTab, None),
         KeyBinding::new("cmd-2", ShowChangesTab, None),
+        KeyBinding::new("cmd-shift-r", OpenReview, None),
+        KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
     ]);
 }
 
@@ -161,6 +164,15 @@ struct NewWorkspaceInput {
     _submit: Subscription,
 }
 
+/// What fills the window between the title bar and the status bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Screen {
+    /// Sidebar, panes and the right panel.
+    Workspace,
+    /// Full-width diff review of the focused workspace (⌘⇧R).
+    Review,
+}
+
 pub struct HangarApp {
     store: Option<Arc<Store>>,
     projects: ProjectList,
@@ -190,6 +202,7 @@ pub struct HangarApp {
     save_device: Option<Task<()>>,
     focus: FocusHandle,
     sidebar_open: bool,
+    screen: Screen,
     sidebar_filter: Entity<InputState>,
     collapsed_projects: HashSet<ProjectId>,
     /// Projects whose archived group is expanded.
@@ -250,6 +263,13 @@ impl HangarApp {
         );
 
         let changes_panel = cx.new(ChangesPanel::new);
+        let changes_sub = cx.subscribe_in(
+            &changes_panel,
+            window,
+            |this, _, event: &ChangesEvent, window, cx| match event {
+                ChangesEvent::ExitReview => this.set_screen(Screen::Workspace, window, cx),
+            },
+        );
         let device_panel = cx.new(|cx| DevicePanel::new(window, cx));
         let device_sub = cx.subscribe_in(
             &device_panel,
@@ -329,11 +349,12 @@ impl HangarApp {
             save_device: None,
             focus,
             sidebar_open: true,
+            screen: Screen::Workspace,
             sidebar_filter,
             collapsed_projects: HashSet::new(),
             show_archived: HashSet::new(),
             _activity: Self::track_activity(cx),
-            _subscriptions: vec![select_sub, resize_sub, device_sub, filter_sub],
+            _subscriptions: vec![select_sub, resize_sub, changes_sub, device_sub, filter_sub],
         }
     }
 

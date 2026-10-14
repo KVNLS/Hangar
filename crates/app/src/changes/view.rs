@@ -3,7 +3,7 @@
 
 mod actions;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -24,13 +24,13 @@ use super::highlight::{RowStyles, highlight_rows};
 use super::language::language_for_path;
 use super::live::WorkspaceDiff;
 use super::model::{
-    DiffRow, DisplayLine, ListEntry, file_list, file_title, flatten, hunk_header, list_paths,
-    reselect, short_sha, status_letter, widest_row,
+    DiffRow, DisplayLine, ListEntry, SplitRow, file_list, file_title, flatten, hunk_header,
+    list_paths, reselect, short_sha, split_rows, status_letter, widest_row,
 };
 use super::review::{ReviewInfo, ReviewTarget, StageState};
 pub use actions::Busy;
 
-use crate::ui::components::{Delta, UiButton};
+use crate::ui::components::{Chip, Delta, EmptyState, Segmented, UiButton, section_label};
 use crate::ui::{ActiveTokens as _, FONT_MONO, TypeScale as _};
 
 const LIST_ROW_HEIGHT: f32 = 28.;
@@ -65,6 +65,8 @@ struct CommitBox {
 struct Shown {
     file: Arc<FileDiff>,
     rows: Arc<Vec<DiffRow>>,
+    /// Side-by-side layout of `rows` (review screen).
+    split: Arc<Vec<SplitRow>>,
     styles: Option<Arc<Vec<Option<RowStyles>>>>,
     /// Row with the longest text, measured for horizontal scrolling.
     widest: usize,
@@ -93,8 +95,33 @@ pub struct ChangesPanel {
     info_tasks: HashMap<WorkspaceId, Task<()>>,
     busy: HashMap<WorkspaceId, Busy>,
     commit_boxes: HashMap<WorkspaceId, CommitBox>,
+    /// Full-width review screen instead of the side panel.
+    wide: bool,
+    /// Side-by-side diff on the review screen.
+    split_view: bool,
+    /// Files marked viewed on the review screen, per workspace (not persisted).
+    viewed: HashMap<WorkspaceId, HashSet<PathBuf>>,
+    /// Focused on the review screen so Escape reaches its key context.
+    focus: FocusHandle,
     _theme: Subscription,
 }
+
+actions!(changes, [ExitReview]);
+
+#[derive(Clone, Copy, Debug)]
+pub struct ReviewStats {
+    pub files: usize,
+    pub unified_rows: usize,
+    pub split_rows: usize,
+    pub wide: bool,
+}
+
+pub enum ChangesEvent {
+    /// The review screen's back button or Escape.
+    ExitReview,
+}
+
+impl EventEmitter<ChangesEvent> for ChangesPanel {}
 
 impl ChangesPanel {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -124,7 +151,36 @@ impl ChangesPanel {
             info_tasks: HashMap::new(),
             busy: HashMap::new(),
             commit_boxes: HashMap::new(),
+            wide: false,
+            split_view: true,
+            viewed: HashMap::new(),
+            focus: cx.focus_handle(),
             _theme: theme,
+        }
+    }
+
+    pub fn set_wide(&mut self, wide: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.wide != wide {
+            self.wide = wide;
+            cx.notify();
+        }
+        if wide {
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    pub fn set_split_view(&mut self, split: bool, cx: &mut Context<Self>) {
+        self.split_view = split;
+        cx.notify();
+    }
+
+    /// What the review screen shows (dev hooks).
+    pub fn review_stats(&self) -> ReviewStats {
+        ReviewStats {
+            files: self.paths.len(),
+            unified_rows: self.shown.as_ref().map_or(0, |s| s.rows.len()),
+            split_rows: self.shown.as_ref().map_or(0, |s| s.split.len()),
+            wide: self.wide,
         }
     }
 
@@ -257,6 +313,7 @@ impl ChangesPanel {
         if !(same_path && has_language) {
             self.shown = Some(Shown {
                 widest: widest_row(&file, &rows),
+                split: Arc::new(split_rows(&rows, &file)),
                 file: file.clone(),
                 rows: rows.clone(),
                 styles: None,
@@ -313,6 +370,7 @@ impl ChangesPanel {
                     "diff highlighted"
                 );
                 this.shown = Some(Shown {
+                    split: Arc::new(split_rows(&rows, &file)),
                     file,
                     rows,
                     styles: Some(Arc::new(styles)),
@@ -401,8 +459,13 @@ impl ChangesPanel {
         let count = self.list.len();
         let height = px(LIST_ROW_HEIGHT * count.min(LIST_MAX_ROWS) as f32);
         div()
-            .h(height + px(8.))
-            .flex_shrink_0()
+            .map(|this| {
+                if self.wide {
+                    this.flex_1().min_h_0()
+                } else {
+                    this.h(height + px(8.)).flex_shrink_0()
+                }
+            })
             .px_1p5()
             .py_1()
             .border_b_1()
@@ -586,8 +649,241 @@ impl ChangesPanel {
     }
 }
 
+impl ChangesPanel {
+    fn viewed_count(&self) -> usize {
+        let Some(source) = &self.source else { return 0 };
+        self.viewed
+            .get(&source.workspace)
+            .map_or(0, |v| v.iter().filter(|p| self.paths.contains(p)).count())
+    }
+
+    fn is_viewed(&self, path: &Path) -> bool {
+        self.source
+            .as_ref()
+            .and_then(|s| self.viewed.get(&s.workspace))
+            .is_some_and(|v| v.contains(path))
+    }
+
+    fn toggle_viewed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(source) = &self.source else { return };
+        let viewed = self.viewed.entry(source.workspace).or_default();
+        if !viewed.remove(&path) {
+            viewed.insert(path);
+        }
+        cx.notify();
+    }
+
+    /// The full-width review screen: top bar, file column with commit/PR actions, diff.
+    fn render_wide(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.tokens();
+        let back = UiButton::new("review-back")
+            .icon(Lucide::ArrowLeft)
+            .label("Workspace")
+            .kbd("esc")
+            .ghost()
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangesEvent::ExitReview)));
+        let Some(source) = &self.source else {
+            return v_flex()
+                .size_full()
+                .bg(t.app)
+                .child(h_flex().h(px(48.)).px(px(14.)).items_center().child(back))
+                .child(
+                    div().flex_1().flex().items_center().justify_center().child(
+                        EmptyState::new(Lucide::FileDiff, "Nothing to review")
+                            .hint("Focus a pane that shows a workspace, then review its changes."),
+                    ),
+                )
+                .into_any_element();
+        };
+        let summary = source.diff.read(cx).summary().cloned();
+        let name = source.name.clone();
+        let files = self.paths.len();
+        let viewed = self.viewed_count();
+        let top = h_flex()
+            .flex_none()
+            .h(px(48.))
+            .px(px(14.))
+            .gap(px(10.))
+            .items_center()
+            .bg(t.panel)
+            .border_b_1()
+            .border_color(t.line)
+            .child(back)
+            .child(div().w(px(1.)).h(px(18.)).bg(t.line))
+            .child(div().type_body_strong().truncate().child(name))
+            .when_some(summary.as_ref(), |this, summary| {
+                let branch = summary
+                    .status
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| "detached".into());
+                let n = |v: u64| usize::try_from(v).unwrap_or(usize::MAX);
+                this.child(
+                    Chip::new(format!("{branch} → {}", short_sha(&summary.merge_base)))
+                        .icon(Lucide::GitBranch),
+                )
+                .child(
+                    div()
+                        .font_family(FONT_MONO)
+                        .text_size(px(11.))
+                        .text_color(t.tx3)
+                        .child(format!("{files} file{}", if files == 1 { "" } else { "s" })),
+                )
+                .child(Delta::new(n(summary.insertions), n(summary.deletions)))
+            })
+            .child(div().flex_1())
+            .child(
+                Segmented::new("review-mode", ["Split", "Inline"])
+                    .selected(if self.split_view { 0 } else { 1 })
+                    .on_select(cx.listener(|this, i: &usize, _, cx| {
+                        this.split_view = *i == 0;
+                        cx.notify();
+                    })),
+            );
+        let review = self.render_review(window, cx);
+        let column = v_flex()
+            .w(px(280.))
+            .flex_none()
+            .h_full()
+            .bg(t.panel)
+            .border_r_1()
+            .border_color(t.line)
+            .child(
+                h_flex()
+                    .px_3()
+                    .pt(px(10.))
+                    .pb_1()
+                    .justify_between()
+                    .child(section_label("Files", cx))
+                    .child(
+                        div()
+                            .font_family(FONT_MONO)
+                            .text_size(px(11.))
+                            .text_color(t.tx3)
+                            .child(format!("{viewed}/{files} viewed")),
+                    ),
+            )
+            .child(self.render_file_list(cx))
+            .child(div().border_t_1().border_color(t.line).child(review));
+        v_flex()
+            .size_full()
+            .key_context("ReviewScreen")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|_, _: &ExitReview, _, cx| cx.emit(ChangesEvent::ExitReview)))
+            .bg(t.app)
+            .child(top)
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(column)
+                    .child(self.render_wide_diff(cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_wide_diff(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.tokens();
+        let Some(shown) = &self.shown else {
+            return div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(12.))
+                .text_color(t.tx3)
+                .child(if self.list.is_empty() {
+                    "No changes since the merge-base."
+                } else {
+                    "Select a file to see its diff."
+                })
+                .into_any_element();
+        };
+        let file = &shown.file;
+        let path = file.path.clone();
+        let viewed = self.is_viewed(&path);
+        let header = h_flex()
+            .flex_none()
+            .h(px(36.))
+            .px(px(14.))
+            .gap(px(10.))
+            .items_center()
+            .bg(t.panel)
+            .border_b_1()
+            .border_color(t.line)
+            .font_family(FONT_MONO)
+            .text_size(px(12.))
+            .child(Icon::new(Lucide::File).size(px(13.)).text_color(t.tx3))
+            .child(div().min_w_0().truncate().child(file_title(file)))
+            .child(counts(file, cx))
+            .child(div().flex_1())
+            .child(
+                UiButton::new("review-viewed")
+                    .icon(Lucide::Check)
+                    .label("Viewed")
+                    .small()
+                    .selected(viewed)
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle_viewed(path.clone(), cx)),
+                    ),
+            );
+        let list = if self.split_view {
+            uniform_list(
+                "review-split",
+                shown.split.len(),
+                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                    let Some(shown) = &this.shown else {
+                        return Vec::new();
+                    };
+                    range
+                        .filter_map(|ix| render_split_row(shown, ix, cx))
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .size_full()
+            .track_scroll(&self.diff_scroll)
+            .into_any_element()
+        } else {
+            uniform_list(
+                "review-inline",
+                shown.rows.len(),
+                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                    let Some(shown) = &this.shown else {
+                        return Vec::new();
+                    };
+                    range
+                        .filter_map(|ix| render_row(shown, ix, cx))
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .size_full()
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+            .with_width_from_item(Some(shown.widest))
+            .track_scroll(&self.diff_scroll)
+            .into_any_element()
+        };
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .font_family(FONT_MONO)
+                    .text_size(px(12.))
+                    .child(list),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for ChangesPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.wide {
+            return self.render_wide(window, cx);
+        }
         let header = self.render_header(cx);
         let review = self
             .source
@@ -629,6 +925,7 @@ impl Render for ChangesPanel {
             .bg(cx.tokens().panel)
             .child(header)
             .child(body)
+            .into_any_element()
     }
 }
 
@@ -670,24 +967,7 @@ fn render_row(shown: &Shown, ix: usize, cx: &App) -> Option<AnyElement> {
                 LineKind::Removed => (Some(t.delbg), "−", t.red),
                 LineKind::Context | LineKind::NoNewlineAtEof => (None, " ", t.tx3),
             };
-            let body: AnyElement = if line.kind == LineKind::NoNewlineAtEof {
-                div()
-                    .text_color(t.tx3)
-                    .child("\\ No newline at end of file")
-                    .into_any_element()
-            } else {
-                let text = DisplayLine::new(&line.text).text;
-                let styles = shown
-                    .styles
-                    .as_ref()
-                    .and_then(|s| s.get(ix).cloned().flatten());
-                match styles {
-                    Some(styles) if !styles.is_empty() => StyledText::new(text)
-                        .with_highlights(styles)
-                        .into_any_element(),
-                    _ => SharedString::from(text).into_any_element(),
-                }
-            };
+            let body = line_body(shown, ix, line, cx);
             row.when_some(bg, |this, bg| this.bg(bg))
                 .child(gutter(line.old_lineno))
                 .child(gutter(line.new_lineno))
@@ -703,6 +983,100 @@ fn render_row(shown: &Shown, ix: usize, cx: &App) -> Option<AnyElement> {
         }
     };
     Some(element)
+}
+
+/// A diff line's text, syntax-highlighted when highlights for unified row `ix` are ready.
+fn line_body(shown: &Shown, ix: usize, line: &hangar_worktree::DiffLine, cx: &App) -> AnyElement {
+    if line.kind == LineKind::NoNewlineAtEof {
+        return div()
+            .text_color(cx.tokens().tx3)
+            .child("\\ No newline at end of file")
+            .into_any_element();
+    }
+    let text = DisplayLine::new(&line.text).text;
+    let styles = shown
+        .styles
+        .as_ref()
+        .and_then(|s| s.get(ix).cloned().flatten());
+    match styles {
+        Some(styles) if !styles.is_empty() => StyledText::new(text)
+            .with_highlights(styles)
+            .into_any_element(),
+        _ => SharedString::from(text).into_any_element(),
+    }
+}
+
+/// One row of the side-by-side diff.
+fn render_split_row(shown: &Shown, ix: usize, cx: &App) -> Option<AnyElement> {
+    let (left, right) = match *shown.split.get(ix)? {
+        SplitRow::Full(row) => return render_row(shown, row, cx),
+        SplitRow::Pair { left, right } => (left, right),
+    };
+    let t = cx.tokens();
+    let half = |row: Option<usize>, old: bool| {
+        let cell = h_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .whitespace_nowrap();
+        let line = row.and_then(|row| match *shown.rows.get(row)? {
+            DiffRow::Line { hunk, line } => shown
+                .file
+                .hunks
+                .get(hunk)?
+                .lines
+                .get(line)
+                .map(|l| (row, l)),
+            _ => None,
+        });
+        let Some((row, line)) = line else {
+            return cell.bg(t.hover).into_any_element();
+        };
+        let (bg, sign, sign_color) = match line.kind {
+            LineKind::Added => (Some(t.addbg), "+", t.grn),
+            LineKind::Removed => (Some(t.delbg), "−", t.red),
+            LineKind::Context | LineKind::NoNewlineAtEof => (None, " ", t.tx3),
+        };
+        let number = if old {
+            line.old_lineno
+        } else {
+            line.new_lineno
+        };
+        cell.when_some(bg, |this, bg| this.bg(bg))
+            .child(
+                div()
+                    .w(px(48.))
+                    .flex_shrink_0()
+                    .pr(px(10.))
+                    .text_right()
+                    .text_color(t.tx3)
+                    .children(number.map(|n| n.to_string())),
+            )
+            .child(
+                div()
+                    .w(px(16.))
+                    .flex_shrink_0()
+                    .text_color(sign_color)
+                    .child(sign),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(line_body(shown, row, line, cx)),
+            )
+            .into_any_element()
+    };
+    Some(
+        h_flex()
+            .h(px(20.))
+            .w_full()
+            .child(half(left, true))
+            .child(div().w(px(1.)).h_full().bg(t.line))
+            .child(half(right, false))
+            .into_any_element(),
+    )
 }
 
 fn counts(file: &FileDiff, cx: &App) -> AnyElement {

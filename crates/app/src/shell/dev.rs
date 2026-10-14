@@ -56,6 +56,8 @@ pub struct DevOptions {
     pub push: bool,
     /// PR title (`1` = the default title).
     pub pr: Option<String>,
+    /// Open the full-width review screen once the changes panel lists files.
+    pub review: bool,
     pub merge: Option<MergeStrategy>,
     /// Device id (simulator UDID) to open in the device panel.
     pub device: Option<String>,
@@ -148,6 +150,7 @@ impl DevOptions {
             commit: var("HANGAR_DEV_COMMIT"),
             push: flag("HANGAR_DEV_PUSH"),
             pr: var("HANGAR_DEV_PR"),
+            review: flag("HANGAR_DEV_REVIEW"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
                 "squash" => Some(MergeStrategy::Squash),
@@ -238,6 +241,9 @@ pub(super) async fn run_dev_hooks(
         }
     }
     run_review_hooks(&this, &dev, cx).await;
+    if dev.review {
+        dev_review(&this, cx).await;
+    }
     let find = |this: &mut HangarApp, hook: &str, slug: &str| {
         let found = this.workspace_by_slug(slug);
         if found.is_none() {
@@ -550,4 +556,44 @@ async fn run_review_hooks(
             None => tracing::error!("HANGAR_DEV_MERGE: no workspace in the changes panel"),
         }
     }
+}
+
+/// `HANGAR_DEV_REVIEW`: waits (up to 15 s) for the changes panel to list files, opens the review
+/// screen, then logs what it shows in split and inline mode.
+async fn dev_review(this: &WeakEntity<HangarApp>, cx: &mut AsyncWindowContext) {
+    let stats = |this: &WeakEntity<HangarApp>, cx: &mut AsyncWindowContext| {
+        this.update(cx, |this, cx| this.changes_panel.read(cx).review_stats())
+            .ok()
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while stats(this, cx).is_some_and(|s| s.files == 0) && std::time::Instant::now() < deadline {
+        cx.background_executor().timer(DEV_POLL).await;
+    }
+    let _ = this.update_in(cx, |this, window, cx| {
+        this.set_screen(Screen::Review, window, cx)
+    });
+    cx.background_executor()
+        .timer(Duration::from_millis(500))
+        .await;
+    match stats(this, cx) {
+        Some(s) => tracing::info!(
+            files = s.files,
+            unified_rows = s.unified_rows,
+            split_rows = s.split_rows,
+            wide = s.wide,
+            "HANGAR_DEV_REVIEW"
+        ),
+        None => tracing::error!("HANGAR_DEV_REVIEW: app gone"),
+    }
+    let _ = this.update(cx, |this, cx| {
+        this.changes_panel
+            .update(cx, |panel, cx| panel.set_split_view(false, cx))
+    });
+    cx.background_executor()
+        .timer(Duration::from_millis(300))
+        .await;
+    let _ = this.update_in(cx, |this, window, cx| {
+        this.set_screen(Screen::Workspace, window, cx)
+    });
+    tracing::info!("HANGAR_DEV_REVIEW inline rendered, back to workspace");
 }
