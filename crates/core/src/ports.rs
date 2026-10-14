@@ -41,6 +41,62 @@ pub trait Store: Send + Sync {
     fn insert_session(&self, session: &Session) -> PortResult<()>;
     fn list_sessions(&self, workspace: WorkspaceId) -> PortResult<Vec<Session>>;
     fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session>;
+
+    /// The JSON stored under `key`; `None` when it was never set.
+    fn read_setting(&self, key: &str) -> PortResult<Option<String>>;
+    /// Stores `json` under `key`, replacing any previous value.
+    fn write_setting(&self, key: &str, json: &str) -> PortResult<()>;
+    /// Removing a missing key is not an error.
+    fn remove_setting(&self, key: &str) -> PortResult<()>;
+}
+
+/// A shared store is a store, so `&Arc<dyn Store>` can be passed where `&dyn Store` is expected.
+impl<S: Store + ?Sized> Store for std::sync::Arc<S> {
+    fn insert_project(&self, project: &Project) -> PortResult<()> {
+        (**self).insert_project(project)
+    }
+    fn list_projects(&self) -> PortResult<Vec<Project>> {
+        (**self).list_projects()
+    }
+    fn get_project(&self, id: ProjectId) -> PortResult<Project> {
+        (**self).get_project(id)
+    }
+    fn delete_project(&self, id: ProjectId) -> PortResult<()> {
+        (**self).delete_project(id)
+    }
+    fn insert_workspace(&self, workspace: &Workspace) -> PortResult<()> {
+        (**self).insert_workspace(workspace)
+    }
+    fn list_workspaces(&self, project: ProjectId) -> PortResult<Vec<Workspace>> {
+        (**self).list_workspaces(project)
+    }
+    fn get_workspace(&self, id: WorkspaceId) -> PortResult<Workspace> {
+        (**self).get_workspace(id)
+    }
+    fn update_workspace_status(&self, id: WorkspaceId, status: WorkspaceStatus) -> PortResult<()> {
+        (**self).update_workspace_status(id, status)
+    }
+    fn delete_workspace(&self, id: WorkspaceId) -> PortResult<()> {
+        (**self).delete_workspace(id)
+    }
+    fn insert_session(&self, session: &Session) -> PortResult<()> {
+        (**self).insert_session(session)
+    }
+    fn list_sessions(&self, workspace: WorkspaceId) -> PortResult<Vec<Session>> {
+        (**self).list_sessions(workspace)
+    }
+    fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session> {
+        (**self).update_session_status(id, status)
+    }
+    fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
+        (**self).read_setting(key)
+    }
+    fn write_setting(&self, key: &str, json: &str) -> PortResult<()> {
+        (**self).write_setting(key, json)
+    }
+    fn remove_setting(&self, key: &str) -> PortResult<()> {
+        (**self).remove_setting(key)
+    }
 }
 
 /// A worktree to add on a new branch.

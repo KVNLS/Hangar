@@ -3130,6 +3130,8 @@ name = "hangar-usecases"
 version = "0.1.0"
 dependencies = [
  "hangar-core",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
 ]

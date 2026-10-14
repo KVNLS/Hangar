@@ -12,10 +12,11 @@ use hangar_agents::acp::{AcpAdapter, AcpEvent, AcpSession};
 use hangar_agents::{AgentAdapter as _, PtyAdapter, SpawnContext, UpdateHook};
 
 use crate::pty::{self, AgentHandle};
+use hangar_core::ports::Store;
 use hangar_core::{Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId};
-use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
 use hangar_usecases::sessions::Sessions;
+use hangar_usecases::settings::SettingsExt as _;
 use hangar_usecases::workspaces::Workspaces;
 pub use hangar_usecases::workspaces::{DeleteOptions, DeleteOutcome, DeleteSummary};
 
@@ -23,12 +24,6 @@ use crate::agents::{self, AgentExtras};
 use crate::setting_keys;
 use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
 use crate::ui::theme::Appearance;
-
-pub fn open_store(path: &Path) -> anyhow::Result<Arc<Store>> {
-    let store =
-        Store::open(path).with_context(|| format!("failed to open database {}", path.display()))?;
-    Ok(Arc::new(store))
-}
 
 /// Local models served by Ollama, offered to OpenCode as an extra provider.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -63,7 +58,7 @@ pub struct SavedChat {
 }
 
 /// `(config id, value)` pairs in the order they were chosen.
-pub fn saved_agent_config(store: &Store, agent: &str) -> Vec<(String, String)> {
+pub fn saved_agent_config(store: &dyn Store, agent: &str) -> Vec<(String, String)> {
     store
         .get_setting(&setting_keys::agent_config(agent))
         .unwrap_or_else(|err| {
@@ -74,7 +69,7 @@ pub fn saved_agent_config(store: &Store, agent: &str) -> Vec<(String, String)> {
 }
 
 pub fn remember_agent_config(
-    store: &Store,
+    store: &dyn Store,
     agent: &str,
     config_id: &str,
     value: &str,
@@ -88,7 +83,7 @@ pub fn remember_agent_config(
 /// Loads every project with its workspaces (active and archived) and the saved settings.
 /// Sessions left `Starting`/`Running` by a previous run are marked failed: their processes
 /// ended with that run.
-pub fn load(store: &Store) -> anyhow::Result<Loaded> {
+pub fn load(store: &dyn Store) -> anyhow::Result<Loaded> {
     let mut entries = Vec::new();
     let mut chats = HashMap::new();
     for project in store.list_projects()? {
@@ -174,51 +169,51 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
     })
 }
 
-pub fn save_layout(store: &Store, layout: &PaneLayout) -> anyhow::Result<()> {
+pub fn save_layout(store: &dyn Store, layout: &PaneLayout) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::LAYOUT, layout)
         .context("failed to save pane layout")
 }
 
-pub fn save_changes(store: &Store, changes: &ChangesLayout) -> anyhow::Result<()> {
+pub fn save_changes(store: &dyn Store, changes: &ChangesLayout) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::CHANGES, changes)
         .context("failed to save the changes panel layout")
 }
 
-pub fn save_device(store: &Store, device: &DeviceLayout) -> anyhow::Result<()> {
+pub fn save_device(store: &dyn Store, device: &DeviceLayout) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::DEVICE, device)
         .context("failed to save the device panel settings")
 }
 
-pub fn save_appearance(store: &Store, appearance: Appearance) -> anyhow::Result<()> {
+pub fn save_appearance(store: &dyn Store, appearance: Appearance) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::APPEARANCE, &appearance)
         .context("failed to save the appearance")
 }
 
-pub fn save_ollama(store: &Store, ollama: &OllamaSettings) -> anyhow::Result<()> {
+pub fn save_ollama(store: &dyn Store, ollama: &OllamaSettings) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::OLLAMA, ollama)
         .context("failed to save the Ollama settings")
 }
 
-pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {
+pub fn save_agent(store: &dyn Store, agent: &str) -> anyhow::Result<()> {
     store
         .set_setting(&setting_keys::AGENT, &agent.to_owned())
         .context("failed to save the selected agent")
 }
 
 /// Registers the repository containing `path`, or returns the existing project for it.
-pub fn add_project(store: &Store, path: &Path) -> anyhow::Result<Project> {
+pub fn add_project(store: &dyn Store, path: &Path) -> anyhow::Result<Project> {
     Ok(workspaces(store).add_project(path)?)
 }
 
 /// Creates the branch, the worktree and the workspace row. The slug gets a numeric suffix when
 /// the name, branch or directory is already taken.
 pub fn create_workspace(
-    store: &Store,
+    store: &dyn Store,
     project: &Project,
     name: &str,
     worktrees_root: &Path,
@@ -230,7 +225,7 @@ pub fn create_workspace(
 /// branch named `branch` (default: `hangar/<slug>`, suffixed until free). A given branch name is
 /// used as is and must not exist yet.
 pub fn create_workspace_from(
-    store: &Store,
+    store: &dyn Store,
     project: &Project,
     name: &str,
     worktrees_root: &Path,
@@ -249,7 +244,7 @@ pub struct StartedSession {
 
 /// Spawns `adapter` in the workspace and records the session. A failed spawn is recorded too.
 pub fn start_session(
-    store: &Store,
+    store: &dyn Store,
     adapter: &PtyAdapter,
     workspace: &Workspace,
     path_env: Option<&str>,
@@ -269,7 +264,7 @@ pub fn start_session(
 /// winning on conflicts) and files written first (0600, missing directories 0700). Files inside
 /// the worktree are refused.
 pub fn start_session_with(
-    store: &Store,
+    store: &dyn Store,
     adapter: &PtyAdapter,
     workspace: &Workspace,
     path_env: Option<&str>,
@@ -313,7 +308,7 @@ pub struct StartedAcpSession {
 /// [`start_session_with`] for an ACP agent: spawns it, runs the handshake (blocking, up to a
 /// few minutes) and records the session. `extra.mcp_servers` are given to `session/new`.
 pub fn start_acp_session(
-    store: &Store,
+    store: &dyn Store,
     adapter: &AcpAdapter,
     workspace: &Workspace,
     path_env: Option<&str>,
@@ -357,7 +352,7 @@ pub fn start_acp_session(
 
 /// Records the outcome of starting an agent: `Running` with its command, or `Failed`.
 fn record_start<T>(
-    store: &Store,
+    store: &dyn Store,
     session: Session,
     display_name: &str,
     spawned: anyhow::Result<(T, String)>,
@@ -404,7 +399,7 @@ fn write_private_files(worktree: &Path, files: &[(PathBuf, String)]) -> anyhow::
 }
 
 pub fn finish_session(
-    store: &Store,
+    store: &dyn Store,
     id: SessionId,
     status: &SessionStatus,
 ) -> anyhow::Result<Session> {
@@ -412,20 +407,20 @@ pub fn finish_session(
 }
 
 /// Records that a running session was stopped by Hangar (archive, delete).
-pub fn stop_session(store: &Store, id: SessionId, reason: &str) -> anyhow::Result<()> {
+pub fn stop_session(store: &dyn Store, id: SessionId, reason: &str) -> anyhow::Result<()> {
     Ok(Sessions::new(store).stop(id, reason)?)
 }
 
 /// Marks the workspace archived, recording `session` (if any) as stopped.
 pub fn archive_workspace(
-    store: &Store,
+    store: &dyn Store,
     id: WorkspaceId,
     session: Option<SessionId>,
 ) -> anyhow::Result<()> {
     Ok(workspaces(store).archive(id, session)?)
 }
 
-pub fn restore_workspace(store: &Store, id: WorkspaceId) -> anyhow::Result<()> {
+pub fn restore_workspace(store: &dyn Store, id: WorkspaceId) -> anyhow::Result<()> {
     Ok(workspaces(store).restore(id)?)
 }
 
@@ -441,7 +436,7 @@ pub fn delete_summary(workspace: &Workspace) -> anyhow::Result<DeleteSummary> {
 /// rows. Only the worktree path recorded in the store is touched, and only if git lists it as
 /// a linked worktree of the project's repository.
 pub fn delete_workspace(
-    store: &Store,
+    store: &dyn Store,
     id: WorkspaceId,
     options: DeleteOptions,
 ) -> anyhow::Result<DeleteOutcome> {
@@ -450,11 +445,11 @@ pub fn delete_workspace(
 
 /// Forgets the project (and its archived workspaces) without touching the repository or any
 /// worktree on disk. Refused while it has active workspaces.
-pub fn remove_project(store: &Store, id: ProjectId) -> anyhow::Result<()> {
+pub fn remove_project(store: &dyn Store, id: ProjectId) -> anyhow::Result<()> {
     Ok(workspaces(store).remove_project(id)?)
 }
 
-fn workspaces(store: &Store) -> Workspaces<'_> {
+fn workspaces(store: &dyn Store) -> Workspaces<'_> {
     Workspaces::new(store, adapters::version_control())
 }
 

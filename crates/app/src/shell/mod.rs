@@ -36,11 +36,12 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_agents::acp::AcpSession;
+use hangar_core::ports::Store;
 use hangar_core::{
     AgentState, Project, ProjectId, Session, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
-use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
+use hangar_usecases::settings::SettingsExt as _;
 use hangar_worktree::MergeStrategy;
 
 use crate::agents::{self, AgentChoice, AgentPreset};
@@ -282,7 +283,7 @@ enum Screen {
 }
 
 pub struct HangarApp {
-    store: Option<Arc<Store>>,
+    store: Option<Arc<dyn Store>>,
     projects: ProjectList,
     loading: bool,
     load_error: Option<SharedString>,
@@ -450,7 +451,7 @@ impl HangarApp {
                     let db = db.ok_or_else(|| {
                         anyhow!("cannot locate the database: HOME is not set (set HANGAR_DB)")
                     })?;
-                    let store = ops::open_store(&db)?;
+                    let store = crate::adapters::open_store(&db)?;
                     let loaded = ops::load(&store)?;
                     tracing::info!(
                         db = %db.display(),
@@ -551,7 +552,7 @@ impl HangarApp {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        job: impl FnOnce(&Store) -> anyhow::Result<()> + Send + 'static,
+        job: impl FnOnce(&dyn Store) -> anyhow::Result<()> + Send + 'static,
     ) {
         let Some(store) = self.store.clone() else {
             return;
@@ -575,7 +576,7 @@ impl HangarApp {
 
     fn on_loaded(
         &mut self,
-        loaded: anyhow::Result<(Arc<Store>, Loaded)>,
+        loaded: anyhow::Result<(Arc<dyn Store>, Loaded)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

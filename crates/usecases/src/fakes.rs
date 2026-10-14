@@ -1,6 +1,6 @@
 //! Hand-written test doubles for the ports: in-memory, recording what they are asked to do.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -16,6 +16,7 @@ pub struct FakeStore {
     pub projects: Mutex<Vec<Project>>,
     pub workspaces: Mutex<Vec<Workspace>>,
     pub sessions: Mutex<Vec<Session>>,
+    pub settings: Mutex<HashMap<String, String>>,
     /// `insert_workspace` fails.
     pub refuse_workspaces: bool,
     /// `insert_session` fails.
@@ -105,6 +106,20 @@ impl Store for FakeStore {
             .ok_or_else(|| missing("session"))?;
         session.status = status.clone();
         Ok(session.clone())
+    }
+    fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
+        Ok(self.settings.lock().unwrap().get(key).cloned())
+    }
+    fn write_setting(&self, key: &str, json: &str) -> PortResult<()> {
+        self.settings
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), json.to_owned());
+        Ok(())
+    }
+    fn remove_setting(&self, key: &str) -> PortResult<()> {
+        self.settings.lock().unwrap().remove(key);
+        Ok(())
     }
 }
 

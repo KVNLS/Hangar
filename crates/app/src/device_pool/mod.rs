@@ -20,9 +20,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use gpui_kit::*;
+use hangar_core::ports::Store;
 use hangar_core::{Setting, WorkspaceId};
 use hangar_devices::capacity::{self, DeviceCost, HostResources, Pressure};
-use hangar_store_sqlite::Store;
+use hangar_usecases::settings::SettingsExt as _;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::device_panel::{BackendReason, DeviceKey, Platform};
@@ -213,7 +214,7 @@ impl PoolDevice {
 }
 
 pub struct DevicePool {
-    store: Option<Arc<Store>>,
+    store: Option<Arc<dyn Store>>,
     limit: Limit,
     host: Option<HostResources>,
     host_error: Option<String>,
@@ -293,7 +294,7 @@ impl DevicePool {
     /// limit for this run without saving it.
     pub fn load(
         &mut self,
-        store: Arc<Store>,
+        store: Arc<dyn Store>,
         workspaces: Vec<WorkspaceRef>,
         limit_override: Option<Limit>,
         cx: &mut Context<Self>,
@@ -1735,7 +1736,7 @@ struct Saved {
     assignments: HashMap<WorkspaceId, Assignment>,
 }
 
-fn load_settings(store: &Store, workspaces: &[WorkspaceId]) -> anyhow::Result<Saved> {
+fn load_settings(store: &dyn Store, workspaces: &[WorkspaceId]) -> anyhow::Result<Saved> {
     let mut bases = BTreeMap::new();
     for platform in Platform::ALL {
         if let Some(id) = store.get_setting(&setting_keys::device_base(platform))? {
@@ -1767,7 +1768,7 @@ fn load_settings(store: &Store, workspaces: &[WorkspaceId]) -> anyhow::Result<Sa
 
 /// The saved assignment, else a default one (saved).
 fn default_assignment(
-    store: &Store,
+    store: &dyn Store,
     ws: WorkspaceId,
     root: &std::path::Path,
     bases: &BTreeMap<Platform, String>,
