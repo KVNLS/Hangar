@@ -757,8 +757,6 @@ fn usage_rows_round_trip_from_a_time_on() {
             .record_usage(&usage_entry(SessionId::new(), 1, "x", 0.0))
             .is_err()
     );
-    store.delete_workspace(w.id).unwrap();
-    assert!(store.list_usage_since(Timestamp(0)).unwrap().is_empty());
 }
 
 #[test]
@@ -832,4 +830,22 @@ fn unreadable_rows_are_skipped_not_fatal() {
     );
     let sessions = store.list_sessions(good.id).unwrap();
     assert_eq!(sessions.iter().map(|s| s.id).collect::<Vec<_>>(), [ok.id]);
+}
+
+#[test]
+fn usage_outlives_deleted_workspaces_and_projects() {
+    let store = store();
+    let p = project("/repos/demo");
+    store.insert_project(&p).unwrap();
+    let w = workspace(p.id, "Gone");
+    store.insert_workspace(&w).unwrap();
+    let s = Session::new(w.id, AgentKind::Claude);
+    store.insert_session(&s).unwrap();
+    store
+        .record_usage(&usage_entry(s.id, 10, "claude-opus-5", 2.0))
+        .unwrap();
+    store.delete_workspace(w.id).unwrap();
+    store.delete_project(p.id).unwrap();
+    let usage = store.list_usage_since(Timestamp(0)).unwrap();
+    assert_eq!(usage, vec![usage_entry(s.id, 10, "claude-opus-5", 2.0)]);
 }
