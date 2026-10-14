@@ -264,12 +264,12 @@ Git access is the `git` CLI with porcelain output, not a library.
 - Terminal: no block selection, right-click menu, middle-click paste.
 - Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
 - Review: push has no timeout (SSH prompts); no pull/rebase after rejection; merged base not pushed.
+- Agents: if Hangar crashes or is killed, codex-acp (ignores a closed stdin) keeps running; the Files code
+  viewer (gpui-component editor) still draws Geist Mono's `--` ligatures.
 - Devices: device panel controls, logs pane, Rotate and the boot stage text never checked visually by
   Claude; logs pane fixed height, no horizontal scroll; emulators started outside Hangar keep Gboard's stylus
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Owner reviews `m7-acp` and looks at the mode menu, slash list and Resume in the app (not seen on screen:
-  the display slept during the check).
-- Branch `opencode-acp` (OpenCode, Codex, Gemini over ACP; mono ligature fix; ⌘Q) awaits review.
 - Gemini over ACP: sign in (`gemini`, Log in with Google), then check a turn, modes and MCP live.
+- Device panel visual pass (controls, logs pane, Rotate, boot stage text never seen on screen by Claude).
