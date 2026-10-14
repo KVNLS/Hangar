@@ -312,6 +312,21 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - `changes/review.rs` calls `hangar_worktree::base_branch_name` directly instead of through a `ReviewOps` port.
 
 
+## Zero-copy simulator frames (2026-10-08, branch `zero-copy-frames`)
+- Owner decisions: vendor-patch GPUI's Metal renderer in the repo (`third_party/gpui-pre-apple`, port of zed
+  PR #61291 with linear sampling) until the gpui-component pin ships BGRA surfaces; `core-video` and
+  `core-foundation` as direct `hangar-app` deps (already built by gpui-pre).
+- Done: `FramePixels::{Bgra, Live}` and `LiveSurface` in `core::device` with `Frame::snapshot`; the private
+  backend publishes `devices::ios::LiveFramebuffer` on each seed change (no lock, no copy); `device_view`
+  wraps it once in a `CVPixelBuffer` (`device_view::surface`) and calls `paint_surface`; other frames and
+  unwrappable surfaces keep the `RenderImage` path (logged once). MCP screenshots, `save_png` and the
+  dev-hook diffs snapshot.
+- Checked: unit tests (core snapshot, IOSurface snapshot packing, CVPixelBuffer format/size/cache),
+  `booted_simulator` on an iOS 26.5 simulator, and on screen: colours, orientation and scaled text match
+  `simctl io screenshot`, Settings opening updated live at ~50 fps, the simctl backend still renders.
+  Same 20 s app-switching workload, debug build: CPU 35.0% → 23.2% of a core, capture→paint ~9 → ~7 ms,
+  frame rates unchanged.
+
 ## M9 Orchestration (2026-10-07 – 10-08)
 - Owner decisions: approved a `core::ports::AgentRuntime` port with an agents use case in `usecases`; Store
   schema changes (`Workspace.task`, persisted queue, session history, parent links); MCP orchestration tools

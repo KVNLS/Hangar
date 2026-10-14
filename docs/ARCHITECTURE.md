@@ -45,6 +45,7 @@ keeps the product roadmap.
 | Test doubles | Hand-written in-memory doubles under `#[cfg(test)]` (`usecases::fakes`) for service tests; each adapter tested through its port against the real thing (temp git repos, SQLite in memory) | No `mockall` (new dependency, brittle interaction tests). Production code never fakes behaviour. |
 | Composition root | `app::adapters` returns the adapter behind each port; services are small borrowing structs (`Workspaces::new(&store, &git)`) built where they are used | No DI framework and no GPUI global used as a service locator. Building a service costs two pointers. |
 | Agents and PTYs | `agents` describes a start (`Launch`: program, args, cwd, env); `app::pty` runs it in a `TerminalSession` | Removes the `agents → terminal` edge without a launcher port; `usecases::sessions` is generic over the running agent. |
+| Device frames | `Frame.pixels` is `FramePixels::Bgra` (captured bytes) or `FramePixels::Live` (a `core::device::LiveSurface` the backend keeps drawing into); the app downcasts the iOS one to `devices::ios::LiveFramebuffer` and paints its IOSurface with `paint_surface` | Zero-copy display while `core` stays platform-free. Readers that need bytes call `Frame::snapshot`; a live surface is "now", so diffs compare snapshots. |
 | Settings | Typed keys: `hangar_core::Setting<T>`; every key in `app::setting_keys` | A value is read back as the type it was written with; one place lists what Hangar saves. |
 
 ## Roadmap
