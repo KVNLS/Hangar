@@ -178,9 +178,27 @@ pub fn default_merge_message(
     }
 }
 
-/// `#12 · open` for the PR chip.
+/// `PR #12 opened` (or `merged`, `closed`) for the PR button.
 pub fn pr_label(pr: &PrInfo) -> String {
-    format!("#{} · {}", pr.number, pr.state.to_lowercase())
+    let state = match pr.state.to_lowercase().as_str() {
+        "open" => "opened".to_owned(),
+        other => other.to_owned(),
+    };
+    format!("PR #{} {state}", pr.number)
+}
+
+/// The number at the end of a pull request URL (`…/pull/12`).
+pub fn pr_number(url: &str) -> Option<u64> {
+    let (_, tail) = url.trim().trim_end_matches('/').rsplit_once("/pull/")?;
+    tail.parse().ok()
+}
+
+/// The toast after opening a pull request.
+pub fn pr_opened_text(url: &str, branch: &str, base: &str) -> String {
+    match pr_number(url) {
+        Some(n) => format!("Opened PR #{n} · {branch} → {base}"),
+        None => format!("Opened {url} · {branch} → {base}"),
+    }
 }
 
 /// Errors the user can act on, worded for the UI; everything else is shown in full.
@@ -410,7 +428,23 @@ mod tests {
             state: "OPEN".into(),
             title: "t".into(),
         };
-        assert_eq!(pr_label(&pr), "#3 · open");
+        assert_eq!(pr_label(&pr), "PR #3 opened");
+        let merged = PrInfo {
+            state: "MERGED".into(),
+            ..pr
+        };
+        assert_eq!(pr_label(&merged), "PR #3 merged");
+        assert_eq!(pr_number("https://github.com/o/r/pull/42"), Some(42));
+        assert_eq!(pr_number("https://github.com/o/r/pull/42/"), Some(42));
+        assert_eq!(pr_number("https://github.com/o/r/issues/42"), None);
+        assert_eq!(
+            pr_opened_text("https://github.com/o/r/pull/7", "hangar/x", "main"),
+            "Opened PR #7 · hangar/x → main"
+        );
+        assert_eq!(
+            pr_opened_text("https://example.com/x", "b", "main"),
+            "Opened https://example.com/x · b → main"
+        );
     }
 
     #[test]

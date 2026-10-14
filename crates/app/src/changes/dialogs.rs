@@ -102,8 +102,13 @@ impl PrDialog {
                 match result {
                     Ok(url) => {
                         window.close_dialog(cx);
+                        let text = review::pr_opened_text(
+                            &url,
+                            &this.target.workspace.branch,
+                            &this.target.base_branch(),
+                        );
                         window.push_notification(
-                            Notification::success(format!("Opened {url}")).title("Pull request"),
+                            Notification::success(text).title("Pull request"),
                             cx,
                         );
                     }
