@@ -36,7 +36,7 @@ impl HangarApp {
                 created.push(workspace_id);
                 if let Some(input) = dev.input.clone() {
                     let _ = this.update(cx, |this, cx| {
-                        let Some(live) = this.sessions.get(&workspace_id) else {
+                        let Some(live) = this.live.sessions.get(&workspace_id) else {
                             return;
                         };
                         if let Err(err) = live.send_text(&input, cx) {
@@ -382,7 +382,7 @@ pub(super) async fn run_dev_hooks(
                 files,
                 rows,
                 ?lines,
-                open = this.files_open,
+                open = this.layout.files_open,
                 "HANGAR_DEV_FILES"
             );
         });
@@ -396,10 +396,10 @@ pub(super) async fn run_dev_hooks(
             .await;
         let _ = this.update_in(cx, |this, window, cx| {
             let counts = this.state_counts(cx);
-            tracing::info!(?counts, screen = ?this.screen, "HANGAR_DEV_OVERVIEW");
+            tracing::info!(?counts, screen = ?this.layout.screen, "HANGAR_DEV_OVERVIEW");
             this.focus_next_needing_you(window, cx);
             let focused = this.focused_workspace().map(|(_, ws)| ws.slug.clone());
-            tracing::info!(?focused, screen = ?this.screen, "HANGAR_DEV_OVERVIEW next needing you");
+            tracing::info!(?focused, screen = ?this.layout.screen, "HANGAR_DEV_OVERVIEW next needing you");
             this.set_screen(Screen::Workspace, window, cx);
         });
     }
@@ -447,7 +447,7 @@ pub(super) async fn run_dev_hooks(
         let repo = ops::canonical(&repo);
         let task = this.update_in(cx, |this, window, cx| {
             let id = this
-                .projects
+                .work.projects
                 .entries()
                 .iter()
                 .find(|e| ops::canonical(&e.project.repo_path) == repo)
@@ -485,7 +485,12 @@ fn dev_targets(
             created.to_vec()
         };
         ids.into_iter()
-            .filter_map(|id| this.projects.workspace(id).map(|w| (id, w.slug.clone())))
+            .filter_map(|id| {
+                this.work
+                    .projects
+                    .workspace(id)
+                    .map(|w| (id, w.slug.clone()))
+            })
             .collect()
     })
     .unwrap_or_default()
@@ -825,7 +830,8 @@ async fn run_review_hooks(
     let worktree = this
         .update(cx, |this, cx| {
             let id = panel.read(cx).workspace()?;
-            this.projects
+            this.work
+                .projects
                 .workspace(id)
                 .map(|ws| ws.worktree_path.clone())
         })
@@ -981,7 +987,7 @@ async fn dev_settings(this: &WeakEntity<HangarApp>, name: &str, cx: &mut AsyncWi
     }
     let _ = this.update_in(cx, |this, window, cx| {
         this.set_appearance(appearance, window, cx);
-        tracing::info!(appearance = ?this.appearance, dark = cx.theme().is_dark(), "HANGAR_DEV_APPEARANCE");
+        tracing::info!(appearance = ?this.layout.appearance, dark = cx.theme().is_dark(), "HANGAR_DEV_APPEARANCE");
         this.set_screen(Screen::Workspace, window, cx);
     });
 }

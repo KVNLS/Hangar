@@ -45,7 +45,7 @@ impl HangarApp {
         ws: WorkspaceId,
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<crate::device_pool::Acquired>> {
-        if !self.projects.is_active(ws) {
+        if !self.work.projects.is_active(ws) {
             return Task::ready(Err(anyhow!("unknown or archived workspace")));
         }
         self.track_workspace(ws, cx);
@@ -59,7 +59,7 @@ impl HangarApp {
         ws: WorkspaceId,
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<DeviceStatusInfo>> {
-        if !self.projects.is_active(ws) {
+        if !self.work.projects.is_active(ws) {
             return Task::ready(Err(anyhow!("unknown or archived workspace")));
         }
         self.track_workspace(ws, cx);

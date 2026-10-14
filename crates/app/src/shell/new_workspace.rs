@@ -74,6 +74,7 @@ impl HangarApp {
         });
         let device = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
         let default_base = self
+            .work
             .projects
             .project(project_id)
             .map(|p| p.default_base.clone())
@@ -94,7 +95,7 @@ impl HangarApp {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     this.submit_new_workspace(window, cx);
                 } else {
-                    if let Some(sheet) = &this.new_workspace {
+                    if let Some(sheet) = &this.work.new_workspace {
                         let slug = slugify(sheet.name.read(cx).value().trim());
                         let auto = if slug.is_empty() {
                             "hangar/<name>".to_owned()
@@ -128,7 +129,7 @@ impl HangarApp {
                 &device,
                 |this, _, event: &SelectEvent<Vec<TargetOption>>, cx| {
                     if let SelectEvent::Confirm(Some(id)) = event
-                        && let Some(sheet) = &mut this.new_workspace
+                        && let Some(sheet) = &mut this.work.new_workspace
                     {
                         sheet.base = Some(id.to_string());
                         cx.notify();
@@ -138,13 +139,13 @@ impl HangarApp {
         ];
         name.update(cx, |state, cx| state.focus(window, cx));
         let last = self.device_pool.read(cx).last_target().cloned();
-        self.new_workspace = Some(NewWorkspaceSheet {
+        self.work.new_workspace = Some(NewWorkspaceSheet {
             project_id,
             name,
             base_branch,
             branch,
             task,
-            agent: self.agent.clone(),
+            agent: self.agent_setup.agent.clone(),
             platform: last.as_ref().map_or(Platform::Ios, |k| k.platform),
             base: None,
             bases: None,
@@ -152,6 +153,7 @@ impl HangarApp {
             _subscriptions: subscriptions,
         });
         let repo = self
+            .work
             .projects
             .project(project_id)
             .map(|p| p.repo_path.clone());
@@ -192,7 +194,7 @@ impl HangarApp {
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 let (builds_for, bases, branches) = listed;
-                let Some(sheet) = &mut this.new_workspace else {
+                let Some(sheet) = &mut this.work.new_workspace else {
                     return;
                 };
                 if sheet.project_id != project_id {
@@ -235,7 +237,7 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         let settings_base = self.device_pool.read(cx).base(platform).map(str::to_owned);
-        let Some(sheet) = &mut self.new_workspace else {
+        let Some(sheet) = &mut self.work.new_workspace else {
             return;
         };
         sheet.platform = platform;
@@ -269,7 +271,7 @@ impl HangarApp {
     }
 
     pub(super) fn close_new_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.new_workspace.take().is_some() {
+        if self.work.new_workspace.take().is_some() {
             window.focus(&self.focus, cx);
             self.focus_terminal(window, cx);
             cx.notify();
@@ -277,11 +279,11 @@ impl HangarApp {
     }
 
     pub(super) fn submit_new_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(sheet) = &self.new_workspace else {
+        let Some(sheet) = &self.work.new_workspace else {
             return;
         };
         let name = sheet.name.read(cx).value().trim().to_owned();
-        if name.is_empty() || self.creating.contains(&sheet.project_id) {
+        if name.is_empty() || self.work.creating.contains(&sheet.project_id) {
             return;
         }
         let task = sheet.task.read(cx).value().trim().to_owned();
@@ -306,7 +308,7 @@ impl HangarApp {
                 return Some(());
             }
             this.update(cx, |this, cx| {
-                let live = this.sessions.get(&id)?;
+                let live = this.live.sessions.get(&id)?;
                 if let Err(err) = live.send_text(&task, cx) {
                     tracing::error!("could not send the task to the agent: {err:#}");
                 }
@@ -319,9 +321,9 @@ impl HangarApp {
     }
 
     pub(super) fn render_new_workspace_sheet(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let sheet = self.new_workspace.as_ref()?;
+        let sheet = self.work.new_workspace.as_ref()?;
         let t = cx.tokens();
-        let project = self.projects.project(sheet.project_id)?;
+        let project = self.work.projects.project(sheet.project_id)?;
         let name = sheet.name.read(cx).value().trim().to_owned();
         let slug = slugify(&name);
         let preview = if slug.is_empty() {
@@ -349,7 +351,7 @@ impl HangarApp {
                 .map_or_else(|| project.default_base.clone(), |b| b.to_string());
             format!("{branch} from {base} · {path}")
         };
-        let creating = self.creating.contains(&sheet.project_id);
+        let creating = self.work.creating.contains(&sheet.project_id);
         let can_create = !slug.is_empty() && !creating;
         let label = |text: &'static str| {
             div()
@@ -358,7 +360,7 @@ impl HangarApp {
                 .text_color(t.tx2)
                 .child(text)
         };
-        let agents = self.agent_choices.iter().map(|choice| {
+        let agents = self.agent_setup.agent_choices.iter().map(|choice| {
             let selected = sheet.agent.as_ref() == choice.id;
             let id = SharedString::from(choice.id.clone());
             let installed = choice.installed;
@@ -378,7 +380,7 @@ impl HangarApp {
                     this.cursor_pointer()
                         .hover(|s| s.border_color(t.tx3))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(sheet) = &mut this.new_workspace {
+                            if let Some(sheet) = &mut this.work.new_workspace {
                                 sheet.agent = id.clone();
                                 cx.notify();
                             }

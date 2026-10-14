@@ -7,11 +7,11 @@ impl HangarApp {
     /// come in bursts).
     pub(super) fn save_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Dropping the previous task cancels it: only the last layout is written.
-        self.save_panes = Some(cx.spawn_in(window, async move |this, cx| {
+        self.layout.save_panes = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(SAVE_DEBOUNCE).await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.save_panes = None;
-                let layout = this.panes.layout(&this.pane_shares);
+                this.layout.save_panes = None;
+                let layout = this.layout.panes.layout(&this.layout.pane_shares);
                 this.persist(window, cx, move |store| ops::save_layout(store, &layout));
             });
         }));
@@ -19,13 +19,15 @@ impl HangarApp {
 
     /// Writes a pending layout save now (the app is quitting).
     pub(super) fn flush_layout(&mut self) {
-        if self.save_panes.take().is_none() {
+        if self.layout.save_panes.take().is_none() {
             return;
         }
         let Some(store) = self.store.clone() else {
             return;
         };
-        if let Err(err) = ops::save_layout(&store, &self.panes.layout(&self.pane_shares)) {
+        if let Err(err) =
+            ops::save_layout(&store, &self.layout.panes.layout(&self.layout.pane_shares))
+        {
             tracing::warn!("pane layout not saved on quit: {err:#}");
         }
     }
@@ -41,28 +43,30 @@ impl HangarApp {
     /// that are gone, archived or being removed, and points the changes panel at the focused
     /// pane's workspace.
     pub(super) fn sync_diffs(&mut self, cx: &mut Context<Self>) {
-        let projects = &self.projects;
-        let busy = &self.busy;
-        self.diffs
+        let projects = &self.work.projects;
+        let busy = &self.work.busy;
+        self.live
+            .diffs
             .retain(|id, _| projects.is_active(*id) && !busy.contains(id));
-        for pane in 0..self.panes.count() {
-            let Some(id) = self.panes.slot(pane) else {
+        for pane in 0..self.layout.panes.count() {
+            let Some(id) = self.layout.panes.slot(pane) else {
                 continue;
             };
-            if self.diffs.contains_key(&id) || self.busy.contains(&id) {
+            if self.live.diffs.contains_key(&id) || self.work.busy.contains(&id) {
                 continue;
             }
             let Some(ws) = self
+                .work
                 .projects
                 .workspace(id)
-                .filter(|_| self.projects.is_active(id))
+                .filter(|_| self.work.projects.is_active(id))
             else {
                 continue;
             };
             let (path, base) = (ws.worktree_path.clone(), ws.base.clone());
             let diff = cx.new(|cx| WorkspaceDiff::start(id, path, base, cx));
             let observe = cx.observe(&diff, |_, _, cx| cx.notify());
-            self.diffs.insert(
+            self.live.diffs.insert(
                 id,
                 DiffEntry {
                     diff,
@@ -70,20 +74,24 @@ impl HangarApp {
                 },
             );
         }
-        let source = self.panes.slot(self.panes.focused()).and_then(|id| {
-            let entry = self.diffs.get(&id)?;
-            let ws = self.projects.workspace(id)?;
-            let project = self.projects.project(ws.project_id)?;
-            Some(PanelSource {
-                workspace: id,
-                name: SharedString::from(ws.name.clone()),
-                diff: entry.diff.clone(),
-                target: ReviewTarget {
-                    workspace: ws.clone(),
-                    repo: project.repo_path.clone(),
-                },
-            })
-        });
+        let source = self
+            .layout
+            .panes
+            .slot(self.layout.panes.focused())
+            .and_then(|id| {
+                let entry = self.live.diffs.get(&id)?;
+                let ws = self.work.projects.workspace(id)?;
+                let project = self.work.projects.project(ws.project_id)?;
+                Some(PanelSource {
+                    workspace: id,
+                    name: SharedString::from(ws.name.clone()),
+                    diff: entry.diff.clone(),
+                    target: ReviewTarget {
+                        workspace: ws.clone(),
+                        repo: project.repo_path.clone(),
+                    },
+                })
+            });
         let files = source.as_ref().map(|s| crate::files_view::FilesSource {
             workspace: s.workspace,
             root: s.target.workspace.worktree_path.clone(),
@@ -101,15 +109,15 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.screen == screen {
+        if self.layout.screen == screen {
             return;
         }
-        self.screen = screen;
+        self.layout.screen = screen;
         let wide = screen == Screen::Review;
         self.changes_panel
             .update(cx, |panel, cx| panel.set_wide(wide, window, cx));
         // The device panel is only on the workspace screen: stop streaming while it is hidden.
-        if self.device.open {
+        if self.layout.device.open {
             let shown = screen == Screen::Workspace;
             self.device_panel
                 .update(cx, |panel, cx| panel.set_visible(shown, window, cx));
@@ -122,7 +130,7 @@ impl HangarApp {
     }
 
     pub(super) fn toggle_overview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let screen = if self.screen == Screen::Overview {
+        let screen = if self.layout.screen == Screen::Overview {
             Screen::Workspace
         } else {
             Screen::Overview
@@ -141,7 +149,7 @@ impl HangarApp {
             self.set_device_open(false, window, cx);
             self.set_changes_open(false, window, cx);
         }
-        self.files_open = open;
+        self.layout.files_open = open;
         cx.notify();
     }
 
@@ -152,14 +160,14 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         // Device, changes and files are tabs of one right panel.
-        if open && self.device.open {
+        if open && self.layout.device.open {
             self.set_device_open(false, window, cx);
         }
         if open {
-            self.files_open = false;
+            self.layout.files_open = false;
         }
-        if self.changes.open != open {
-            self.changes.open = open;
+        if self.layout.changes.open != open {
+            self.layout.changes.open = open;
             tracing::info!(open, "changes panel");
             self.save_changes_layout(window, cx);
             cx.notify();
@@ -172,7 +180,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_changes_open(!self.changes.open, window, cx);
+        self.set_changes_open(!self.layout.changes.open, window, cx);
     }
 
     /// The pane header button: opens the panel on this pane, or closes it if it already
@@ -183,27 +191,27 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let showing_this = self.changes.open && self.panes.focused() == pane;
+        let showing_this = self.layout.changes.open && self.layout.panes.focused() == pane;
         self.focus_pane(pane, window, cx);
         self.set_changes_open(!showing_this, window, cx);
     }
 
     pub(super) fn save_changes_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let changes = self.changes;
+        let changes = self.layout.changes;
         self.persist(window, cx, move |store| ops::save_changes(store, &changes));
     }
 
     pub(super) fn device_width_on_screen(&self) -> f32 {
-        if self.device.open {
-            self.device.width
+        if self.layout.device.open {
+            self.layout.device.width
         } else {
             0.
         }
     }
 
     pub(super) fn changes_width_on_screen(&self) -> f32 {
-        if self.changes.open {
-            self.changes.width
+        if self.layout.changes.open {
+            self.layout.changes.width
         } else {
             0.
         }
@@ -223,13 +231,13 @@ impl HangarApp {
         let Some(width) = changes_width(width.min(max)) else {
             return;
         };
-        if (width - self.changes.width).abs() < 0.5 {
+        if (width - self.layout.changes.width).abs() < 0.5 {
             return;
         }
-        self.changes.width = width;
+        self.layout.changes.width = width;
         cx.notify();
         // Dropping the previous task cancels it: only the last width is written.
-        self.save_changes = Some(cx.spawn_in(window, async move |this, cx| {
+        self.layout.save_changes = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(SAVE_DEBOUNCE).await;
             let _ = this.update_in(cx, |this, window, cx| this.save_changes_layout(window, cx));
         }));
@@ -241,14 +249,14 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if open && self.changes.open {
+        if open && self.layout.changes.open {
             self.set_changes_open(false, window, cx);
         }
         if open {
-            self.files_open = false;
+            self.layout.files_open = false;
         }
-        if self.device.open != open {
-            self.device.open = open;
+        if self.layout.device.open != open {
+            self.layout.device.open = open;
             tracing::info!(open, "device panel");
             self.save_device_layout(window, cx);
             cx.notify();
@@ -263,7 +271,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_device_open(!self.device.open, window, cx);
+        self.set_device_open(!self.layout.device.open, window, cx);
     }
 
     pub(super) fn toggle_device_stats(
@@ -279,7 +287,7 @@ impl HangarApp {
     }
 
     pub(super) fn save_device_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let device = self.device.clone();
+        let device = self.layout.device.clone();
         self.persist(window, cx, move |store| ops::save_device(store, &device));
     }
 
@@ -297,12 +305,12 @@ impl HangarApp {
         let Some(width) = device_width(width.min(max)) else {
             return;
         };
-        if (width - self.device.width).abs() < 0.5 {
+        if (width - self.layout.device.width).abs() < 0.5 {
             return;
         }
-        self.device.width = width;
+        self.layout.device.width = width;
         cx.notify();
-        self.save_device = Some(cx.spawn_in(window, async move |this, cx| {
+        self.layout.save_device = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(SAVE_DEBOUNCE).await;
             let _ = this.update_in(cx, |this, window, cx| this.save_device_layout(window, cx));
         }));
@@ -316,10 +324,10 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let projects = &self.projects;
+        let projects = &self.work.projects;
         let (panes, shares) = layout.restore(|id| projects.is_active(id));
-        self.panes = panes;
-        self.pane_shares = shares;
+        self.layout.panes = panes;
+        self.layout.pane_shares = shares;
         self.apply_pane_shares(window, cx);
     }
 
@@ -327,14 +335,14 @@ impl HangarApp {
     /// width.
     pub(super) fn split_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut shares = self.current_shares();
-        let Some(pane) = self.panes.split() else {
+        let Some(pane) = self.layout.panes.split() else {
             tracing::info!("not splitting: {MAX_PANES} panes already");
             return;
         };
         let half = shares[pane - 1] / 2.;
         shares[pane - 1] = half;
         shares.insert(pane, half);
-        self.pane_shares = shares;
+        self.layout.pane_shares = shares;
         self.focus_terminal(window, cx);
         self.panes_changed(window, cx);
         self.apply_pane_shares(window, cx);
@@ -345,11 +353,11 @@ impl HangarApp {
     /// width goes to its neighbours.
     pub(super) fn close_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
         let mut shares = self.current_shares();
-        if !self.panes.close(pane) {
+        if !self.layout.panes.close(pane) {
             return;
         }
         shares.remove(pane);
-        self.pane_shares = sanitize_shares(&shares, self.panes.count());
+        self.layout.pane_shares = sanitize_shares(&shares, self.layout.panes.count());
         self.focus_terminal(window, cx);
         self.panes_changed(window, cx);
         self.apply_pane_shares(window, cx);
@@ -369,8 +377,8 @@ impl HangarApp {
                 let sizes = sizes.read(cx);
                 let widths: Vec<f32> = sizes.sizes().iter().map(|s| s.as_f32()).collect();
                 let shares = pane_shares(&widths, sizes.container_size().as_f32());
-                if shares.len() == this.panes.count() {
-                    this.pane_shares = shares;
+                if shares.len() == this.layout.panes.count() {
+                    this.layout.pane_shares = shares;
                     this.save_layout(window, cx);
                 }
             },
@@ -380,9 +388,9 @@ impl HangarApp {
 
     /// The panes' width shares, equal when none were set.
     fn current_shares(&self) -> Vec<f32> {
-        let count = self.panes.count();
-        if self.pane_shares.len() == count {
-            self.pane_shares.clone()
+        let count = self.layout.panes.count();
+        if self.layout.pane_shares.len() == count {
+            self.layout.pane_shares.clone()
         } else {
             vec![1. / count as f32; count]
         }
@@ -394,18 +402,18 @@ impl HangarApp {
         // The group state pins the sizes it measured and appends or truncates panels when the
         // count changes, so its old sizes never fit again: start from fresh, evenly laid out panels.
         let (sizes, sub) = Self::new_pane_sizes(window, cx);
-        self.pane_sizes = sizes;
-        self._pane_sizes_sub = sub;
-        let count = self.panes.count();
+        self.layout.pane_sizes = sizes;
+        self.layout._pane_sizes_sub = sub;
+        let count = self.layout.panes.count();
         if count < 2 {
             return;
         }
         let shares = self.current_shares();
-        self.apply_shares = Some(cx.spawn_in(window, async move |this, cx| {
+        self.layout.apply_shares = Some(cx.spawn_in(window, async move |this, cx| {
             for _ in 0..40 {
                 let applied = this
                     .update_in(cx, |this, window, cx| {
-                        this.pane_sizes.update(cx, |sizes, cx| {
+                        this.layout.pane_sizes.update(cx, |sizes, cx| {
                             let total = sizes.container_size().as_f32();
                             let laid_out: f32 = sizes.sizes().iter().map(|s| s.as_f32()).sum();
                             if sizes.sizes().len() != count

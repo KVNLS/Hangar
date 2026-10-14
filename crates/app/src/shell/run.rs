@@ -268,14 +268,15 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<String>> {
         let Some(workspace) = self
+            .work
             .projects
             .workspace(id)
-            .filter(|_| self.projects.is_active(id))
+            .filter(|_| self.work.projects.is_active(id))
             .cloned()
         else {
             return Task::ready(Err(anyhow!("unknown or archived workspace")));
         };
-        if self.busy.contains(&id) {
+        if self.work.busy.contains(&id) {
             return Task::ready(Err(anyhow!(
                 "the workspace is being archived, restored or deleted"
             )));
@@ -297,12 +298,13 @@ impl HangarApp {
             })
             .unwrap_or_default();
         let taken: Vec<u16> = self
+            .live
             .runs
             .iter()
             .filter(|(id, _)| **id != workspace.id)
             .map(|(_, run)| run.port)
             .collect();
-        let path = self.path.as_ref().map(|p| p.value.clone());
+        let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
         let root = workspace.worktree_path.clone();
         tracing::info!(workspace = %id, "run requested");
         cx.notify();
@@ -394,7 +396,12 @@ impl HangarApp {
 
     /// Resolves the run's completion (releasing its device lease).
     fn finish_run(&mut self, id: WorkspaceId, result: anyhow::Result<String>) {
-        let Some(completion) = self.runs.get_mut(&id).and_then(|r| r.completion.take()) else {
+        let Some(completion) = self
+            .live
+            .runs
+            .get_mut(&id)
+            .and_then(|r| r.completion.take())
+        else {
             return;
         };
         match &result {
@@ -416,7 +423,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.projects.is_active(id) || self.busy.contains(&id) {
+        if !self.work.projects.is_active(id) || self.work.busy.contains(&id) {
             let _ = completion
                 .done
                 .send(Err(anyhow!("the workspace was closed before the build")));
@@ -430,7 +437,7 @@ impl HangarApp {
             env,
             ..
         } = prepared;
-        let previous = self.runs.remove(&id);
+        let previous = self.live.runs.remove(&id);
         let (mut server, old_build) = match previous {
             Some(mut run) => {
                 if let Some(old) = run.completion.take() {
@@ -480,22 +487,22 @@ impl HangarApp {
                 cx,
             );
             let started = run.build.is_some();
-            self.runs.insert(id, run);
+            self.live.runs.insert(id, run);
             if !started {
                 self.finish_run(id, Err(anyhow!("the dependency install did not start")));
             }
         } else {
-            self.runs.insert(id, run);
+            self.live.runs.insert(id, run);
             self.launch_tabs(id, window, cx);
         }
-        self.pane_tabs.insert(id, PaneTab::Build);
+        self.live.pane_tabs.insert(id, PaneTab::Build);
         self.focus_terminal(window, cx);
         cx.notify();
     }
 
     /// Starts the pending dev server and build of `id`.
     fn launch_tabs(&mut self, id: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(run) = self.runs.get_mut(&id) else {
+        let Some(run) = self.live.runs.get_mut(&id) else {
             return;
         };
         let Some((server_command, build_command)) = run.pending.take() else {
@@ -532,9 +539,9 @@ impl HangarApp {
         let started = build.is_some();
         let watch = build
             .as_ref()
-            .filter(|_| self.runs.get(&id).is_some_and(|r| r.build_serves))
+            .filter(|_| self.live.runs.get(&id).is_some_and(|r| r.build_serves))
             .map(|tab| self.watch_launch(id, tab.view.clone(), cx));
-        if let Some(run) = self.runs.get_mut(&id) {
+        if let Some(run) = self.live.runs.get_mut(&id) {
             if server.is_some() {
                 run.server = server;
             }
@@ -563,7 +570,7 @@ impl HangarApp {
                         .iter()
                         .any(|l| l.contains(EXPO_LAUNCHED));
                     if launched {
-                        let summary = this.runs.get(&id).map(|r| {
+                        let summary = this.live.runs.get(&id).map(|r| {
                             format!(
                                 "{} dev server on :{}, app open on {}",
                                 r.stack, r.port, r.device
@@ -571,7 +578,12 @@ impl HangarApp {
                         });
                         this.finish_run(id, Ok(summary.unwrap_or_default()));
                     }
-                    launched || this.runs.get(&id).is_none_or(|r| r.completion.is_none())
+                    launched
+                        || this
+                            .live
+                            .runs
+                            .get(&id)
+                            .is_none_or(|r| r.completion.is_none())
                 });
                 if done.unwrap_or(true) {
                     break;
@@ -628,7 +640,7 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         let status = ops::exit_status(exit);
-        let Some(run) = self.runs.get_mut(&id) else {
+        let Some(run) = self.live.runs.get_mut(&id) else {
             return;
         };
         let tab = match kind {
@@ -675,7 +687,7 @@ impl HangarApp {
 
     /// Installs and launches what a native build produced.
     fn after_build(&mut self, id: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(run) = self.runs.get_mut(&id) else {
+        let Some(run) = self.live.runs.get_mut(&id) else {
             return;
         };
         let artifacts: Vec<hangar_runner::Artifact> = run
@@ -720,7 +732,7 @@ impl HangarApp {
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 let ok = result.is_ok();
-                if let Some(run) = this.runs.get_mut(&id) {
+                if let Some(run) = this.live.runs.get_mut(&id) {
                     run.phase = if ok {
                         AfterPhase::Launched
                     } else {
@@ -748,8 +760,8 @@ impl HangarApp {
 
     /// ⌘.: stops the focused workspace's build and dev server.
     pub(super) fn stop_run(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.panes.slot(self.panes.focused())
-            && let Some(run) = self.runs.get(&id)
+        if let Some(id) = self.layout.panes.slot(self.layout.panes.focused())
+            && let Some(run) = self.live.runs.get(&id)
         {
             run.stop();
             cx.notify();
@@ -758,10 +770,15 @@ impl HangarApp {
 
     /// Restarts the focused workspace's dev server on its port.
     pub(super) fn restart_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.panes.slot(self.panes.focused()) else {
+        let Some(id) = self.layout.panes.slot(self.layout.panes.focused()) else {
             return;
         };
-        if let Some(server) = self.runs.get_mut(&id).and_then(|run| run.server.take()) {
+        if let Some(server) = self
+            .live
+            .runs
+            .get_mut(&id)
+            .and_then(|run| run.server.take())
+        {
             server.kill();
         }
         self.run_focused(window, cx);
@@ -769,7 +786,7 @@ impl HangarApp {
 
     /// Kills the workspace's run commands and frees its port (archive, delete).
     pub(super) fn close_run(&mut self, id: WorkspaceId) {
-        if let Some(mut run) = self.runs.remove(&id) {
+        if let Some(mut run) = self.live.runs.remove(&id) {
             run.stop();
             if let Some(completion) = run.completion.take() {
                 let _ = completion
@@ -777,7 +794,7 @@ impl HangarApp {
                     .send(Err(anyhow!("the workspace was closed during the run")));
             }
         }
-        self.pane_tabs.remove(&id);
+        self.live.pane_tabs.remove(&id);
     }
 
     /// Drops the saved port so another workspace can take it (delete).
@@ -791,8 +808,8 @@ impl HangarApp {
 
     /// The tab a pane shows for `id`, falling back to the agent when that run tab is gone.
     pub(super) fn pane_tab(&self, id: WorkspaceId) -> PaneTab {
-        let tab = self.pane_tabs.get(&id).copied().unwrap_or_default();
-        let run = self.runs.get(&id);
+        let tab = self.live.pane_tabs.get(&id).copied().unwrap_or_default();
+        let run = self.live.runs.get(&id);
         let exists = match tab {
             PaneTab::Agent => true,
             PaneTab::Server => run.is_some_and(|r| r.server.is_some()),
@@ -802,7 +819,7 @@ impl HangarApp {
     }
 
     pub(super) fn run_view(&self, id: WorkspaceId, tab: PaneTab) -> Option<Entity<TerminalView>> {
-        let run = self.runs.get(&id)?;
+        let run = self.live.runs.get(&id)?;
         match tab {
             PaneTab::Server => run.server.as_ref().map(|t| t.view.clone()),
             PaneTab::Build => run.build.as_ref().map(|t| t.view.clone()),
