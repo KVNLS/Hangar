@@ -11,7 +11,8 @@
 //! - `RUST_LOG` — log filter (default `info`, logs go to stderr).
 //! - `HANGAR_DEV_OPEN=<repo>` — at startup, add the repository as a project and create one
 //!   workspace (`HANGAR_DEV_WORKSPACE`, default `dev`) running `HANGAR_DEV_AGENT` (default
-//!   `shell`), then type `HANGAR_DEV_INPUT` followed by Enter into it. Exercises the full
+//!   `shell`), then type `HANGAR_DEV_INPUT` followed by Enter into it (once it runs, if the
+//!   start queued at "Max concurrent agents"). Exercises the full
 //!   add-project → worktree → store → agent flow without clicking.
 //! - `HANGAR_DEV_OLLAMA=<host>` — before `HANGAR_DEV_OPEN`, turn Ollama on at that host for this run (not
 //!   saved) and wait for its model list, so an OpenCode agent starts with the local models.

@@ -293,9 +293,10 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Welcome shows agent paths and toolchain locations.
   - Settings show agent paths and versions, a Boot button on base devices, and a keybinding search.
   - New workspace shows each base branch's tip and age (new port method `VersionControl::branch_tips`; owner to confirm).
+  - Settings › Permissions › Max concurrent agents (1–32, default 8): starts beyond it queue as Idle in FIFO order (pane: place, Start now, Cancel; status bar and overview: queued count) and start, with their agent and first task, when an agent ends. Lowering it never stops agents. Queue state is in memory only: a quit forgets it.
 - **Still open** (owner calls or not backed):
   - Several workspaces as tabs in one pane, plus "shell" and "+" tabs.
-  - Approval mode, max concurrent agents, notify / Dock badge.
+  - Approval mode, notify / Dock badge.
   - Custom agent commands.
   - Recording keybindings.
   - Build progress and crash overlays.
