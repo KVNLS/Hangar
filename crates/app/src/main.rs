@@ -73,6 +73,9 @@ fn main() {
         .with_assets(hangar_app::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            if let Err(err) = hangar_app::ui::init(component::ThemeMode::Dark, cx) {
+                tracing::error!("design system init failed, using the default theme: {err:#}");
+            }
             hangar_app::terminal_view::init(cx);
             hangar_app::device_view::init(cx);
             hangar_app::shell::init(cx);

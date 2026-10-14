@@ -42,6 +42,9 @@ mod tests {
             assert!(Assets.load(&path).unwrap().is_some(), "{path}");
         }
         assert!(Assets.load("icons/rotate-cw.svg").unwrap().is_some());
-        assert!(!matches!(Assets.load("icons/no-such-icon.svg"), Ok(Some(_))));
+        assert!(!matches!(
+            Assets.load("icons/no-such-icon.svg"),
+            Ok(Some(_))
+        ));
     }
 }

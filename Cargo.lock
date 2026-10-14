@@ -2996,6 +2996,7 @@ dependencies = [
  "hangar-worktree",
  "image",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
