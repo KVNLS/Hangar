@@ -78,13 +78,18 @@ pub fn to_device_clamped(px: f64, py: f64, image: Rect, screen: (f64, f64)) -> O
     Some((fx * screen.0, fy * screen.1))
 }
 
-/// Size of the device screen in points (the unit of [`Input`]). Uses the device's screen spec
-/// when known; otherwise the frame's pixels are taken as points (scale 1).
+/// Size of the device screen in points (the unit of [`Input`]), in the shape of the current
+/// frame: the screen spec describes the portrait panel, so a landscape frame swaps its sides.
+/// Without a spec the frame's pixels are taken as points (scale 1).
 pub fn screen_points(
     spec: Option<hangar_devices::ScreenSpec>,
     frame: Option<(u32, u32)>,
 ) -> Option<(f64, f64)> {
     if let Some(s) = spec {
+        let s = match frame.filter(|(w, h)| *w > 0 && *h > 0) {
+            Some((w, h)) => s.oriented(w > h),
+            None => s,
+        };
         return Some((s.width_pt(), s.height_pt()));
     }
     frame
@@ -319,6 +324,25 @@ mod tests {
             to_device_clamped(1000.0, 1000.0, image, screen),
             Some((402.0, 874.0))
         );
+    }
+
+    #[test]
+    fn landscape_frames_swap_the_screen_sides() {
+        let spec = hangar_devices::ScreenSpec {
+            width_px: 1280,
+            height_px: 2856,
+            scale: 3.0,
+        };
+        let screen = screen_points(Some(spec), Some((2856, 1280))).unwrap();
+        assert!((screen.0 - 952.0).abs() < 1e-9 && (screen.1 - 1280.0 / 3.0).abs() < 1e-9);
+        // A 1428x640 view (half the frame) at scale 1: a click in its centre is the screen centre.
+        let image = image_rect(bounds(0.0, 0.0, 1428.0, 640.0), 2856.0, 1280.0, 1.0);
+        let p = to_device(714.0, 320.0, image, screen).unwrap();
+        assert!((p.0 - 476.0).abs() < 1e-9 && (p.1 - 640.0 / 3.0).abs() < 1e-9);
+        // A tall view letterboxes the landscape frame vertically; the bars are not clickable.
+        let image = image_rect(bounds(0.0, 0.0, 714.0, 1000.0), 2856.0, 1280.0, 1.0);
+        assert!(to_device(100.0, 10.0, image, screen).is_none());
+        assert!(to_device(100.0, 500.0, image, screen).is_some());
     }
 
     #[test]

@@ -109,6 +109,11 @@ impl Platform {
         matches!(self, Self::Android) && info.udid.starts_with("emulator-")
     }
 
+    /// Whether the panel offers a Rotate control (`Device::set_orientation` is Android-only).
+    pub fn can_rotate(self) -> bool {
+        matches!(self, Self::Android)
+    }
+
     /// Shown when no device of this platform is ready. iOS boot is not available from Hangar
     /// yet (`Device::boot` returns `Unsupported`, and only booted simulators are listed).
     pub fn not_ready_hint(self) -> String {
