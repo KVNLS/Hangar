@@ -178,6 +178,9 @@ impl PtySession {
             .spawn(move || write_loop(writer, in_rx))
             .map_err(|e| TerminalError::Thread("PTY writer", e))?;
 
+        if let (Some(pid), Some(tty)) = (child.process_id(), pty.master.tty_name()) {
+            spawn_watchdog(std::process::id(), pid, &tty);
+        }
         let master: SharedMaster = Arc::new(Mutex::new(pty.master));
         let exit = Arc::new(ExitSlot::default());
         let pid = child.process_id();
@@ -310,6 +313,47 @@ impl PtySession {
             groups.push(foreground);
         }
         groups
+    }
+}
+
+/// Starts a watchdog for the program on `tty`: if `owner` (Hangar) dies without stopping it
+/// (crash, SIGKILL), it hangs up everything still on that terminal, then kills what ignored
+/// it. The program leads its own session, so the watchdog cannot join its group the way the
+/// ACP one does (and macOS `pkill` has no `-s`, and its `-t` matches nothing); it lists the
+/// terminal's processes with `ps -t` once, while they still hold it, so a
+/// terminal reused afterwards is never touched. It leaves quietly once `leader` exits.
+fn spawn_watchdog(owner: u32, leader: u32, tty: &std::path::Path) {
+    let Some(tty) = tty.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    if !tty.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return;
+    }
+    let script = format!(
+        "while kill -0 {owner} 2>/dev/null && kill -0 {leader} 2>/dev/null; do sleep 2; done; \
+         kill -0 {owner} 2>/dev/null && exit 0; pids=$(ps -t {tty} -o pid=); [ -n \"$pids\" ] || exit 0; \
+         kill -HUP $pids 2>/dev/null; kill -CONT $pids 2>/dev/null; sleep 2; \
+         kill -KILL $pids 2>/dev/null; exit 0"
+    );
+    let spawned = std::process::Command::new("/bin/sh")
+        .args(["-c", &script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match spawned {
+        Ok(mut watchdog) => {
+            // Reaped when it ends, so it never lingers as a zombie.
+            let reaper = thread::Builder::new()
+                .name("hangar-pty-watchdog".into())
+                .spawn(move || {
+                    let _ = watchdog.wait();
+                });
+            if let Err(e) = reaper {
+                tracing::warn!("pty: watchdog reaper not started: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("pty: no watchdog for {leader}: {e}"),
     }
 }
 
@@ -537,6 +581,25 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         assert!(!alive(job), "job survived kill_now");
         assert!(session.wait().is_ok());
+    }
+
+    #[test]
+    fn watchdog_ends_the_terminal_when_its_owner_dies() {
+        let (session, _rx, job) = stubborn();
+        let tty = lock(&session.master).tty_name().expect("tty name");
+        let pid = session.pid().expect("pid");
+        // A stand-in for Hangar that dies after a second.
+        let mut owner = std::process::Command::new("/bin/sleep")
+            .arg("1")
+            .spawn()
+            .unwrap();
+        spawn_watchdog(owner.id(), pid, &tty);
+        owner.wait().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while session.try_wait().unwrap().is_none() || alive(job) {
+            assert!(Instant::now() < deadline, "the agent outlived its owner");
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     #[test]
