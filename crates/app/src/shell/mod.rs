@@ -11,6 +11,7 @@ mod palette;
 mod sidebar;
 mod status;
 mod view;
+mod welcome;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

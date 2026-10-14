@@ -31,7 +31,13 @@ impl Render for HangarApp {
                     .when(self.sidebar_open, |this| {
                         this.child(self.render_sidebar(cx))
                     })
-                    .child(div().flex_1().min_w_0().h_full().child(panes))
+                    .map(|this| {
+                        if self.projects.is_empty() && !self.loading && self.load_error.is_none() {
+                            this.child(self.render_welcome(cx))
+                        } else {
+                            this.child(div().flex_1().min_w_0().h_full().child(panes))
+                        }
+                    })
                     .children(right_panel)
             }
         };
