@@ -79,17 +79,7 @@ fn describe(adb: &Adb, d: Discovery, adb_devices: &[AdbDevice]) -> RunningEmulat
     }
 }
 
-/// `DeviceInfo::state` values used for Android.
-pub mod state {
-    /// Online in adb and `sys.boot_completed=1`.
-    pub const BOOTED: &str = "Booted";
-    /// Online in adb, Android still starting.
-    pub const BOOTING: &str = "Booting";
-    /// Process running (or device attached) but adb cannot talk to it yet or any more.
-    pub const OFFLINE: &str = "Offline";
-    /// AVD not running.
-    pub const SHUTDOWN: &str = "Shutdown";
-}
+pub use hangar_core::device::state;
 
 pub(crate) fn device_state(adb: &Adb, dev: Option<&AdbDevice>) -> &'static str {
     match dev {

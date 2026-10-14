@@ -18,7 +18,7 @@ use anyhow::{Context as _, bail};
 use hangar_devices::android::{
     self, AndroidSdk, Backend, BootOptions, Capture, RunningEmulator, WindowMode, adb::Adb,
 };
-use hangar_devices::{Device, Input, Orientation};
+use hangar_devices::{Device, Input, Orientation, SavePng as _};
 
 fn main() -> anyhow::Result<()> {
     let mut backend = Backend::Grpc;

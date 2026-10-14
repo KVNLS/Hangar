@@ -1,6 +1,7 @@
 //! Projects, workspaces, sessions, agent state and SQLite persistence.
 
 mod agent_state;
+pub mod device;
 mod model;
 mod setting;
 mod slug;

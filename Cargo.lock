@@ -3030,6 +3030,7 @@ name = "hangar-devices"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "hangar-core",
  "image",
  "libc",
  "objc2 0.6.4",
@@ -3079,7 +3080,7 @@ dependencies = [
 name = "hangar-mcp"
 version = "0.1.0"
 dependencies = [
- "hangar-devices",
+ "hangar-core",
  "image",
  "serde_json",
  "tempfile",
@@ -3092,7 +3093,7 @@ dependencies = [
 name = "hangar-runner"
 version = "0.1.0"
 dependencies = [
- "hangar-devices",
+ "hangar-core",
  "serde",
  "serde_json",
  "tempfile",

@@ -1,6 +1,6 @@
 //! The device tools: typed calls parsed from `tools/call`, their JSON Schemas, and results.
 
-use hangar_devices::{Input, Key, LogLevel, Orientation, Platform};
+use hangar_core::device::{Input, Key, LogLevel, Orientation, Platform};
 use serde_json::{Map, Value, json};
 
 use crate::screenshot::Screenshot;
@@ -11,7 +11,7 @@ pub const DEFAULT_LOG_LINES: usize = 200;
 pub const MAX_LOG_LINES: usize = 2000;
 
 /// One validated tool call. Coordinates are device points, origin top-left of the display as
-/// currently oriented (the space of [`hangar_devices::Input`]).
+/// currently oriented (the space of [`hangar_core::device::Input`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tool {
     DeviceInfo,

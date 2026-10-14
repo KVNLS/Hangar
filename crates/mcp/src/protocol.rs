@@ -182,7 +182,7 @@ pub(crate) fn error_response(id: &Value, code: i64, message: &str) -> Value {
 pub(crate) mod tests {
     use super::*;
     use crate::tools::Press;
-    use hangar_devices::Key;
+    use hangar_core::device::Key;
     use std::sync::Mutex;
 
     pub const SESSION: &str = "tok-123";

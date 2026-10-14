@@ -6,11 +6,7 @@ use serde::Deserialize;
 
 use crate::{DeviceInfo, Error, Result, ScreenSpec};
 
-/// `simctl` device states Hangar acts on.
-pub mod state {
-    pub const BOOTED: &str = "Booted";
-    pub const SHUTDOWN: &str = "Shutdown";
-}
+pub use hangar_core::device::state;
 
 #[derive(Deserialize)]
 struct DeviceList {

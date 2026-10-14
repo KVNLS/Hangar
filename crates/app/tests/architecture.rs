@@ -15,11 +15,11 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("hangar-core", &[]),
     ("hangar-worktree", &[]),
     ("hangar-terminal", &[]),
-    ("hangar-devices", &[]),
+    ("hangar-devices", &["hangar-core"]),
     ("hangar-agents", &["hangar-terminal"]),
     ("hangar-files", &["hangar-worktree"]),
-    ("hangar-runner", &["hangar-devices"]),
-    ("hangar-mcp", &["hangar-devices"]),
+    ("hangar-runner", &["hangar-core"]),
+    ("hangar-mcp", &["hangar-core"]),
 ];
 
 const OUTER: &[&str] = &["hangar-app", "hangar-examples"];

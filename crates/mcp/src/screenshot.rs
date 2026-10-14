@@ -1,6 +1,6 @@
 //! Frame to PNG for the `screenshot` tool.
 
-use hangar_devices::Frame;
+use hangar_core::device::Frame;
 use image::codecs::png::PngEncoder;
 use image::imageops::{self, FilterType};
 use image::{ExtendedColorType, ImageEncoder, RgbImage};
