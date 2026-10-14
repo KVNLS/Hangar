@@ -70,16 +70,29 @@ pub const BUILT_IN: &[(&str, ModelPrice)] = &[
     ("claude-haiku-4-5", ModelPrice::from_io(1.0, 5.0)),
 ];
 
-/// The price of `model`: the user's own first, else the longest built-in id it starts with.
-/// A provider prefix (`anthropic/claude-…`) is ignored.
+/// The price of `model`: the user's own first, else the built-in one. Either matches as the
+/// longest id `model` starts with, ignoring a provider prefix (`anthropic/claude-…`), so dated
+/// ids (`gpt-5-2025-08-07`) get the price set for their family.
 pub fn price_of(model: &str, custom: &[CustomPrice]) -> Option<ModelPrice> {
     if let Some(own) = custom.iter().find(|c| c.model == model) {
         return Some(own.price);
     }
-    let bare = model.rsplit_once('/').map_or(model, |(_, m)| m);
-    BUILT_IN
-        .iter()
+    let bare = bare(model);
+    longest_prefix(bare, custom.iter().map(|c| (c.model.as_str(), c.price)))
+        .or_else(|| longest_prefix(bare, BUILT_IN.iter().map(|(id, price)| (*id, *price))))
+}
+
+/// The price of the longest id `bare` starts with (ids compared without their provider).
+fn longest_prefix<'a>(
+    bare: &str,
+    ids: impl Iterator<Item = (&'a str, ModelPrice)>,
+) -> Option<ModelPrice> {
+    ids.map(|(id, price)| (self::bare(id), price))
         .filter(|(id, _)| bare.starts_with(id))
         .max_by_key(|(id, _)| id.len())
-        .map(|(_, price)| *price)
+        .map(|(_, price)| price)
+}
+
+fn bare(model: &str) -> &str {
+    model.rsplit_once('/').map_or(model, |(_, m)| m)
 }

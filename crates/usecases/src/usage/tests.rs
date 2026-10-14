@@ -253,3 +253,25 @@ fn prices_match_the_longest_id() {
         (ModelPrice::from_io(2.0, 10.0).cost(&million) - (2.0 + 10.0 + 0.2 + 2.5)).abs() < 1e-9
     );
 }
+
+#[test]
+fn custom_prices_match_like_built_in_ones() {
+    let custom = |model: &str, input| CustomPrice {
+        model: model.into(),
+        price: ModelPrice::from_io(input, 1.0),
+    };
+    let prices = [custom("gpt-5", 1.25), custom("claude-opus-5", 9.0)];
+    assert_eq!(price_of("gpt-5", &prices).unwrap().input, 1.25);
+    assert_eq!(
+        price_of("openai/gpt-5-2025-08-07", &prices).unwrap().input,
+        1.25
+    );
+    // The user's price wins over the built-in one for dated and prefixed ids too.
+    assert_eq!(
+        price_of("anthropic/claude-opus-5-20260101", &prices)
+            .unwrap()
+            .input,
+        9.0
+    );
+    assert_eq!(price_of("gpt-4o", &prices), None);
+}
