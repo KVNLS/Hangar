@@ -11,6 +11,23 @@ pub fn stored_cost(cost: &Cost) -> hangar_core::changes::Cost {
     }
 }
 
+/// A chat's spend as the usage ledger books it.
+pub fn turn_spend(spend: &super::Spend) -> hangar_usecases::usage::TurnSpend {
+    let turn = spend.turn.as_ref();
+    hangar_usecases::usage::TurnSpend {
+        cost: spend.cost.as_ref().map(stored_cost),
+        tokens: turn
+            .and_then(|t| t.tokens)
+            .map(|t| hangar_core::changes::TokenCount {
+                input: t.input,
+                output: t.output,
+                cache_read: t.cache_read,
+                cache_write: t.cache_write,
+            }),
+        models: turn.map(|t| t.models.clone()).unwrap_or_default(),
+    }
+}
+
 /// [`costs_label`] of stored costs.
 pub fn stored_costs_label(costs: &[hangar_core::changes::Cost]) -> Option<String> {
     let costs: Vec<Cost> = costs

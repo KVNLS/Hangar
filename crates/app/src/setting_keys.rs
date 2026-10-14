@@ -3,6 +3,7 @@
 
 use hangar_core::{Setting, WorkspaceId};
 use hangar_usecases::agents::StartRequest;
+use hangar_usecases::usage::UsageSettings;
 
 use crate::device_panel::{DeviceKey, Platform};
 use crate::device_pool::policy::{Assignment, Limit};
@@ -18,6 +19,8 @@ pub const CHANGES: Setting<ChangesLayout> = Setting::new("changes_panel");
 pub const DEVICE: Setting<DeviceLayout> = Setting::new("device_panel");
 pub const APPEARANCE: Setting<Appearance> = Setting::new("appearance");
 pub const OLLAMA: Setting<OllamaSettings> = Setting::new("ollama");
+/// Settings › Usage: period shown, reference model for savings, custom prices.
+pub const USAGE: Setting<UsageSettings> = Setting::new("usage");
 /// Whether commits from the review box credit the workspace's agent with a trailer.
 pub const COAUTHOR_TRAILER: Setting<bool> = Setting::new("review:coauthor_trailer");
 /// Dock badge and bounce when an agent waits on approval, input or a failure (default on).
@@ -88,6 +91,7 @@ mod tests {
         assert_eq!(DEVICE.key(), "device_panel");
         assert_eq!(APPEARANCE.key(), "appearance");
         assert_eq!(OLLAMA.key(), "ollama");
+        assert_eq!(USAGE.key(), "usage");
         assert_eq!(COAUTHOR_TRAILER.key(), "review:coauthor_trailer");
         assert_eq!(NOTIFY_ATTENTION.key(), "permissions:notify_attention");
         assert_eq!(APPROVAL_LEVEL.key(), "permissions:approval_level");
