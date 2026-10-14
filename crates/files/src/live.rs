@@ -217,15 +217,13 @@ impl Worker {
             self.merge_base = Some(hangar_worktree::merge_base(&self.worktree, &self.base)?);
         }
         let merge_base = self.merge_base.clone().unwrap_or_default();
-        let status = hangar_worktree::status(&self.worktree)?;
-        let conflicted: BTreeSet<&Path> = status
-            .changes
-            .iter()
-            .filter(|c| c.kind == ChangeKind::Conflicted)
-            .map(|c| c.path.as_path())
-            .collect();
-
-        let mut files = lock(&self.shared).files.clone();
+        let (mut files, previous_status) = {
+            let shared = lock(&self.shared);
+            (
+                shared.files.clone(),
+                shared.summary.as_ref().map(|s| s.status.clone()),
+            )
+        };
         let (pathspecs, covered): (Vec<PathBuf>, Vec<PathBuf>) = if full {
             (Vec::new(), files.keys().cloned().collect())
         } else {
@@ -249,6 +247,23 @@ impl Worker {
         if !full && pathspecs.is_empty() {
             return Ok(None);
         }
+
+        // A full `git status` stats every tracked file (~200 ms at 40k files): only do it
+        // when everything is recomputed, otherwise patch the previous one.
+        let status = match previous_status {
+            Some(mut status) if !full => {
+                let partial = hangar_worktree::status_paths(&self.worktree, &pathspecs)?;
+                status.merge_partial(partial, &pathspecs);
+                status
+            }
+            _ => hangar_worktree::status(&self.worktree)?,
+        };
+        let conflicted: BTreeSet<&Path> = status
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::Conflicted)
+            .map(|c| c.path.as_path())
+            .collect();
 
         let fresh = hangar_worktree::diff_paths(
             &self.worktree,

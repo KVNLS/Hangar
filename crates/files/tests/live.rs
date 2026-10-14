@@ -264,6 +264,11 @@ async fn live_diff_tracks_edit_and_checkout() {
         (edited.summary.insertions, edited.summary.deletions),
         (1, 1)
     );
+    // The incrementally patched status matches a full one.
+    assert_eq!(
+        edited.summary.status,
+        hangar_worktree::status(&repo.path).unwrap()
+    );
     assert_eq!(live.file(Path::new("README.md")).as_ref(), Some(readme));
 
     git(&repo.path, &["checkout", "--", "README.md"]);
