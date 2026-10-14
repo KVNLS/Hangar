@@ -87,6 +87,8 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
 7. **Split `HangarApp` and `DevicePool`** — started
    - Done: `HangarApp` groups its state into `Layout`, `AgentSetup`, `LiveState` and
      `WorkState` (55 fields to 14), field paths only.
+   - Done: the agent queue and attention policies live in `usecases::agents`; `app` only applies
+     their decisions.
    - Next: make those groups entities (controllers) with services passed in, so views do no I/O;
      turn `DevicePool`'s orchestration into a state machine (events and `Instant` in, commands
      out) behind `DeviceCatalog`. Check on macOS with the dev hooks and real

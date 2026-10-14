@@ -41,6 +41,9 @@ Git access is the `git` CLI with porcelain output, not a library.
 - **M6 Mobile run loop**: build/run per stack, device pool, per-worktree Metro/dev-server ports.
 - **M7 ACP structured agents**: AcpAdapter, tool-call/plan views.
 - **M8 MCP device tools**: screenshot, tap, type, logs so agents verify their own UI work.
+- **M9 Orchestration**: Hangar as the one place to run and supervise every agent: headless agent policies in
+  `usecases`, approvals inbox, workspace tasks and fan-out (batch, best-of-N), agent-to-agent MCP tools, usage
+  and session history.
 
 ## Open questions
 1. Where do worktrees live? Current default `~/Library/Application Support/Hangar/worktrees/<project>/<slug>`
@@ -401,6 +404,17 @@ Git access is the `git` CLI with porcelain output, not a library.
   advertises `clientCapabilities._meta["subagent-transcript"]` for the text that was not streamed.
 - Not done: no per-subagent diff counts or devices on the rows; OpenCode, Codex and Gemini report no
   parent link; a nested subagent shows inside its top-level one, not in a view of its own.
+
+## M9 Orchestration (2026-10-07, in progress)
+- Owner decisions: approved a `core::ports::AgentRuntime` port with an agents use case in `usecases`; Store
+  schema changes (`Workspace.task`, persisted queue, session history, parent links); MCP orchestration tools
+  (off by default, an agent acts only on the workspaces it created); Claude Code hooks injected inline for
+  terminal agents (`--settings`, nothing written in the worktree).
+- Done: `hangar_usecases::agents` holds the max-concurrent-agents queue (`AgentQueue`) and the attention policy
+  (`Attention`), moved out of `app` unchanged. The `AgentRuntime` port comes with its first caller (MCP tools).
+- Next, in order: workspace task + persisted queue; batch create and best-of-N with a compare view;
+  approvals inbox and palette "Approve pending request"; Claude Code hooks for terminal agents (`Input` state);
+  MCP orchestration tools; typed `usage_update`; session history; transcript virtualization.
 
 ## Next
 - Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a

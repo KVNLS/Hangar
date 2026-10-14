@@ -1,12 +1,12 @@
 //! "Max concurrent agents": starts beyond the limit wait as Idle in FIFO order and start when an
-//! agent stops. The policy is [`crate::agent_queue`]; this wires it to the sessions.
+//! agent stops. The policy is [`hangar_usecases::agents::AgentQueue`]; this wires it to the sessions.
 
 use gpui_kit::assets::IconName as Lucide;
 
 use super::toast::ToastKind;
 use super::*;
-use crate::agent_queue::{Admission, DEFAULT_MAX_AGENTS, MAX_AGENTS_RANGE, clamp_limit};
 use crate::ui::components::{EmptyState, UiButton};
+use hangar_usecases::agents::{Admission, DEFAULT_MAX_AGENTS, MAX_AGENTS_RANGE, clamp_limit};
 
 /// What to start in a workspace, kept while it waits for a slot.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -24,7 +24,7 @@ pub const NOTIFY_ATTENTION: Setting<bool> = Setting::new("permissions:notify_att
 /// Default approval level of structured agents, as an `ApprovalLevel` id; missing means
 /// "Ask every time".
 pub const APPROVAL_LEVEL: Setting<String> = Setting::new("permissions:approval_level");
-/// "Max concurrent agents": starts beyond it queue (see [`crate::agent_queue`]).
+/// "Max concurrent agents": starts beyond it queue (see [`hangar_usecases::agents::AgentQueue`]).
 pub const MAX_AGENTS: Setting<u32> = Setting::new("agents:max_concurrent");
 
 pub const DEVICE_LIMIT: Setting<Limit> = Setting::new("device_pool:limit");
