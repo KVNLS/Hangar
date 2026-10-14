@@ -102,7 +102,10 @@ impl HangarApp {
     }
 
     /// "Done today": one row per session that ended today; `None` when there is none.
-    pub(in crate::shell) fn done_today_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(in crate::shell) fn done_today_section(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let t = cx.tokens();
         let done = &self.live.done_today;
         let projects = &self.work.projects;
