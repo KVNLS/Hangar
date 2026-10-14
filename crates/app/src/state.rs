@@ -3,6 +3,8 @@
 use hangar_core::{Project, ProjectId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 
+use crate::device_panel::DeviceKey;
+
 pub const PANE_COUNT: usize = 2;
 
 /// Smallest and largest share of the width the first pane may be restored to.
@@ -259,6 +261,52 @@ pub fn changes_width(width: f32) -> Option<f32> {
         .then(|| width.clamp(CHANGES_WIDTH_RANGE.0, CHANGES_WIDTH_RANGE.1))
 }
 
+/// Width range of the device panel, in pixels.
+pub const DEVICE_WIDTH_RANGE: (f32, f32) = (240.0, 1200.0);
+/// Roughly a phone at 1:1 points (402 pt wide) plus the panel's padding.
+const DEVICE_DEFAULT_WIDTH: f32 = 420.0;
+
+/// The device panel's visibility, width, selected device and stats overlay, saved across
+/// launches. One panel per window: the device is shared by all workspaces.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeviceLayout {
+    pub open: bool,
+    pub width: f32,
+    #[serde(default)]
+    pub selected: Option<DeviceKey>,
+    /// Debug overlay with fps and capture → paint latency.
+    #[serde(default)]
+    pub stats: bool,
+}
+
+impl Default for DeviceLayout {
+    fn default() -> Self {
+        Self {
+            open: false,
+            width: DEVICE_DEFAULT_WIDTH,
+            selected: None,
+            stats: false,
+        }
+    }
+}
+
+impl DeviceLayout {
+    /// Clamps the width; anything unusable means the default.
+    pub fn sanitized(self) -> Self {
+        Self {
+            width: device_width(self.width).unwrap_or(DEVICE_DEFAULT_WIDTH),
+            ..self
+        }
+    }
+}
+
+/// A usable device panel width, clamped to [`DEVICE_WIDTH_RANGE`].
+pub fn device_width(width: f32) -> Option<f32> {
+    width
+        .is_finite()
+        .then(|| width.clamp(DEVICE_WIDTH_RANGE.0, DEVICE_WIDTH_RANGE.1))
+}
+
 /// Short status for pane headers and the sidebar.
 pub fn status_label(status: &SessionStatus) -> String {
     match status {
@@ -272,9 +320,10 @@ pub fn status_label(status: &SessionStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGES_WIDTH_RANGE, ChangesLayout, PaneLayout, Panes, ProjectList, changes_width,
-        sanitize_split, split_ratio, status_label,
+        CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, PaneLayout, Panes,
+        ProjectList, changes_width, device_width, sanitize_split, split_ratio, status_label,
     };
+    use crate::device_panel::{DeviceKey, Platform};
     use hangar_core::{Project, SessionStatus, Timestamp, Workspace, WorkspaceId, WorkspaceStatus};
 
     fn workspace(project: &Project, name: &str) -> Workspace {
@@ -423,6 +472,29 @@ mod tests {
         assert_eq!(broken.sanitized().width, ChangesLayout::default().width);
         assert!(broken.sanitized().open);
         assert_eq!(changes_width(1e9), Some(CHANGES_WIDTH_RANGE.1));
+    }
+
+    #[test]
+    fn device_layout_sanitized() {
+        let ok = DeviceLayout {
+            open: true,
+            width: 500.0,
+            selected: Some(DeviceKey {
+                platform: Platform::Ios,
+                id: "U".into(),
+            }),
+            stats: true,
+        };
+        assert_eq!(ok.clone().sanitized(), ok);
+        let broken = DeviceLayout {
+            width: f32::NAN,
+            ..ok.clone()
+        };
+        let fixed = broken.sanitized();
+        assert_eq!(fixed.width, DeviceLayout::default().width);
+        assert_eq!(fixed.selected, ok.selected);
+        assert_eq!(device_width(1.0), Some(DEVICE_WIDTH_RANGE.0));
+        assert_eq!(device_width(f32::INFINITY), None);
     }
 
     #[test]

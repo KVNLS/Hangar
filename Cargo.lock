@@ -2988,6 +2988,7 @@ dependencies = [
  "hangar-files",
  "hangar-terminal",
  "hangar-worktree",
+ "image",
  "serde",
  "tempfile",
  "tokio",

@@ -14,7 +14,7 @@ use hangar_terminal::ExitInfo;
 
 use crate::agents;
 use crate::paths::{BRANCH_PREFIX, branch_name, unique_slug, worktree_path};
-use crate::state::{ChangesLayout, PaneLayout, ProjectEntry};
+use crate::state::{ChangesLayout, DeviceLayout, PaneLayout, ProjectEntry};
 
 pub fn open_store(path: &Path) -> anyhow::Result<Arc<Store>> {
     let store =
@@ -28,6 +28,8 @@ pub const LAYOUT_SETTING: &str = "layout";
 pub const AGENT_SETTING: &str = "agent";
 /// Setting key of the saved [`ChangesLayout`].
 pub const CHANGES_SETTING: &str = "changes_panel";
+/// Setting key of the saved [`DeviceLayout`].
+pub const DEVICE_SETTING: &str = "device_panel";
 
 /// Everything the window needs at startup.
 pub struct Loaded {
@@ -35,6 +37,7 @@ pub struct Loaded {
     pub layout: Option<PaneLayout>,
     pub agent: Option<String>,
     pub changes: Option<ChangesLayout>,
+    pub device: Option<DeviceLayout>,
     /// Saved settings that could not be read; the defaults are used instead.
     pub settings_error: Option<anyhow::Error>,
 }
@@ -70,15 +73,27 @@ pub fn load(store: &Store) -> anyhow::Result<Loaded> {
         anyhow::Ok((layout, agent, changes))
     })()
     .context("failed to read saved layout");
-    let (layout, agent, changes, settings_error) = match settings {
+    let (layout, agent, changes, mut settings_error) = match settings {
         Ok((layout, agent, changes)) => (layout, agent, changes, None),
         Err(err) => (None, None, None, Some(err)),
+    };
+    // Read on its own so a bad device setting does not reset the pane layout.
+    let device = match store
+        .get_setting::<DeviceLayout>(DEVICE_SETTING)
+        .context("failed to read the device panel settings")
+    {
+        Ok(device) => device,
+        Err(err) => {
+            settings_error.get_or_insert(err);
+            None
+        }
     };
     Ok(Loaded {
         entries,
         layout,
         agent,
         changes,
+        device,
         settings_error,
     })
 }
@@ -93,6 +108,12 @@ pub fn save_changes(store: &Store, changes: &ChangesLayout) -> anyhow::Result<()
     store
         .set_setting(CHANGES_SETTING, changes)
         .context("failed to save the changes panel layout")
+}
+
+pub fn save_device(store: &Store, device: &DeviceLayout) -> anyhow::Result<()> {
+    store
+        .set_setting(DEVICE_SETTING, device)
+        .context("failed to save the device panel settings")
 }
 
 pub fn save_agent(store: &Store, agent: &str) -> anyhow::Result<()> {
@@ -888,6 +909,56 @@ mod tests {
         assert!(loaded.layout.is_none());
         assert!(loaded.settings_error.is_some());
         assert_eq!(loaded.entries.len(), 1);
+    }
+
+    #[test]
+    fn device_settings_round_trip() {
+        use crate::device_panel::{DeviceKey, Platform};
+
+        let f = fixture();
+        assert!(load(&f.store).unwrap().device.is_none());
+        let device = DeviceLayout {
+            open: true,
+            width: 380.0,
+            selected: Some(DeviceKey {
+                platform: Platform::Ios,
+                id: "E33FE595-67AD-470C-AD94-A38EAC9D0F38".into(),
+            }),
+            stats: true,
+        };
+        save_device(&f.store, &device).unwrap();
+        let loaded = load(&f.store).unwrap();
+        assert_eq!(loaded.device, Some(device));
+        assert!(loaded.settings_error.is_none());
+
+        // Fields added later default when an older value is read.
+        #[derive(serde::Serialize)]
+        struct Old {
+            open: bool,
+            width: f32,
+        }
+        f.store
+            .set_setting(
+                DEVICE_SETTING,
+                &Old {
+                    open: false,
+                    width: 300.0,
+                },
+            )
+            .unwrap();
+        let old = load(&f.store).unwrap().device.unwrap();
+        assert_eq!(
+            (old.open, old.width, old.selected, old.stats),
+            (false, 300.0, None, false)
+        );
+
+        // A broken device setting is reported but leaves the other settings alone.
+        save_agent(&f.store, "codex").unwrap();
+        f.store.set_setting(DEVICE_SETTING, &"nope").unwrap();
+        let loaded = load(&f.store).unwrap();
+        assert!(loaded.device.is_none());
+        assert!(loaded.settings_error.is_some());
+        assert_eq!(loaded.agent.as_deref(), Some("codex"));
     }
 
     #[test]
