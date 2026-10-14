@@ -32,11 +32,20 @@ impl DeviceEntry {
         Self {
             key: DeviceKey {
                 platform,
-                id: info.udid.clone(),
+                id: stable_id(platform, &info).to_owned(),
             },
             ready: platform.is_ready(&info),
             info,
         }
+    }
+}
+
+/// The key id: the UDID, except for running Android emulators, whose adb serial changes with
+/// every boot. They use their AVD id, which is also the udid of the same AVD when shut down.
+fn stable_id(platform: Platform, info: &DeviceInfo) -> &str {
+    match (platform, info.device_type.as_deref()) {
+        (Platform::Android, Some(avd)) if info.udid.starts_with("emulator-") => avd,
+        _ => &info.udid,
     }
 }
 
@@ -95,11 +104,11 @@ impl Picker {
         self.entries.iter().find(|e| e.key.value() == value)
     }
 
-    /// Finds a listed device by id on any platform (dev hooks).
+    /// Finds a listed device by key id or UDID (adb serial) on any platform (dev hooks).
     pub fn find_id(&self, id: &str) -> Option<DeviceKey> {
         self.entries
             .iter()
-            .find(|e| e.key.id.eq_ignore_ascii_case(id))
+            .find(|e| e.key.id.eq_ignore_ascii_case(id) || e.info.udid.eq_ignore_ascii_case(id))
             .map(|e| e.key.clone())
     }
 
@@ -349,18 +358,26 @@ mod tests {
         );
     }
 
-    fn android(id: &str, state: &str) -> DeviceEntry {
+    /// An AVD: shut down it is listed under its id, running under its adb serial.
+    fn avd(avd_id: &str, serial: Option<&str>, state: &str) -> DeviceEntry {
         DeviceEntry::new(
             Platform::Android,
             DeviceInfo {
-                udid: id.into(),
-                name: format!("Pixel {id}"),
+                udid: serial.unwrap_or(avd_id).into(),
+                name: format!("Pixel {avd_id}"),
                 runtime: "Android 17".into(),
                 state: state.into(),
-                device_type: None,
+                device_type: Some(avd_id.into()),
                 screen: None,
             },
         )
+    }
+
+    fn android_key(id: &str) -> DeviceKey {
+        DeviceKey {
+            platform: Platform::Android,
+            id: id.into(),
+        }
     }
 
     #[test]
@@ -369,31 +386,29 @@ mod tests {
         p.set_visible(true);
         // A shut-down AVD is listed but never opened or auto-selected.
         let fx = p.list_done(
-            vec![android("Pixel_10", "Shutdown"), entry("A", "Booted")],
+            vec![avd("Pixel_10", None, "Shutdown"), entry("A", "Booted")],
             vec![],
         );
         assert_eq!(opens(&fx), Some("A"));
         assert!(!p.entries()[0].ready);
-        let avd = DeviceKey {
-            platform: Platform::Android,
-            id: "Pixel_10".into(),
-        };
-        assert!(p.select(avd.clone()).close);
+        assert!(p.select(android_key("Pixel_10")).close);
         assert_eq!(p.active(), None);
-        // Once booted it is listed under its adb serial and the same id on iOS stays distinct.
-        let serial = DeviceKey {
-            platform: Platform::Android,
-            id: "emulator-5554".into(),
-        };
-        p.list_done(
-            vec![android("emulator-5554", "Booted"), entry("A", "Booted")],
+        // Once booted it keeps its key (the AVD id), so the selection holds and it opens.
+        let fx = p.list_done(
+            vec![
+                avd("Pixel_10", Some("emulator-5554"), "Booted"),
+                entry("A", "Booted"),
+            ],
             vec![],
         );
-        assert_eq!(opens(&p.select(serial.clone())), Some("emulator-5554"));
-        assert_eq!(serial.value(), "android:emulator-5554");
+        assert_eq!(opens(&fx), Some("Pixel_10"));
         assert_eq!(
-            p.entry_by_value("android:emulator-5554")
-                .map(|e| e.key.platform),
+            fx.open.map(|e| e.info.udid),
+            Some("emulator-5554".to_owned())
+        );
+        assert_eq!(android_key("Pixel_10").value(), "android:Pixel_10");
+        assert_eq!(
+            p.entry_by_value("android:Pixel_10").map(|e| e.key.platform),
             Some(Platform::Android)
         );
         // An Android failure does not hide the iOS devices.
@@ -403,6 +418,40 @@ mod tests {
         );
         assert!(fx.close);
         assert_eq!(p.errors(), [(Platform::Android, "no SDK".to_owned())]);
+    }
+
+    #[test]
+    fn saved_avd_selection_survives_a_new_serial() {
+        let mut p = Picker::default();
+        p.restore(Some(android_key("Pixel_10")));
+        p.set_visible(true);
+        let fx = p.list_done(
+            vec![
+                entry("A", "Booted"),
+                avd("Pixel_10", Some("emulator-5556"), "Booted"),
+            ],
+            vec![],
+        );
+        assert_eq!(opens(&fx), Some("Pixel_10"));
+        // The dev hooks still find it by serial.
+        assert_eq!(p.find_id("emulator-5556"), Some(android_key("Pixel_10")));
+    }
+
+    #[test]
+    fn physical_android_device_keeps_its_serial() {
+        // `device_type` is the adb product name for physical devices, not an AVD id.
+        let phone = DeviceEntry::new(
+            Platform::Android,
+            DeviceInfo {
+                udid: "R5CT12345".into(),
+                name: "Galaxy".into(),
+                runtime: "Android 16".into(),
+                state: "Booted".into(),
+                device_type: Some("r0q".into()),
+                screen: None,
+            },
+        );
+        assert_eq!(phone.key, android_key("R5CT12345"));
     }
 
     #[test]

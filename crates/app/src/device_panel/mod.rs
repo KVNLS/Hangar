@@ -101,8 +101,6 @@ pub struct DevicePanel {
     input_status: Option<InputStatus>,
     booting: Option<Booting>,
     boot_error: Option<(DeviceKey, SharedString)>,
-    /// A device booted from the panel, to select once the next listing shows it.
-    select_after_list: Option<DeviceKey>,
     shutting_down: bool,
     stats: bool,
     logs_settings: LogsSettings,
@@ -140,7 +138,6 @@ impl DevicePanel {
             input_status: None,
             booting: None,
             boot_error: None,
-            select_after_list: None,
             shutting_down: false,
             stats: stats_forced(),
             logs_settings: LogsSettings::default(),
@@ -204,11 +201,6 @@ impl DevicePanel {
             cx.emit(DevicePanelEvent::Selected(self.picker.selected().cloned()));
         }
         self.apply(effect, window, cx);
-        if let Some(key) = self.select_after_list.take()
-            && self.picker.entry_by_value(&key.value()).is_some()
-        {
-            self.select_device(key, window, cx);
-        }
         cx.notify();
     }
 
@@ -283,14 +275,9 @@ impl DevicePanel {
     ) {
         self.booting = None;
         match result {
+            // The booted device keeps its key, so the listing below opens it if it is selected.
             Ok(info) => {
                 tracing::info!(device = %info.udid, name = %info.name, "device booted");
-                if self.picker.selected() == Some(&key) {
-                    self.select_after_list = Some(DeviceKey {
-                        platform: key.platform,
-                        id: info.udid,
-                    });
-                }
             }
             Err(err) => {
                 tracing::error!(device = %key.id, "failed to boot device: {err:#}");
