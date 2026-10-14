@@ -238,7 +238,11 @@ impl TerminalView {
         {
             let cell_px = (f32::from(cell.width) as u16, f32::from(cell.height) as u16);
             match self.session.resize(grid, cell_px) {
-                Ok(()) => self.grid = grid,
+                Ok(()) => {
+                    self.grid = grid;
+                    // The footer shows the size.
+                    cx.notify();
+                }
                 Err(err) => tracing::warn!(%err, "failed to resize terminal"),
             }
         }

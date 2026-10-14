@@ -14,8 +14,9 @@ mod stats;
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui_kit::component::ActiveTheme as _;
+use crate::ui::ActiveTokens as _;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::*;
 use hangar_terminal::{
     ExitInfo, GridSize, Key, SpawnOptions, TerminalConfig, TerminalError, TerminalSession,
@@ -54,6 +55,18 @@ pub struct TerminalViewOptions {
     pub option_as_meta: bool,
     /// Log frame/byte/latency statistics to stderr once per second.
     pub stats: bool,
+    /// Program shown in the footer (a path or a name); `None` means the login shell.
+    pub program: Option<SharedString>,
+}
+
+impl TerminalViewOptions {
+    /// Options for a view of `program` (an executable path).
+    pub fn for_program(program: &std::path::Path) -> Self {
+        Self {
+            program: Some(program.to_string_lossy().into_owned().into()),
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for TerminalViewOptions {
@@ -64,11 +77,13 @@ impl Default for TerminalViewOptions {
             line_height: 1.5,
             option_as_meta: false,
             stats: std::env::var_os("HANGAR_TERM_STATS").is_some_and(|v| v == "1"),
+            program: None,
         }
     }
 }
 
 const PADDING_X: Pixels = px(16.);
+const FOOTER_HEIGHT: Pixels = px(22.);
 const PADDING_Y: Pixels = px(10.);
 /// Minimum spacing between redraw requests caused by program output (~one 120 Hz frame).
 const REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
@@ -86,6 +101,8 @@ pub struct TerminalView {
     /// In-progress IME composition (not yet sent to the program).
     marked_text: Option<String>,
     title: Option<String>,
+    /// Footer name of the program, e.g. `zsh`.
+    program: SharedString,
     exit_message: Option<String>,
     scroll_remainder: Pixels,
     /// Top-left of the cell grid in window coordinates, from the last prepaint.
@@ -217,11 +234,21 @@ impl TerminalView {
             features: crate::ui::mono_features(),
             ..font(options.font_family.clone())
         };
+        let program = program_name(
+            options
+                .program
+                .clone()
+                .map(String::from)
+                .or_else(|| std::env::var("SHELL").ok())
+                .as_deref(),
+        )
+        .into();
         Self {
             session,
             focus_handle,
             font,
             options,
+            program,
             cell: None,
             grid,
             cursor_bounds: None,
@@ -430,6 +457,20 @@ fn single_char(key: &str) -> Option<char> {
     chars.next().is_none().then_some(c)
 }
 
+/// The footer's name for a program path: its file name, `sh` when unknown.
+fn program_name(program: Option<&str>) -> String {
+    program
+        .map(|p| p.rsplit('/').next().unwrap_or(p).trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("sh")
+        .to_owned()
+}
+
+/// `pty · zsh · 132×18`.
+fn footer_label(program: &str, grid: GridSize) -> String {
+    format!("pty · {program} · {}×{}", grid.cols, grid.rows)
+}
+
 impl EventEmitter<TerminalEvent> for TerminalView {}
 
 impl Focusable for TerminalView {
@@ -448,11 +489,29 @@ impl Render for TerminalView {
             }
             terminal.palette().background
         };
+        let t = cx.tokens();
+        let footer = div()
+            .flex_none()
+            .h(FOOTER_HEIGHT)
+            .px(PADDING_X)
+            .flex()
+            .items_center()
+            .border_t_1()
+            .border_color(t.line)
+            .bg(rgb(background.to_hex()))
+            .font_family(crate::ui::FONT_MONO)
+            .text_size(px(11.))
+            .text_color(t.tx3)
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .child(footer_label(&self.program, self.grid));
         let terminal = div()
             .id("terminal")
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
-            .size_full()
+            .w_full()
+            .flex_1()
+            .min_h_0()
             .px(PADDING_X)
             .py(PADDING_Y)
             .bg(rgb(background.to_hex()))
@@ -469,35 +528,34 @@ impl Render for TerminalView {
             .child(TerminalElement::new(cx.entity()));
         // Programs tracking the mouse (vim, htop…) get the right click themselves.
         if self.session.terminal().mouse_mode().is_active() {
-            return terminal.into_any_element();
+            return v_flex().size_full().child(terminal).child(footer);
         }
         let view = cx.entity().downgrade();
-        terminal
-            .context_menu(move |menu, _, cx| {
-                let has_selection = view.upgrade().is_some_and(|term| {
-                    term.read(cx).session.terminal().selection_text().is_some()
-                });
-                let (copy, paste, all) = (view.clone(), view.clone(), view.clone());
-                menu.item(
-                    PopupMenuItem::new("Copy")
-                        .disabled(!has_selection)
-                        .on_click(move |_, window, cx| {
-                            let _ = copy.update(cx, |term, cx| {
-                                term.copy_selection(&CopySelection, window, cx)
-                            });
-                        }),
-                )
-                .item(PopupMenuItem::new("Paste").on_click(move |_, _, cx| {
-                    let _ = paste.update(cx, |term, cx| term.paste(cx));
-                }))
-                .separator()
-                .item(
-                    PopupMenuItem::new("Select all").on_click(move |_, window, cx| {
-                        let _ = all.update(cx, |term, cx| term.select_all(&SelectAll, window, cx));
+        let terminal = terminal.context_menu(move |menu, _, cx| {
+            let has_selection = view
+                .upgrade()
+                .is_some_and(|term| term.read(cx).session.terminal().selection_text().is_some());
+            let (copy, paste, all) = (view.clone(), view.clone(), view.clone());
+            menu.item(
+                PopupMenuItem::new("Copy")
+                    .disabled(!has_selection)
+                    .on_click(move |_, window, cx| {
+                        let _ = copy.update(cx, |term, cx| {
+                            term.copy_selection(&CopySelection, window, cx)
+                        });
                     }),
-                )
-            })
-            .into_any_element()
+            )
+            .item(PopupMenuItem::new("Paste").on_click(move |_, _, cx| {
+                let _ = paste.update(cx, |term, cx| term.paste(cx));
+            }))
+            .separator()
+            .item(
+                PopupMenuItem::new("Select all").on_click(move |_, window, cx| {
+                    let _ = all.update(cx, |term, cx| term.select_all(&SelectAll, window, cx));
+                }),
+            )
+        });
+        v_flex().size_full().child(terminal).child(footer)
     }
 }
 
@@ -590,8 +648,18 @@ impl EntityInputHandler for TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::{named_key, single_char};
-    use hangar_terminal::Key;
+    use super::{footer_label, named_key, program_name, single_char};
+    use hangar_terminal::{GridSize, Key};
+
+    #[test]
+    fn footer_names_program_and_size() {
+        assert_eq!(program_name(Some("/bin/zsh")), "zsh");
+        assert_eq!(program_name(Some("claude")), "claude");
+        assert_eq!(program_name(Some("")), "sh");
+        assert_eq!(program_name(None), "sh");
+        let grid = GridSize::new(132, 18).unwrap();
+        assert_eq!(footer_label("zsh", grid), "pty · zsh · 132×18");
+    }
 
     #[test]
     fn named_keys_map_to_terminal_keys() {
