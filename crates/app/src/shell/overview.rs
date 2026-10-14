@@ -214,7 +214,7 @@ impl HangarApp {
         );
         let queued = self.queued_ahead(id);
         let last = queued
-            .map(|ahead| format!("Queued · {ahead} ahead · starts when an agent stops").into())
+            .map(|ahead| super::queue::queued_label(ahead).into())
             .or_else(|| live.and_then(|l| l.activity.last_line.clone()))
             .unwrap_or_else(|| {
                 if live.is_some() {

@@ -55,7 +55,10 @@ impl HangarApp {
                 let limit = self.live.agent_queue.limit();
                 self.show_toast(
                     ToastKind::Info,
-                    format!("“{name}” queued: {limit} agents at once. It starts when one stops."),
+                    format!(
+                        "“{name}” queued: {}. It starts when one stops.",
+                        agents_at_once(limit)
+                    ),
                     cx,
                 );
                 Task::ready(false)
@@ -163,29 +166,59 @@ impl HangarApp {
         ahead: usize,
         cx: &mut Context<Self>,
     ) -> EmptyState {
-        EmptyState::new(
-            Lucide::Hourglass,
-            format!("Queued · {ahead} ahead · starts when an agent stops"),
-        )
-        .hint(format!(
-            "{} agents at once (Settings › Agents & providers).",
-            self.max_agents()
-        ))
-        .action(
-            UiButton::new(SharedString::from(format!("queue-start-{id}")))
-                .icon(Lucide::Play)
-                .label("Start now")
-                .small()
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.start_queued_now(id, window, cx)),
-                ),
-        )
-        .action(
-            UiButton::new(SharedString::from(format!("queue-cancel-{id}")))
-                .label("Cancel")
-                .ghost()
-                .small()
-                .on_click(cx.listener(move |this, _, _, cx| this.cancel_queued(id, cx))),
-        )
+        EmptyState::new(Lucide::Hourglass, queued_label(ahead))
+            .hint(format!(
+                "{} (Settings › Agents & providers).",
+                agents_at_once(self.max_agents())
+            ))
+            .action(
+                UiButton::new(SharedString::from(format!("queue-start-{id}")))
+                    .icon(Lucide::Play)
+                    .label("Start now")
+                    .small()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.start_queued_now(id, window, cx)
+                    })),
+            )
+            .action(
+                UiButton::new(SharedString::from(format!("queue-cancel-{id}")))
+                    .label("Cancel")
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _, _, cx| this.cancel_queued(id, cx))),
+            )
+    }
+}
+
+/// "Queued · next · …" for the head of the queue, else "Queued · N ahead · …".
+pub(super) fn queued_label(ahead: usize) -> String {
+    match ahead {
+        0 => "Queued · next · starts when an agent stops".to_owned(),
+        n => format!("Queued · {n} ahead · starts when an agent stops"),
+    }
+}
+
+/// "1 agent at once" / "N agents at once".
+fn agents_at_once(limit: u32) -> String {
+    let s = if limit == 1 { "" } else { "s" };
+    format!("{limit} agent{s} at once")
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::{agents_at_once, queued_label};
+
+    #[test]
+    fn queue_copy_reads_naturally() {
+        assert_eq!(
+            queued_label(0),
+            "Queued · next · starts when an agent stops"
+        );
+        assert_eq!(
+            queued_label(2),
+            "Queued · 2 ahead · starts when an agent stops"
+        );
+        assert_eq!(agents_at_once(1), "1 agent at once");
+        assert_eq!(agents_at_once(8), "8 agents at once");
     }
 }

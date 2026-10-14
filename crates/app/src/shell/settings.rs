@@ -411,7 +411,7 @@ impl HangarApp {
                     v_flex()
                         .gap_0p5()
                         .min_w_0()
-                        .child(div().type_body_strong().child(title))
+                        .child(title)
                         .child(div().type_secondary().text_color(t.tx3).child(hint)),
                 )
         };
