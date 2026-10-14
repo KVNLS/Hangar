@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
@@ -24,7 +24,7 @@ use logs::{LogsEvent, LogsPane};
 use crate::device_pool::{DevicePool, DeviceStatus};
 use crate::device_view::{DeviceSession, DeviceView, DeviceViewEvent, InputResult};
 use crate::ui::components::{EmptyState, UiButton};
-use crate::ui::{ActiveTokens as _, TypeScale as _};
+use crate::ui::{ActiveTokens as _, Tokens, TypeScale as _};
 pub use logs::LogsSettings;
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
 pub use platform::{
@@ -32,7 +32,14 @@ pub use platform::{
     open_with_fallback,
 };
 
+/// Key context of the panel: its bindings apply while focus is inside it.
+pub const KEY_CONTEXT: &str = "DevicePanel";
+
+actions!(device_panel, [Screenshot, PressHome]);
+
 pub enum DevicePanelEvent {
+    /// Screenshot of the workspace's device, for its agent.
+    Screenshot(WorkspaceId),
     /// The user picked another device (save it).
     Selected(Option<DeviceKey>),
     /// The stats overlay was toggled (save it).
@@ -45,6 +52,8 @@ pub enum DevicePanelEvent {
 struct DeviceOption {
     value: SharedString,
     title: SharedString,
+    /// Booted (green dot) or shut down (grey dot).
+    ready: bool,
 }
 
 impl SelectItem for DeviceOption {
@@ -56,6 +65,21 @@ impl SelectItem for DeviceOption {
 
     fn value(&self) -> &Self::Value {
         &self.value
+    }
+
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = cx.tokens();
+        h_flex()
+            .gap(px(6.))
+            .items_center()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .size(px(6.))
+                    .rounded_full()
+                    .bg(if self.ready { t.grn } else { t.tx3 }),
+            )
+            .child(self.title.clone())
     }
 }
 
@@ -122,6 +146,60 @@ impl Booting {
 struct InputStatus {
     text: SharedString,
     error: bool,
+}
+
+/// The shown device's state as the header labels it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeviceState {
+    Booting,
+    /// Booted; the panel is connecting to it.
+    Opening,
+    Running,
+    ShuttingDown,
+    Off,
+    /// The boot or open failed.
+    Failed,
+    /// Another workspace holds the device's lease.
+    InUse,
+}
+
+impl DeviceState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Booting => "Booting",
+            Self::Opening => "Opening",
+            Self::Running => "Running",
+            Self::ShuttingDown => "Shutting down",
+            Self::Off => "Shut down",
+            Self::Failed => "Failed",
+            Self::InUse => "In use",
+        }
+    }
+
+    fn color(self, t: &Tokens) -> Hsla {
+        match self {
+            Self::Booting | Self::Opening => t.amb,
+            Self::Running => t.grn,
+            Self::ShuttingDown | Self::Off => t.tx3,
+            Self::Failed => t.red,
+            Self::InUse => t.vio,
+        }
+    }
+
+    /// A workspace device as the pool reports it; `held` when another workspace holds it.
+    fn of_workspace(status: &DeviceStatus<'_>, held: bool) -> Option<Self> {
+        Some(match status {
+            DeviceStatus::Unknown => return None,
+            DeviceStatus::Opening { .. } | DeviceStatus::Open { .. } if held => Self::InUse,
+            DeviceStatus::Closed {
+                error, conflict, ..
+            } if error.is_some() || conflict.is_some() => Self::Failed,
+            DeviceStatus::Closed { .. } => Self::Off,
+            DeviceStatus::Opening { .. } => Self::Booting,
+            DeviceStatus::Open { .. } => Self::Running,
+            DeviceStatus::ShuttingDown { .. } => Self::ShuttingDown,
+        })
+    }
 }
 
 pub struct DevicePanel {
@@ -409,6 +487,7 @@ impl DevicePanel {
             .map(|e| DeviceOption {
                 value: e.key.value().into(),
                 title: entry_title(e).into(),
+                ready: e.ready,
             })
             .collect();
         let selected: Option<SharedString> = match self.workspace {
@@ -797,6 +876,28 @@ impl DevicePanel {
         true
     }
 
+    /// A workspace device is on screen: its screenshot can go to the workspace's agent.
+    fn can_screenshot(&self) -> bool {
+        self.workspace.is_some() && self.attached.is_some()
+    }
+
+    /// Asks the shell to save a screenshot of the workspace's device for its agent.
+    pub fn screenshot(&mut self, cx: &mut Context<Self>) {
+        if let Some(ws) = self.workspace.filter(|_| self.can_screenshot()) {
+            cx.emit(DevicePanelEvent::Screenshot(ws));
+        }
+    }
+
+    /// The Home button (⌘⇧H), when the shown device takes it.
+    fn press_home(&mut self, cx: &mut Context<Self>) {
+        let accepts = self
+            .view()
+            .is_some_and(|v| v.read(cx).session().capabilities().accepts(&Input::Home));
+        if accepts {
+            self.send(Input::Home, cx);
+        }
+    }
+
     /// The error of the last input, if it failed.
     pub fn input_error(&self) -> Option<SharedString> {
         self.input_status
@@ -805,9 +906,58 @@ impl DevicePanel {
             .map(|s| s.text.clone())
     }
 
-    /// 40px toolbar: device select, stats overlay toggle, refresh.
+    /// The shown device's state for the header, when there is one to tell.
+    fn device_state(&self, cx: &App) -> Option<DeviceState> {
+        if let Some(ws) = self.workspace {
+            let pool = self.pool.read(cx);
+            let held = pool.held_by_other(ws).is_some();
+            return DeviceState::of_workspace(&pool.status(ws), held);
+        }
+        let entry = self.picker.selected_entry();
+        let key = entry.map(|e| &e.key);
+        if self.booting.as_ref().is_some_and(|b| Some(&b.key) == key) {
+            return Some(DeviceState::Booting);
+        }
+        match &self.connection {
+            Connection::Open { .. } if self.shutting_down => Some(DeviceState::ShuttingDown),
+            Connection::Open { .. } => Some(DeviceState::Running),
+            Connection::Opening { .. } => Some(DeviceState::Opening),
+            Connection::Failed { .. } => Some(DeviceState::Failed),
+            Connection::None => {
+                let entry = entry?;
+                Some(
+                    if self
+                        .boot_error
+                        .as_ref()
+                        .is_some_and(|(k, _)| *k == entry.key)
+                    {
+                        DeviceState::Failed
+                    } else if entry.ready {
+                        DeviceState::Running
+                    } else {
+                        DeviceState::Off
+                    },
+                )
+            }
+        }
+    }
+
+    /// 40px toolbar: device select and its state, stats overlay toggle, refresh.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = cx.tokens();
+        let state = self.device_state(cx).map(|state| {
+            let color = state.color(t);
+            h_flex()
+                .flex_shrink_0()
+                .gap(px(5.))
+                .items_center()
+                .font_mono()
+                .text_size(px(11.))
+                .text_color(color)
+                .whitespace_nowrap()
+                .child(div().size(px(6.)).rounded_full().bg(color))
+                .child(state.label())
+        });
         h_flex()
             .h(px(40.))
             .px_2()
@@ -827,6 +977,15 @@ impl DevicePanel {
                             "Listing devices…"
                         },
                     )),
+            )
+            .children(state)
+            .child(
+                UiButton::new("device-screenshot")
+                    .icon(Lucide::Camera)
+                    .ghost()
+                    .disabled(!self.can_screenshot())
+                    .tooltip("Screenshot ⌘S")
+                    .on_click(cx.listener(|this, _, _, cx| this.screenshot(cx))),
             )
             .child(
                 UiButton::new("device-stats")
@@ -1038,6 +1197,11 @@ impl DevicePanel {
                 .text_size(px(11.))
                 .text_color(t.tx2)
         };
+        if self.device_state(cx) == Some(DeviceState::InUse)
+            && let Some(overlay) = self.render_in_use(ws, cx)
+        {
+            return overlay;
+        }
         if let Some(a) = &self.attached {
             return div()
                 .flex_1()
@@ -1117,6 +1281,82 @@ impl DevicePanel {
             }
         }
         .into_any_element()
+    }
+
+    /// Another workspace's run or tool call holds this workspace's device. The pool can neither
+    /// revoke a lease (no "take over") nor give a workspace its own device while the cap shares
+    /// one (no "clone"); in single-device mode it can switch to another booted device.
+    fn render_in_use(&self, ws: WorkspaceId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = cx.tokens();
+        let pool = self.pool.read(cx);
+        let (_, holder) = pool.held_by_other(ws)?;
+        let text = format!("“{holder}” is running on this device.");
+        let assignment = pool.assignment(ws)?;
+        let platform = assignment.platform;
+        let alternative = pool
+            .single_device(platform)
+            .then(|| {
+                self.picker.entries().iter().find(|e| {
+                    e.key.platform == platform
+                        && e.ready
+                        && e.key.id != assignment.base
+                        && !e
+                            .info
+                            .name
+                            .starts_with(crate::device_pool::backend::CLONE_PREFIX)
+                        && !pool.base_held_by_other(&e.key, ws)
+                })
+            })
+            .flatten()
+            .map(|e| (e.key.clone(), e.info.name.clone()));
+        let switch = alternative.map(|(key, name)| {
+            UiButton::new("device-use-other")
+                .label(format!("Use {name} instead"))
+                .ghost()
+                .full_width()
+                .tooltip("Make it this workspace's device")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let key = key.clone();
+                    this.pool.update(cx, |pool, cx| {
+                        pool.assign(ws, key.platform, key.id, cx);
+                    });
+                    this.start_workspace_device(ws, cx);
+                }))
+        });
+        Some(
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .px(px(18.))
+                .gap(px(10.))
+                .items_center()
+                .justify_center()
+                .text_center()
+                .text_size(px(11.))
+                .text_color(t.tx)
+                .child(
+                    div()
+                        .size(px(32.))
+                        .rounded(px(8.))
+                        .bg(t.viobg)
+                        .text_color(t.vio)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(Lucide::Lock).size(px(15.)).text_color(t.vio)),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("In use by another workspace"),
+                )
+                .child(div().text_color(t.tx2).line_height(rems(1.4)).child(text))
+                .when_some(switch, |this, switch| {
+                    this.child(div().w_full().max_w(px(280.)).mt_1().child(switch))
+                })
+                .into_any_element(),
+        )
     }
 
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1293,7 +1533,11 @@ impl Render for DevicePanel {
         let t = cx.tokens();
         let waiting = self
             .workspace
-            .filter(|ws| self.attached.is_some() && self.pool.read(cx).is_waiting(*ws))
+            .filter(|ws| {
+                let pool = self.pool.read(cx);
+                // The in-use overlay already says so.
+                self.attached.is_some() && pool.is_waiting(*ws) && pool.held_by_other(*ws).is_none()
+            })
             .map(|_| {
                 div()
                     .px_3()
@@ -1305,6 +1549,9 @@ impl Render for DevicePanel {
                     .child("Waiting for the device: another workspace is using it.")
             });
         v_flex()
+            .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(|this, _: &Screenshot, _, cx| this.screenshot(cx)))
+            .on_action(cx.listener(|this, _: &PressHome, _, cx| this.press_home(cx)))
             .size_full()
             .bg(t.app)
             .child(header)
@@ -1357,5 +1604,44 @@ fn input_status(result: &InputResult) -> InputStatus {
             text: format!("{what} failed: {err}").into(),
             error: true,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceState, DeviceStatus};
+
+    #[test]
+    fn workspace_device_states() {
+        let state = |status: DeviceStatus<'_>, held| DeviceState::of_workspace(&status, held);
+        let closed = |error, conflict| DeviceStatus::Closed {
+            name: "iPhone",
+            error,
+            conflict,
+        };
+        assert_eq!(state(DeviceStatus::Unknown, false), None);
+        assert_eq!(state(closed(None, None), false), Some(DeviceState::Off));
+        assert_eq!(
+            state(closed(Some("boot failed"), None), false),
+            Some(DeviceState::Failed)
+        );
+        assert_eq!(
+            state(closed(None, Some("emulator-5554")), false),
+            Some(DeviceState::Failed)
+        );
+        let opening = || DeviceStatus::Opening {
+            name: "iPhone",
+            status: "booting… 3 s".into(),
+        };
+        assert_eq!(state(opening(), false), Some(DeviceState::Booting));
+        assert_eq!(state(opening(), true), Some(DeviceState::InUse));
+        // A device that is off is off, whoever holds its lease.
+        assert_eq!(state(closed(None, None), true), Some(DeviceState::Off));
+        assert_eq!(
+            state(DeviceStatus::ShuttingDown { name: "iPhone" }, false),
+            Some(DeviceState::ShuttingDown)
+        );
+        assert_eq!(DeviceState::InUse.label(), "In use");
+        assert_eq!(DeviceState::Off.label(), "Shut down");
     }
 }

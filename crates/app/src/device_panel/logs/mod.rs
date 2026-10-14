@@ -150,6 +150,8 @@ pub struct LogsPane {
     height: f32,
     selection: Option<(u64, RangeInclusive<u64>)>,
     notice: Option<SharedString>,
+    /// Process / bundle filter of the stream that filled the buffer.
+    filter: Option<String>,
     focus: FocusHandle,
     process: Entity<InputState>,
     search: Entity<InputState>,
@@ -218,6 +220,7 @@ impl LogsPane {
             height: LIST_HEIGHT,
             selection: None,
             notice: None,
+            filter: None,
             focus: cx.focus_handle(),
             process,
             search,
@@ -279,9 +282,10 @@ impl LogsPane {
         self.paused = false;
         self.follow.set(true);
         let process = self.process.read(cx).value().trim().to_owned();
+        self.filter = (!process.is_empty()).then(|| process.clone());
         let filter = LogFilter {
             min_level: None,
-            process: (!process.is_empty()).then_some(process),
+            process: self.filter.clone(),
             history: self.history,
             capacity: STREAM_CAPACITY,
         };
@@ -446,6 +450,22 @@ impl LogsPane {
                 .child(format!("{} dropped", self.dropped))
         });
         let restartable = matches!(self.run, Run::Closed { .. } | Run::Failed(_));
+        let mono = || {
+            div()
+                .flex_shrink_0()
+                .font_family(theme.mono_font_family.clone())
+                .font_features(crate::ui::mono_features())
+                .text_color(theme.muted_foreground)
+                .whitespace_nowrap()
+        };
+        let counts = (self.model.total() > 0).then(|| mono().child(self.model.counts().summary()));
+        let filter = self.filter.clone().map(|f| {
+            mono()
+                .max_w(px(160.))
+                .truncate()
+                .child(SharedString::from(f))
+        });
+        let (filter_open, filter_closed) = if open { (filter, None) } else { (None, filter) };
         h_flex()
             .h_7()
             .px_2()
@@ -464,6 +484,10 @@ impl LogsPane {
                     .tooltip("Device log")
                     .on_click(cx.listener(move |this, _, _, cx| this.set_open(!open, cx))),
             )
+            .children(counts)
+            .when(!open, |this| {
+                this.child(div().flex_1()).children(filter_closed)
+            })
             .when(open, |this| {
                 this.child(
                     div()
@@ -473,6 +497,7 @@ impl LogsPane {
                         .text_color(status_color)
                         .child(status),
                 )
+                .children(filter_open)
                 .children(dropped)
                 .when(restartable, |this| {
                     this.child(

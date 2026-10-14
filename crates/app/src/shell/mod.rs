@@ -48,7 +48,10 @@ use crate::agents::{self, AgentChoice, AgentPreset};
 use crate::changes::review::ReviewTarget;
 use crate::changes::{ChangesEvent, ChangesPanel, ExitReview, PanelSource, WorkspaceDiff};
 use crate::chat_view::{ChatEvent, ChatView};
-use crate::device_panel::{DevicePanel, DevicePanelEvent};
+use crate::device_panel::{
+    DevicePanel, DevicePanelEvent, KEY_CONTEXT as DEVICE_PANEL, PressHome as DeviceHome,
+    Screenshot as DeviceScreenshot,
+};
 use crate::device_pool::{DevicePool, NoticeLevel, PoolEvent, WorkspaceRef};
 use crate::login_env::{self, PathSource, ResolvedPath};
 use crate::ops::{self, DeleteOptions, Loaded, StartedSession};
@@ -130,6 +133,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-.", StopRun, None),
         KeyBinding::new("cmd-d", SplitPane, None),
         KeyBinding::new("cmd-w", ClosePane, None),
+        KeyBinding::new("cmd-s", DeviceScreenshot, Some(DEVICE_PANEL)),
+        KeyBinding::new("cmd-shift-h", DeviceHome, Some(DEVICE_PANEL)),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
@@ -434,6 +439,7 @@ impl HangarApp {
             &device_panel,
             window,
             |this, _, event: &DevicePanelEvent, window, cx| match event {
+                DevicePanelEvent::Screenshot(ws) => this.screenshot_to_agent(*ws, window, cx),
                 DevicePanelEvent::Selected(key) => {
                     this.layout.device.selected = key.clone();
                     this.save_device_layout(window, cx);
