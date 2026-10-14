@@ -106,9 +106,11 @@ impl HangarApp {
                 .background_executor()
                 .spawn(async move {
                     let settings = if read_settings {
-                        store
-                            .get_setting(&setting_keys::USAGE)
-                            .context("failed to read the usage settings")?
+                        // Unreadable settings fall back to the defaults; the history still shows.
+                        store.get_setting(&setting_keys::USAGE).unwrap_or_else(|err| {
+                            tracing::warn!("usage settings unreadable, using defaults: {err:#}");
+                            None
+                        })
                     } else {
                         None
                     };
