@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use hangar_devices::{Device, DeviceInfo, FrameReceiver, Input};
+use hangar_devices::{Device, DeviceInfo, FrameReceiver, Input, LogFilter, LogStream, Orientation};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// Outcome of one input sent to the device. Successful `TouchMove`s are not reported.
@@ -32,6 +32,8 @@ pub enum Outcome {
     Text(TextResult),
     /// `Device::shutdown` finished.
     Shutdown(Result<(), String>),
+    /// `Device::set_orientation` finished; carries the requested orientation.
+    Rotate(Orientation, Result<(), String>),
 }
 
 /// One queued action; inputs and text are delivered in the order they were queued.
@@ -39,11 +41,43 @@ pub enum Outcome {
 enum Command {
     Input(Input),
     Text(String),
+    Rotate(Orientation),
     Shutdown,
+}
+
+/// A shared handle on the device for starting log streams. Releasing the last reference of a
+/// device can block (backends join threads), so it never happens on the caller's thread.
+pub struct LogSource(Option<Arc<dyn Device>>);
+
+impl LogSource {
+    /// Spawns the log process. Blocks: call from a background thread.
+    pub fn start(&self, filter: &LogFilter) -> hangar_devices::Result<LogStream> {
+        match &self.0 {
+            Some(device) => device.logs(filter),
+            None => Err(hangar_devices::Error::Unsupported("device released")),
+        }
+    }
+}
+
+impl Clone for LogSource {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for LogSource {
+    fn drop(&mut self) {
+        if let Some(device) = self.0.take() {
+            let _ = std::thread::Builder::new()
+                .name("device-release".into())
+                .spawn(move || drop(device));
+        }
+    }
 }
 
 pub struct DeviceSession {
     info: DeviceInfo,
+    logs: LogSource,
     backend: &'static str,
     frames: FrameReceiver,
     input: mpsc::Sender<Command>,
@@ -58,12 +92,14 @@ impl DeviceSession {
         let frames = device.frames();
         let (input, rx) = mpsc::channel();
         let (results_tx, results) = unbounded_channel();
+        let logs = LogSource(Some(device.clone()));
         std::thread::Builder::new()
             .name("device-input".into())
             .spawn(move || input_worker(device, rx, results_tx))
             .context("failed to start the device input thread")?;
         Ok(Self {
             info,
+            logs,
             backend,
             frames,
             input,
@@ -79,6 +115,10 @@ impl DeviceSession {
         self.backend
     }
 
+    pub fn log_source(&self) -> LogSource {
+        self.logs.clone()
+    }
+
     pub fn frames(&self) -> FrameReceiver {
         self.frames.clone()
     }
@@ -91,6 +131,11 @@ impl DeviceSession {
     /// Queues text for the focused field. Returns `false` if the device is gone.
     pub fn send_text(&self, text: String) -> bool {
         self.input.send(Command::Text(text)).is_ok()
+    }
+
+    /// Queues `Device::set_orientation` behind the pending input; the outcome is reported once done.
+    pub fn rotate(&self, orientation: Orientation) -> bool {
+        self.input.send(Command::Rotate(orientation)).is_ok()
     }
 
     /// Queues `Device::shutdown` behind the pending input; the outcome is reported once done.
@@ -127,6 +172,15 @@ fn input_worker(
                             elapsed: started.elapsed(),
                         }));
                     }
+                }
+                Command::Rotate(orientation) => {
+                    let result = device
+                        .set_orientation(orientation)
+                        .map_err(|e| e.to_string());
+                    if let Err(err) = &result {
+                        tracing::warn!(%err, ?orientation, "device rotation failed");
+                    }
+                    let _ = results.send(Outcome::Rotate(orientation, result));
                 }
                 Command::Shutdown => {
                     let result = device.shutdown().map_err(|e| e.to_string());

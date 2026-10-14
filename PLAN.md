@@ -56,10 +56,19 @@ Git access is the `git` CLI with porcelain output, not a library.
 10. Agent choice per workspace: stored per workspace, or the global picker at spawn time (current)?
 
 ## Explicitly unimplemented (return `Unsupported`)
-- `devices`: `set_orientation` (iOS: no working route on Xcode 27, see spikes/m5-ios-notes.md);
+- `devices`: `set_orientation`/`orientation` on iOS (no working route on Xcode 27, see spikes/m5-ios-notes.md);
+  Android rotation needs a sensor-following foreground app and upside-down is usually refused (spikes/m4-android-notes.md);
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
   `Lock`/volume buttons (private backend only); iOS `AppSwitch`/`Back`; text beyond printable ASCII +
   `\n`/`\t` on the private backend.
+
+## Device logs pane (app)
+- `crates/app/src/device_panel/logs/`: collapsible pane under the device screen (virtualized 16 px rows, 20k-line
+  ring buffer, client-side level and text filters, process filter restarts the stream, Pause/Follow/Clear/Copy,
+  Cmd-C copies the selection or all visible lines). Pane visibility and min level are saved in `DeviceLayout`.
+- Gaps: no horizontal scroll (lines are clipped, cut at 1000 chars); no multi-line message merging; the level
+  filter is client-side only, so a high min level still fills the ring buffer with low-level lines; follow-tail
+  reacts to the wheel and the Follow button, not to scrollbar drags (no scrollbar is drawn).
 
 ## What M1 taught us
 - GPUI comes through `gpui-kit` (same repo/rev as gpui-component). gpui-kit's Root binds Tab/Shift-Tab for

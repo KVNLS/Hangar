@@ -925,6 +925,8 @@ mod tests {
                 id: "E33FE595-67AD-470C-AD94-A38EAC9D0F38".into(),
             }),
             stats: true,
+            logs: true,
+            log_level: Some("error".into()),
         };
         save_device(&f.store, &device).unwrap();
         let loaded = load(&f.store).unwrap();
@@ -997,6 +999,7 @@ mod tests {
             (old.open, old.width, old.selected, old.stats),
             (false, 300.0, None, false)
         );
+        assert!(!old.logs && old.log_level.is_none());
 
         // A broken device setting is reported but leaves the other settings alone.
         save_agent(&f.store, "codex").unwrap();

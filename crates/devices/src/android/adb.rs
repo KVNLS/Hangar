@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
-use crate::{Error, Result};
+use crate::{Error, Orientation, Result};
 
 /// One line of `adb devices -l`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,11 +215,69 @@ impl Adb {
         }
         Ok(())
     }
+
+    /// The default display's rotation as WindowManager reports it.
+    pub fn orientation(&self, serial: &str) -> Result<Orientation> {
+        let text = self.shell(serial, "dumpsys window displays")?;
+        parse_display_rotation(&text)
+            .ok_or_else(|| Error::Parse("dumpsys window displays: no mDisplayRotation".into()))
+    }
+
+    /// Locks auto-rotate off and pins `user_rotation`, then waits until WindowManager reports it.
+    /// Works on emulators and physical devices (no root needed on current Android).
+    pub fn set_orientation(&self, serial: &str, orientation: Orientation) -> Result<()> {
+        self.shell(
+            serial,
+            &format!(
+                "settings put system accelerometer_rotation 0; settings put system user_rotation {}",
+                orientation.android_rotation()
+            ),
+        )?;
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(5) {
+            if self.orientation(serial).ok() == Some(orientation) {
+                settle();
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        Err(Error::Command(format!(
+            "{serial} did not rotate to {orientation:?} within 5 s (the foreground app may not allow rotation, e.g. the Pixel launcher)"
+        )))
+    }
+}
+
+/// The display reports the new rotation before apps have laid out again; frames taken in
+/// between show a sideways portrait layout.
+pub(crate) fn settle() {
+    std::thread::sleep(std::time::Duration::from_millis(700));
+}
+
+/// Parses the first `mDisplayRotation=ROTATION_90` (default display) out of `dumpsys window displays`.
+/// `mCurrentRotation` is the sensor listener and does not follow `user_rotation`.
+pub fn parse_display_rotation(text: &str) -> Option<Orientation> {
+    let rest = text.split("mDisplayRotation=ROTATION_").nth(1)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let degrees: u16 = digits.parse().ok()?;
+    if !degrees.is_multiple_of(90) {
+        return None;
+    }
+    Orientation::from_android_rotation(u8::try_from(degrees / 90).ok()?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_display_rotation() {
+        let t = "  mDisplayRotation=ROTATION_270 mLastOrientation=0\n";
+        assert_eq!(parse_display_rotation(t), Some(Orientation::LandscapeRight));
+        let t = "x\n mDisplayRotation=ROTATION_0\n mDisplayRotation=ROTATION_90";
+        assert_eq!(parse_display_rotation(t), Some(Orientation::Portrait));
+        assert_eq!(parse_display_rotation("nothing"), None);
+        assert_eq!(parse_display_rotation("mDisplayRotation=ROTATION_45"), None);
+    }
 
     #[test]
     fn parses_devices_list() {

@@ -152,6 +152,11 @@ impl Platform {
         }
     }
 
+    /// Whether the panel offers a Rotate control (`Device::set_orientation` is Android-only).
+    pub fn can_rotate(self) -> bool {
+        matches!(self, Self::Android)
+    }
+
     /// Shown when no device of this platform is ready.
     pub fn not_ready_hint(self) -> String {
         match self {

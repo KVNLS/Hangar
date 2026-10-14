@@ -18,7 +18,7 @@ use anyhow::{Context as _, bail};
 use hangar_devices::android::{
     self, AndroidSdk, Backend, BootOptions, Capture, RunningEmulator, WindowMode, adb::Adb,
 };
-use hangar_devices::{Device, Input};
+use hangar_devices::{Device, Input, Orientation};
 
 fn main() -> anyhow::Result<()> {
     let mut backend = Backend::Grpc;
@@ -31,6 +31,7 @@ fn main() -> anyhow::Result<()> {
     let mut capture = Capture::Png;
     let mut shutdown = false;
     let mut relaunch = false;
+    let mut rotate: Option<Orientation> = None;
     let mut out = std::env::temp_dir().join("hangar-spike-android");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -77,12 +78,22 @@ fn main() -> anyhow::Result<()> {
             }
             "--shutdown" => shutdown = true,
             "--relaunch" => relaunch = true,
+            "--rotate" => {
+                rotate = Some(match args.next().as_deref() {
+                    Some("portrait") => Orientation::Portrait,
+                    Some("left") => Orientation::LandscapeLeft,
+                    Some("right") => Orientation::LandscapeRight,
+                    Some("upside-down") => Orientation::PortraitUpsideDown,
+                    other => bail!("--rotate portrait|left|right|upside-down, got {other:?}"),
+                })
+            }
             "--out" => out = args.next().context("--out needs a directory")?.into(),
             "-h" | "--help" => {
                 println!(
                     "spike_android [--backend grpc|adb] [--serial S | --avd ID] [--boot AVD [--cold] \
                      [--window host|none|hidden]] [--bench SECS | --tap X,Y | --back | --home | --text T] \
-                     [--capture raw|png] [--out DIR] [--shutdown] [--relaunch]"
+                     [--capture raw|png] [--out DIR] [--shutdown] [--relaunch] \
+                     [--rotate portrait|left|right|upside-down]"
                 );
                 return Ok(());
             }
@@ -154,7 +165,9 @@ fn main() -> anyhow::Result<()> {
         )?),
     };
 
-    let result = if let Some(t) = text {
+    let result = if let Some(o) = rotate {
+        rotate_once(device.as_ref(), o, &out)
+    } else if let Some(t) = text {
         let t0 = Instant::now();
         device.send_text(&t).context("send_text")?;
         println!("text sent in {:.1} ms", t0.elapsed().as_secs_f64() * 1000.0);
@@ -226,4 +239,46 @@ fn run_view(
 #[cfg(not(target_os = "macos"))]
 fn run_view(_: Arc<dyn Device>, _: Vec<hangar_devices::DeviceInfo>) -> anyhow::Result<()> {
     anyhow::bail!("the window is macOS-only here; use --bench / --tap")
+}
+
+/// Rotates, then reports the guest orientation and the size of a frame captured afterwards.
+fn rotate_once(
+    device: &dyn Device,
+    target: Orientation,
+    out: &std::path::Path,
+) -> anyhow::Result<()> {
+    std::fs::create_dir_all(out)?;
+    let mut rx = device.frames();
+    let t0 = Instant::now();
+    device.set_orientation(target).context("set_orientation")?;
+    println!(
+        "rotated to {target:?} in {:.0} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+    println!(
+        "orientation(): {:?}",
+        device.orientation().context("orientation")?
+    );
+    let want_landscape = target.is_landscape();
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(f) = rx.borrow_and_update().clone()
+            && (f.width > f.height) == want_landscape
+        {
+            println!("frame {}x{}", f.width, f.height);
+            f.save_png(&out.join(format!("rotate_{target:?}.png")))?;
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            bail!(
+                "no {} frame within 5 s",
+                if want_landscape {
+                    "landscape"
+                } else {
+                    "portrait"
+                }
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }

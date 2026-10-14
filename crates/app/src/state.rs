@@ -3,7 +3,8 @@
 use hangar_core::{Project, ProjectId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 
-use crate::device_panel::DeviceKey;
+use crate::device_panel::{DeviceKey, LogsSettings};
+use hangar_devices::LogLevel;
 
 pub const PANE_COUNT: usize = 2;
 
@@ -277,6 +278,12 @@ pub struct DeviceLayout {
     /// Debug overlay with fps and capture → paint latency.
     #[serde(default)]
     pub stats: bool,
+    /// The logs pane under the screen is open.
+    #[serde(default)]
+    pub logs: bool,
+    /// Lowest level shown in the logs pane (`LogLevel::as_str`); unknown means all.
+    #[serde(default)]
+    pub log_level: Option<String>,
 }
 
 impl Default for DeviceLayout {
@@ -286,11 +293,25 @@ impl Default for DeviceLayout {
             width: DEVICE_DEFAULT_WIDTH,
             selected: None,
             stats: false,
+            logs: false,
+            log_level: None,
         }
     }
 }
 
 impl DeviceLayout {
+    /// The saved logs pane state; an unknown level means all.
+    pub fn logs_settings(&self) -> LogsSettings {
+        LogsSettings {
+            open: self.logs,
+            min_level: self
+                .log_level
+                .as_deref()
+                .and_then(|l| l.parse().ok())
+                .unwrap_or(LogLevel::Verbose),
+        }
+    }
+
     /// Clamps the width; anything unusable means the default.
     pub fn sanitized(self) -> Self {
         Self {
@@ -323,8 +344,9 @@ mod tests {
         CHANGES_WIDTH_RANGE, ChangesLayout, DEVICE_WIDTH_RANGE, DeviceLayout, PaneLayout, Panes,
         ProjectList, changes_width, device_width, sanitize_split, split_ratio, status_label,
     };
-    use crate::device_panel::{DeviceKey, Platform};
+    use crate::device_panel::{DeviceKey, LogsSettings, Platform};
     use hangar_core::{Project, SessionStatus, Timestamp, Workspace, WorkspaceId, WorkspaceStatus};
+    use hangar_devices::LogLevel;
 
     fn workspace(project: &Project, name: &str) -> Workspace {
         Workspace {
@@ -484,8 +506,26 @@ mod tests {
                 id: "U".into(),
             }),
             stats: true,
+            logs: true,
+            log_level: Some("warn".into()),
         };
         assert_eq!(ok.clone().sanitized(), ok);
+        assert_eq!(
+            ok.logs_settings(),
+            LogsSettings {
+                open: true,
+                min_level: LogLevel::Warn
+            }
+        );
+        assert_eq!(
+            DeviceLayout::default().logs_settings(),
+            LogsSettings::default()
+        );
+        let junk = DeviceLayout {
+            log_level: Some("loud".into()),
+            ..ok.clone()
+        };
+        assert_eq!(junk.logs_settings().min_level, LogLevel::Verbose);
         let broken = DeviceLayout {
             width: f32::NAN,
             ..ok.clone()

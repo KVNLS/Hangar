@@ -34,6 +34,8 @@
 //! Device panel (⌘⇧P; one per window, shared by all workspaces):
 //! - `HANGAR_DEV_DEVICE=<udid>` — open the device panel on that (booted) device; logs
 //!   `HANGAR_DEV_DEVICE frame painted` once a frame is on screen.
+//! - `HANGAR_DEV_DEVICE_LOGS=1` — open the logs pane under the device screen (saved with the panel
+//!   state otherwise; `RUST_LOG=hangar_app=trace` prints per-poll timings).
 //! - `HANGAR_DEV_DEVICE_TAP=<x>,<y>` — then tap at those device points and log whether a later
 //!   painted frame differs (`HANGAR_DEV_DEVICE_TAP painted frame changed`).
 //! - `HANGAR_DEV_DEVICE_HOME=1` — press Home first (same check).
