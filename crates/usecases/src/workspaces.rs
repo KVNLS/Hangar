@@ -50,12 +50,31 @@ pub enum WorkspaceError {
         #[source]
         source: PortError,
     },
+    #[error(
+        "{} has no commits yet: make a first commit, then add it",
+        .0.display()
+    )]
+    NoCommits(PathBuf),
+    #[error(
+        "{} has no main or master branch and HEAD is detached: check out the branch new \
+         workspaces should start from, then add it",
+        .0.display()
+    )]
+    NoDefaultBranch(PathBuf),
+    #[error(
+        "the base branch is `HEAD`, which inside a workspace is the workspace itself: pick a base \
+         branch"
+    )]
+    BaseIsHead,
     #[error("workspace name is empty")]
     EmptyName,
     #[error("`{0}` is not a valid branch name")]
     InvalidBranch(String),
     #[error("branch `{0}` already exists")]
     BranchExists(String),
+    /// Git keeps branches as paths: `a` and `a/b` cannot both exist.
+    #[error("branch `{branch}` cannot be created next to the existing branch `{existing}`")]
+    BranchClash { branch: String, existing: String },
     #[error("failed to check existing branches")]
     CheckBranches(#[source] PortError),
     #[error("failed to create worktree {}", .path.display())]
@@ -189,14 +208,24 @@ impl<'a> Workspaces<'a> {
         {
             return Ok(existing);
         }
-        let base = self
-            .git
-            .default_branch(&root)
-            .map_err(|source| WorkspaceError::Branches {
-                repo: root.clone(),
-                source,
-            })?
-            .unwrap_or_else(|| "HEAD".to_owned());
+        let branches = |source| WorkspaceError::Branches {
+            repo: root.clone(),
+            source,
+        };
+        // An unborn branch is the default of a repository without commits; with no branch at
+        // all there is nothing a worktree could start from.
+        let local = self.git.local_branches(&root).map_err(branches)?;
+        if local.is_empty() {
+            return Err(WorkspaceError::NoCommits(root));
+        }
+        // Never `HEAD`: inside a worktree it is the workspace's own tip.
+        let base = match self.git.default_branch(&root).map_err(branches)? {
+            Some(base) => base,
+            None => match local.as_slice() {
+                [only] => only.clone(),
+                _ => return Err(WorkspaceError::NoDefaultBranch(root)),
+            },
+        };
         let name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -231,6 +260,9 @@ impl<'a> Workspaces<'a> {
             .filter(|b| !b.is_empty())
             .unwrap_or(&project.default_base)
             .to_owned();
+        if base == "HEAD" {
+            return Err(WorkspaceError::BaseIsHead);
+        }
         let chosen = branch.map(str::trim).filter(|b| !b.is_empty());
         if let Some(chosen) = chosen {
             if !self.git.is_valid_branch_name(repo, chosen)? {
@@ -240,6 +272,27 @@ impl<'a> Workspaces<'a> {
                 return Err(WorkspaceError::BranchExists(chosen.to_owned()));
             }
         }
+        let local = self
+            .git
+            .local_branches(repo)
+            .map_err(WorkspaceError::CheckBranches)?;
+        // A branch above the one wanted; for `hangar/<slug>` that is `hangar` itself, which
+        // would block every slug.
+        let wanted = chosen.map_or_else(|| branch_name(&slugify(name)), str::to_owned);
+        if let Some(existing) = local.iter().find(|b| is_parent_branch(b, &wanted)) {
+            return Err(WorkspaceError::BranchClash {
+                branch: wanted,
+                existing: existing.clone(),
+            });
+        }
+        if let Some(chosen) = chosen
+            && let Some(existing) = local.iter().find(|b| is_parent_branch(chosen, b))
+        {
+            return Err(WorkspaceError::BranchClash {
+                branch: chosen.to_owned(),
+                existing: existing.clone(),
+            });
+        }
         let project_slug = slugify(&project.name);
         let existing: Vec<String> = self
             .store
@@ -247,7 +300,6 @@ impl<'a> Workspaces<'a> {
             .into_iter()
             .map(|ws| ws.slug)
             .collect();
-        let mut git_error = None;
         let slug = unique_slug(&slugify(name), |candidate| {
             if existing.iter().any(|s| s == candidate)
                 || worktree_path(worktrees_root, &project_slug, candidate).exists()
@@ -257,17 +309,12 @@ impl<'a> Workspaces<'a> {
             if chosen.is_some() {
                 return false;
             }
-            match self.git.branch_exists(repo, &branch_name(candidate)) {
-                Ok(taken) => taken,
-                Err(err) => {
-                    git_error.get_or_insert(err);
-                    false
-                }
-            }
+            // Taken, or a branch lives under it (`hangar/dev/sub` blocks `hangar/dev`).
+            let branch = branch_name(candidate);
+            local
+                .iter()
+                .any(|b| *b == branch || is_parent_branch(&branch, b))
         });
-        if let Some(err) = git_error {
-            return Err(WorkspaceError::CheckBranches(err));
-        }
 
         let branch = chosen.map_or_else(|| branch_name(&slug), str::to_owned);
         let path = worktree_path(worktrees_root, &project_slug, &slug);
@@ -439,6 +486,13 @@ pub fn delete_summary(git: &dyn VersionControl, workspace: &Workspace) -> Result
         untracked: counts.untracked,
         ahead,
     })
+}
+
+/// `parent` is a directory of `child` in git's ref namespace (`a` for `a/b`).
+fn is_parent_branch(parent: &str, child: &str) -> bool {
+    child
+        .strip_prefix(parent)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn canonical(path: &Path) -> PathBuf {
