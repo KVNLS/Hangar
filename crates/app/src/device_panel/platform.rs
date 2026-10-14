@@ -19,7 +19,7 @@ pub struct Control {
 const HOME: Control = Control {
     id: "home",
     label: "Home",
-    tooltip: "Home button",
+    tooltip: "Home ⌘⇧H",
     icon: IconName::House,
     input: Input::Home,
 };

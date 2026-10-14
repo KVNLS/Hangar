@@ -49,7 +49,8 @@ use crate::changes::review::ReviewTarget;
 use crate::changes::{ChangesEvent, ChangesPanel, ExitReview, PanelSource, WorkspaceDiff};
 use crate::chat_view::{ChatEvent, ChatView};
 use crate::device_panel::{
-    DevicePanel, DevicePanelEvent, KEY_CONTEXT as DEVICE_PANEL, Screenshot as DeviceScreenshot,
+    DevicePanel, DevicePanelEvent, KEY_CONTEXT as DEVICE_PANEL, PressHome as DeviceHome,
+    Screenshot as DeviceScreenshot,
 };
 use crate::device_pool::{DevicePool, NoticeLevel, PoolEvent, WorkspaceRef};
 use crate::login_env::{self, PathSource, ResolvedPath};
@@ -133,6 +134,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-d", SplitPane, None),
         KeyBinding::new("cmd-w", ClosePane, None),
         KeyBinding::new("cmd-s", DeviceScreenshot, Some(DEVICE_PANEL)),
+        KeyBinding::new("cmd-shift-h", DeviceHome, Some(DEVICE_PANEL)),
         KeyBinding::new("escape", ExitReview, Some("ReviewScreen")),
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),

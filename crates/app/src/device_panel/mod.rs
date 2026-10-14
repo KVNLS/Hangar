@@ -35,7 +35,7 @@ pub use platform::{
 /// Key context of the panel: its bindings apply while focus is inside it.
 pub const KEY_CONTEXT: &str = "DevicePanel";
 
-actions!(device_panel, [Screenshot]);
+actions!(device_panel, [Screenshot, PressHome]);
 
 pub enum DevicePanelEvent {
     /// Screenshot of the workspace's device, for its agent.
@@ -888,6 +888,16 @@ impl DevicePanel {
         }
     }
 
+    /// The Home button (⌘⇧H), when the shown device takes it.
+    fn press_home(&mut self, cx: &mut Context<Self>) {
+        let accepts = self
+            .view()
+            .is_some_and(|v| v.read(cx).session().capabilities().accepts(&Input::Home));
+        if accepts {
+            self.send(Input::Home, cx);
+        }
+    }
+
     /// The error of the last input, if it failed.
     pub fn input_error(&self) -> Option<SharedString> {
         self.input_status
@@ -1456,6 +1466,7 @@ impl Render for DevicePanel {
         v_flex()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|this, _: &Screenshot, _, cx| this.screenshot(cx)))
+            .on_action(cx.listener(|this, _: &PressHome, _, cx| this.press_home(cx)))
             .size_full()
             .bg(t.app)
             .child(header)
