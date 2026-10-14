@@ -93,6 +93,32 @@ fn several_models_share_cost_and_tokens_by_their_tokens() {
 }
 
 #[test]
+fn rounding_never_gives_out_more_tokens_than_the_turn_has() {
+    let spend = TurnSpend {
+        cost: None,
+        tokens: Some(tokens(2, 2)),
+        models: (0..4).map(|i| (format!("m{i}"), 1)).collect(),
+    };
+    let rows = book_turn(SessionId::new(), Timestamp(1), spend, None);
+    let mut sum = TokenCount::default();
+    for r in &rows {
+        sum += r.tokens.unwrap();
+    }
+    assert_eq!(sum, tokens(2, 2));
+}
+
+#[test]
+fn huge_model_weights_do_not_overflow() {
+    let spend = TurnSpend {
+        cost: Some(usd(1.0)),
+        tokens: Some(tokens(10, 0)),
+        models: vec![("a".into(), u64::MAX), ("b".into(), u64::MAX)],
+    };
+    let rows = book_turn(SessionId::new(), Timestamp(1), spend, None);
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
 fn ranges_cover_local_periods() {
     let now = Timestamp(OCT_8 + 10 * HOUR_MS);
     // UTC+2: local midnight is 22:00 UTC the day before.
