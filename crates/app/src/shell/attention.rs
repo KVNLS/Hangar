@@ -71,6 +71,9 @@ impl HangarApp {
             .map(|ws| (ws.id, self.agent_state(ws.id, cx)))
             .collect();
         let observed = self.attention.observe(states);
+        if let Some(count) = observed.badge {
+            tracing::info!(count, "Dock badge");
+        }
         if let Some(count) = observed.badge
             && let Err(err) = crate::dock::set_badge(&crate::dock::badge_label(count))
         {
@@ -83,6 +86,20 @@ impl HangarApp {
         {
             tracing::warn!("could not request the user's attention: {err:#}");
         }
+    }
+
+    pub(super) fn set_notify_attention(
+        &mut self,
+        on: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.attention.enabled = on;
+        self.sync_attention(cx);
+        self.persist(window, cx, move |store| {
+            ops::save_notify_attention(store, on)
+        });
+        cx.notify();
     }
 }
 
