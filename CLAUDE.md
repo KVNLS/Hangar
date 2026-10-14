@@ -7,7 +7,7 @@ See PLAN.md for architecture and roadmap, SPIKES.md for spike results.
 - Format: `cargo fmt --all` (CI: `cargo fmt --all -- --check`)
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo test --workspace`
-- Spike A: `cargo run -p hangar-examples --example spike_terminal -- [command]` (default `$SHELL`, try `claude`)
+- Spike A: `cargo run -p hangar-examples --example spike_terminal -- [command]` (examples live in `examples/examples/`) (default `$SHELL`, try `claude`)
 - Spike B: `cargo run -p hangar-examples --example spike_sim -- [--backend private|simctl] [--udid <UDID>]`
 - App: `cargo run -p hangar-app`
 

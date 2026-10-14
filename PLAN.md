@@ -38,14 +38,32 @@ Git access is the `git` CLI with porcelain output, not a library.
 
 ## Open questions
 1. Where do worktrees live? `<repo>/../.hangar-worktrees/<slug>` vs `~/Library/Application Support/Hangar/worktrees`.
-2. Indigo HID ABI changes across Xcode versions (baguette reports the call idb/AXe used broke in Xcode 26) —
-   Rust FFI vs a small Swift helper process?
-3. Frame transport into GPUI: copy BGRA per frame vs zero-copy IOSurface → Metal texture (needs GPUI support).
+2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (SPIKES.md).
+   Keep `sim_probe` to re-check each Xcode release.
+3. Frame transport into GPUI: today BGRA copied twice (~12.6 MB/frame). Zero-copy via GPUI `paint_surface`
+   needs a CoreVideo binding (new dependency, needs approval).
 4. Android frames: emulator gRPC console vs scrcpy protocol.
 5. Per-worktree ports for Metro/Expo (M6): allocation and env injection strategy.
 6. Distribution: signing/notarisation implications of loading Xcode private frameworks.
+7. Terminal keys: what Shift-Enter sends (`\r`, `ESC \r`, kitty protocol); Option-as-Meta default.
+8. simctl fallback has no tap on Xcode 27 (no Simulator.app, needs Accessibility, moves the real pointer):
+   ship it as view-only?
+
+## Explicitly unimplemented (return `Unsupported`)
+- `devices`: `boot`, `install`, `launch`, `logs`; simctl backend input on Xcode 27.
+
+## What M1 taught us
+- GPUI comes through `gpui-kit` (same repo/rev as gpui-component). gpui-kit's Root binds Tab/Shift-Tab for
+  focus navigation; terminal views must override them in their key context.
+- PTY output must be coalesced before waking GPUI (one redraw per 8 ms) or throughput and fps collapse.
+- macOS PTYs can lose the tail of a fast-exiting child's output unless the master stays open until drained.
+- Xcode 27 moved SimulatorKit and replaced Simulator.app with Device Hub; private APIs drift every release.
 
 ## Status
-- [ ] M1 Spike A — PTY terminal
-- [ ] M1 Spike B — iOS simulator
-- [ ] M2 started
+- [x] M1 Spike A — PTY terminal (SPIKES.md)
+- [x] M1 Spike B — iOS simulator, private backend; simctl view-only
+- [ ] M2 — core models + Store + EventBus, worktree CLI wrapper, agents PtyAdapter, sidebar + two tiled panes
+
+## Next
+- Finish M2 (above), then terminal selection/copy and mouse reporting.
+- M3 live changes and review.

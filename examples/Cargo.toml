@@ -14,9 +14,5 @@ hangar-terminal.workspace = true
 hangar-devices.workspace = true
 image.workspace = true
 
-[[example]]
-name = "spike_terminal"
-path = "spike_terminal.rs"
-
 [lints]
 workspace = true
