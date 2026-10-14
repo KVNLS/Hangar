@@ -281,8 +281,7 @@ impl<'a> Workspaces<'a> {
         }
     }
 
-    /// Records that a running session was stopped by Hangar (archive, delete).
-    pub fn stop_session(&self, id: SessionId, reason: &str) -> Result<()> {
+    fn stop_session(&self, id: SessionId, reason: &str) -> Result<()> {
         self.store
             .update_session_status(
                 id,
@@ -419,166 +418,10 @@ fn canonical(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::sync::Mutex;
-
-    use hangar_core::ports::{ChangeCounts, ListedWorktree, PortResult};
-    use hangar_core::{Session, SessionStatus};
+    use hangar_core::ports::ListedWorktree;
 
     use super::*;
-
-    #[derive(Default)]
-    struct FakeStore {
-        projects: Mutex<Vec<Project>>,
-        workspaces: Mutex<Vec<Workspace>>,
-        refuse_workspaces: bool,
-    }
-
-    fn missing(what: &str) -> PortError {
-        PortError::new(format!("{what} not found"))
-    }
-
-    impl Store for FakeStore {
-        fn insert_project(&self, project: &Project) -> PortResult<()> {
-            self.projects.lock().unwrap().push(project.clone());
-            Ok(())
-        }
-        fn list_projects(&self) -> PortResult<Vec<Project>> {
-            Ok(self.projects.lock().unwrap().clone())
-        }
-        fn get_project(&self, id: ProjectId) -> PortResult<Project> {
-            let projects = self.projects.lock().unwrap();
-            projects
-                .iter()
-                .find(|p| p.id == id)
-                .cloned()
-                .ok_or_else(|| missing("project"))
-        }
-        fn delete_project(&self, id: ProjectId) -> PortResult<()> {
-            self.projects.lock().unwrap().retain(|p| p.id != id);
-            Ok(())
-        }
-        fn insert_workspace(&self, workspace: &Workspace) -> PortResult<()> {
-            if self.refuse_workspaces {
-                return Err(PortError::new("disk full"));
-            }
-            self.workspaces.lock().unwrap().push(workspace.clone());
-            Ok(())
-        }
-        fn list_workspaces(&self, project: ProjectId) -> PortResult<Vec<Workspace>> {
-            let workspaces = self.workspaces.lock().unwrap();
-            Ok(workspaces
-                .iter()
-                .filter(|w| w.project_id == project)
-                .cloned()
-                .collect())
-        }
-        fn get_workspace(&self, id: WorkspaceId) -> PortResult<Workspace> {
-            let workspaces = self.workspaces.lock().unwrap();
-            workspaces
-                .iter()
-                .find(|w| w.id == id)
-                .cloned()
-                .ok_or_else(|| missing("workspace"))
-        }
-        fn update_workspace_status(
-            &self,
-            id: WorkspaceId,
-            status: WorkspaceStatus,
-        ) -> PortResult<()> {
-            let mut workspaces = self.workspaces.lock().unwrap();
-            let ws = workspaces
-                .iter_mut()
-                .find(|w| w.id == id)
-                .ok_or_else(|| missing("workspace"))?;
-            ws.status = status;
-            Ok(())
-        }
-        fn delete_workspace(&self, id: WorkspaceId) -> PortResult<()> {
-            self.workspaces.lock().unwrap().retain(|w| w.id != id);
-            Ok(())
-        }
-        fn insert_session(&self, _: &Session) -> PortResult<()> {
-            Ok(())
-        }
-        fn list_sessions(&self, _: WorkspaceId) -> PortResult<Vec<Session>> {
-            Ok(Vec::new())
-        }
-        fn update_session_status(&self, _: SessionId, _: &SessionStatus) -> PortResult<Session> {
-            Err(missing("session"))
-        }
-    }
-
-    /// Records every change it is asked to make.
-    #[derive(Default)]
-    struct FakeGit {
-        branches: Mutex<HashSet<String>>,
-        listed: Vec<ListedWorktree>,
-        calls: Mutex<Vec<String>>,
-    }
-
-    impl FakeGit {
-        fn with_branches(names: &[&str]) -> Self {
-            let git = Self::default();
-            git.branches
-                .lock()
-                .unwrap()
-                .extend(names.iter().map(|n| (*n).to_owned()));
-            git
-        }
-
-        fn calls(&self) -> Vec<String> {
-            self.calls.lock().unwrap().clone()
-        }
-
-        fn record(&self, call: String) {
-            self.calls.lock().unwrap().push(call);
-        }
-    }
-
-    impl VersionControl for FakeGit {
-        fn repo_root(&self, path: &Path) -> PortResult<PathBuf> {
-            Ok(path.to_path_buf())
-        }
-        fn default_branch(&self, _: &Path) -> PortResult<Option<String>> {
-            Ok(Some("main".to_owned()))
-        }
-        fn is_valid_branch_name(&self, _: &Path, name: &str) -> PortResult<bool> {
-            Ok(!name.contains(' '))
-        }
-        fn branch_exists(&self, _: &Path, name: &str) -> PortResult<bool> {
-            Ok(self.branches.lock().unwrap().contains(name))
-        }
-        fn add_worktree(&self, _: &Path, worktree: &NewWorktree) -> PortResult<PathBuf> {
-            self.record(format!("add {} from {}", worktree.branch, worktree.base));
-            self.branches
-                .lock()
-                .unwrap()
-                .insert(worktree.branch.clone());
-            Ok(worktree.path.clone())
-        }
-        fn worktrees(&self, _: &Path) -> PortResult<Vec<ListedWorktree>> {
-            Ok(self.listed.clone())
-        }
-        fn remove_worktree(&self, _: &Path, path: &Path, force: bool) -> PortResult<()> {
-            self.record(format!("remove {} force={force}", path.display()));
-            Ok(())
-        }
-        fn prune_worktrees(&self, _: &Path) -> PortResult<()> {
-            Ok(())
-        }
-        fn delete_branch(&self, _: &Path, branch: &str, force: bool) -> PortResult<()> {
-            self.record(format!("delete-branch {branch} force={force}"));
-            self.branches.lock().unwrap().remove(branch);
-            Ok(())
-        }
-        fn change_counts(&self, _: &Path) -> PortResult<ChangeCounts> {
-            Ok(ChangeCounts::default())
-        }
-        fn commits_ahead(&self, _: &Path, _: &str) -> PortResult<u32> {
-            Ok(0)
-        }
-    }
+    use crate::fakes::{FakeGit, FakeStore};
 
     fn project(store: &FakeStore) -> Project {
         let project = Project::new("My App", PathBuf::from("/repo"), "main");

@@ -147,7 +147,7 @@ impl HangarApp {
         cx: &App,
     ) -> anyhow::Result<AgentExtras> {
         let mut extras = self.mcp_extras(agent_id, workspace, cx)?;
-        if let Some(provider) = self.ollama.opencode_provider() {
+        if let Some(provider) = self.agent_setup.ollama.opencode_provider() {
             agents::apply_ollama(&mut extras, agent_id, &provider)?;
         }
         Ok(extras)

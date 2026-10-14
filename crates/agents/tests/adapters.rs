@@ -8,11 +8,31 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use hangar_agents::{
-    AgentAdapter, Error, GridSize, PtyAdapter, SpawnContext, find_program, presets,
-};
+use hangar_agents::{AgentAdapter, Error, Launch, PtyAdapter, SpawnContext, find_program, presets};
+use hangar_terminal::{GridSize, SpawnOptions, TerminalConfig, TerminalSession};
 use hangar_worktree::CreateOptions;
 use tempfile::TempDir;
+
+/// Starts `launch` in a PTY the way the app does.
+fn spawn(
+    launch: &Launch,
+    size: GridSize,
+    on_update: impl Fn() + Send + 'static,
+) -> TerminalSession {
+    let options = SpawnOptions {
+        program: Some(launch.program.clone().into_os_string()),
+        args: launch.args.iter().map(Into::into).collect(),
+        cwd: Some(launch.cwd.clone()),
+        env: launch
+            .env
+            .iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect(),
+        size,
+        cell_px: (0, 0),
+    };
+    TerminalSession::spawn(&options, TerminalConfig::default(), on_update).unwrap()
+}
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -70,15 +90,15 @@ fn context_path_is_used_to_resolve_the_program() {
         "PATH".into(),
         format!("{}:/usr/bin:/bin", tmp.path().display()),
     ));
-    let handle = adapter.spawn(&ctx).unwrap();
-    assert_eq!(handle.program(), tool);
-    let exit = handle
-        .session()
+    let launch = adapter.launch(&ctx).unwrap();
+    assert_eq!(launch.program, tool);
+    let session = spawn(&launch, GridSize::default(), || {});
+    let exit = session
         .wait_for_exit(Duration::from_secs(10))
         .unwrap()
         .unwrap();
     assert!(exit.success());
-    assert!(screen_text(&handle).contains("fake-agent-ran"));
+    assert!(screen_text(&session).contains("fake-agent-ran"));
 }
 
 #[test]
@@ -111,23 +131,22 @@ fn spawns_in_a_worktree_with_env() {
     let updates = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&updates);
     let mut ctx = SpawnContext::new(&wt.path);
-    ctx.size = GridSize::new(400, 24).unwrap();
     ctx.extra_args
         .push("pwd; echo \"value=$HANGAR_TEST\"".into());
     ctx.env.push(("HANGAR_TEST".into(), "from-context".into()));
-    ctx.on_update = Some(Arc::new(move || {
-        counter.fetch_add(1, Ordering::Relaxed);
-    }));
 
-    let handle = adapter.spawn(&ctx).unwrap();
-    assert_eq!(handle.agent_id(), "sh");
-    let exit = handle
-        .session()
+    let launch = adapter.launch(&ctx).unwrap();
+    assert_eq!(launch.agent_id, "sh");
+    assert_eq!(launch.args, ["-c", "pwd; echo \"value=$HANGAR_TEST\""]);
+    let session = spawn(&launch, GridSize::new(400, 24).unwrap(), move || {
+        counter.fetch_add(1, Ordering::Relaxed);
+    });
+    let exit = session
         .wait_for_exit(Duration::from_secs(10))
         .unwrap()
         .unwrap();
     assert!(exit.success(), "{exit:?}");
-    let text = screen_text(&handle);
+    let text = screen_text(&session);
     assert!(text.contains(wt.path.to_str().unwrap()), "{text}");
     assert!(text.contains("value=from-context"), "{text}");
     assert!(updates.load(Ordering::Relaxed) >= 1);
@@ -138,7 +157,7 @@ fn unknown_program_is_explicit() {
     let adapter = PtyAdapter::new("ghost", "Ghost", "hangar-no-such-agent-xyz");
     assert!(!adapter.is_installed());
     let tmp = TempDir::new().unwrap();
-    match adapter.spawn(&SpawnContext::new(tmp.path())) {
+    match adapter.launch(&SpawnContext::new(tmp.path())) {
         Err(Error::NotInstalled { agent, program }) => {
             assert_eq!(agent, "ghost");
             assert_eq!(program, "hangar-no-such-agent-xyz");
@@ -150,7 +169,7 @@ fn unknown_program_is_explicit() {
     assert!(sh.is_installed());
     let missing = tmp.path().join("missing");
     assert!(matches!(
-        sh.spawn(&SpawnContext::new(&missing)),
+        sh.launch(&SpawnContext::new(&missing)),
         Err(Error::InvalidCwd(path)) if path == missing
     ));
 }
@@ -176,8 +195,8 @@ fn presets_cover_the_supported_agents() {
     assert_eq!(adapters.len(), 5);
 }
 
-fn screen_text(handle: &hangar_agents::AgentHandle) -> String {
-    let snapshot = handle.session().terminal().snapshot();
+fn screen_text(session: &TerminalSession) -> String {
+    let snapshot = session.terminal().snapshot();
     (0..snapshot.rows)
         .map(|r| snapshot.row_text(r) + "\n")
         .collect()

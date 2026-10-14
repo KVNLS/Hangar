@@ -53,7 +53,8 @@ impl OllamaState {
                 window,
                 |this, _, event: &SelectEvent<Vec<AgentOption>>, window, cx| {
                     let SelectEvent::Confirm(model) = event;
-                    this.ollama.settings.default_model = model.as_ref().map(|m| m.to_string());
+                    this.agent_setup.ollama.settings.default_model =
+                        model.as_ref().map(|m| m.to_string());
                     this.save_ollama(window, cx);
                     cx.notify();
                 },
@@ -94,11 +95,12 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         let host = settings.host.clone();
-        self.ollama
+        self.agent_setup
+            .ollama
             .host_input
             .update(cx, |input, cx| input.set_value(host, window, cx));
-        self.ollama.settings = settings;
-        if self.ollama.settings.enabled {
+        self.agent_setup.ollama.settings = settings;
+        if self.agent_setup.ollama.settings.enabled {
             self.refresh_ollama(window, cx);
         }
     }
@@ -109,7 +111,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.ollama.settings.enabled = enabled;
+        self.agent_setup.ollama.settings.enabled = enabled;
         self.save_ollama(window, cx);
         if enabled {
             self.refresh_ollama(window, cx);
@@ -126,44 +128,52 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) -> Task<()> {
         tracing::info!(%host, "HANGAR_DEV_OLLAMA");
-        self.ollama.settings.enabled = true;
-        self.ollama.settings.host = host.clone();
-        self.ollama
+        self.agent_setup.ollama.settings.enabled = true;
+        self.agent_setup.ollama.settings.host = host.clone();
+        self.agent_setup
+            .ollama
             .host_input
             .update(cx, |input, cx| input.set_value(host, window, cx));
-        self.ollama.refresh = None;
+        self.agent_setup.ollama.refresh = None;
         self.fetch_ollama_models(window, cx)
     }
 
     fn commit_ollama_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let host = self.ollama.host_input.read(cx).value().trim().to_owned();
-        if host == self.ollama.settings.host {
+        let host = self
+            .agent_setup
+            .ollama
+            .host_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        if host == self.agent_setup.ollama.settings.host {
             return;
         }
-        self.ollama.settings.host = host;
+        self.agent_setup.ollama.settings.host = host;
         self.save_ollama(window, cx);
         self.refresh_ollama(window, cx);
     }
 
     fn save_ollama(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = self.ollama.settings.clone();
+        let settings = self.agent_setup.ollama.settings.clone();
         self.persist(window, cx, move |store| ops::save_ollama(store, &settings));
     }
 
     /// Fetches the installed models on the background executor.
     pub(super) fn refresh_ollama(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.ollama.refresh = Some(self.fetch_ollama_models(window, cx));
+        self.agent_setup.ollama.refresh = Some(self.fetch_ollama_models(window, cx));
     }
 
     fn fetch_ollama_models(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
-        let host = match OllamaHost::parse(&self.ollama.settings.host) {
+        let host = match OllamaHost::parse(&self.agent_setup.ollama.settings.host) {
             Ok(host) => host,
             Err(err) => {
                 self.set_ollama_status(OllamaStatus::Failed(err.to_string()), window, cx);
                 return Task::ready(());
             }
         };
-        self.ollama.status = OllamaStatus::Loading;
+        self.agent_setup.ollama.status = OllamaStatus::Loading;
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let listed = cx
@@ -205,32 +215,36 @@ impl HangarApp {
                 })
                 .collect();
             let selected: Option<SharedString> = self
+                .agent_setup
                 .ollama
                 .settings
                 .default_model
                 .clone()
                 .filter(|m| models.iter().any(|known| known.name == *m))
                 .map(Into::into);
-            self.ollama.model_select.update(cx, |select, cx| {
-                select.set_items(options, window, cx);
-                if let Some(model) = &selected {
-                    select.set_selected_value(model, window, cx);
-                }
-            });
+            self.agent_setup
+                .ollama
+                .model_select
+                .update(cx, |select, cx| {
+                    select.set_items(options, window, cx);
+                    if let Some(model) = &selected {
+                        select.set_selected_value(model, window, cx);
+                    }
+                });
         }
-        self.ollama.status = status;
+        self.agent_setup.ollama.status = status;
         cx.notify();
     }
 
     /// The warning to show when `agent_id` should run on Ollama but has no models to use.
     pub(super) fn ollama_unavailable(&self, agent_id: &str) -> Option<String> {
-        if !self.ollama.settings.enabled || !agents::supports_ollama(agent_id) {
+        if !self.agent_setup.ollama.settings.enabled || !agents::supports_ollama(agent_id) {
             return None;
         }
-        let host = OllamaHost::parse(&self.ollama.settings.host)
+        let host = OllamaHost::parse(&self.agent_setup.ollama.settings.host)
             .map(|h| h.url())
-            .unwrap_or_else(|_| self.ollama.settings.host.clone());
-        match &self.ollama.status {
+            .unwrap_or_else(|_| self.agent_setup.ollama.settings.host.clone());
+        match &self.agent_setup.ollama.status {
             OllamaStatus::Ready(models) if !models.is_empty() => None,
             OllamaStatus::Ready(_) => Some(format!(
                 "Ollama at {host} has no models (ollama pull <model>); the agent starts without them."
@@ -246,8 +260,8 @@ impl HangarApp {
 
     pub(super) fn render_ollama_card(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
-        let enabled = self.ollama.settings.enabled;
-        let (status, status_color) = match &self.ollama.status {
+        let enabled = self.agent_setup.ollama.settings.enabled;
+        let (status, status_color) = match &self.agent_setup.ollama.status {
             _ if !enabled => ("Off".to_owned(), t.tx3),
             OllamaStatus::Unknown => ("Not checked".to_owned(), t.tx3),
             OllamaStatus::Loading => ("Checking…".to_owned(), t.tx3),
@@ -305,7 +319,7 @@ impl HangarApp {
                         .child(
                             div()
                                 .w(px(260.))
-                                .child(Input::new(&self.ollama.host_input).small()),
+                                .child(Input::new(&self.agent_setup.ollama.host_input).small()),
                         ),
                 )
                 .child(
@@ -316,7 +330,7 @@ impl HangarApp {
                         ))
                         .child(
                             div().w(px(260.)).child(
-                                Select::new(&self.ollama.model_select)
+                                Select::new(&self.agent_setup.ollama.model_select)
                                     .small()
                                     .placeholder("OpenCode's own default"),
                             ),
@@ -338,7 +352,7 @@ impl HangarApp {
                             UiButton::new("ollama-refresh")
                                 .label("Refresh")
                                 .small()
-                                .disabled(self.ollama.status == OllamaStatus::Loading)
+                                .disabled(self.agent_setup.ollama.status == OllamaStatus::Loading)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.refresh_ollama(window, cx)
                                 })),

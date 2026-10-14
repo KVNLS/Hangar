@@ -22,22 +22,23 @@ impl HangarApp {
     /// The focused pane's workspace and its project.
     pub(super) fn focused_workspace(&self) -> Option<(&Project, &Workspace)> {
         let ws = self
+            .work
             .projects
-            .workspace(self.panes.slot(self.panes.focused())?)?;
-        Some((self.projects.project(ws.project_id)?, ws))
+            .workspace(self.layout.panes.slot(self.layout.panes.focused())?)?;
+        Some((self.work.projects.project(ws.project_id)?, ws))
     }
 
     /// Project new workspaces go to: the focused workspace's, else the first one.
     pub(super) fn current_project(&self) -> Option<ProjectId> {
         self.focused_workspace()
             .map(|(p, _)| p.id)
-            .or_else(|| self.projects.entries().first().map(|e| e.project.id))
+            .or_else(|| self.work.projects.entries().first().map(|e| e.project.id))
     }
 
     pub(super) fn render_titlebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
-        let sidebar_open = self.sidebar_open;
-        let device_open = self.device.open;
+        let sidebar_open = self.layout.sidebar_open;
+        let device_open = self.layout.device.open;
         let crumb = self.focused_workspace();
         let new_target = self.current_project();
         let crumbs = h_flex()
@@ -86,7 +87,7 @@ impl HangarApp {
                                 "Show sidebar ⌘B"
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.sidebar_open = !this.sidebar_open;
+                                this.layout.sidebar_open = !this.layout.sidebar_open;
                                 cx.notify();
                             })),
                     )
@@ -138,7 +139,7 @@ impl HangarApp {
                                     .label("Overview")
                                     .kbd("⌘⇧O")
                                     .ghost()
-                                    .selected(self.screen == Screen::Overview)
+                                    .selected(self.layout.screen == Screen::Overview)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.toggle_overview(window, cx)
                                     })),
@@ -152,7 +153,7 @@ impl HangarApp {
                                     .tooltip("New workspace ⌘N")
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         if let Some(project) = new_target {
-                                            this.sidebar_open = true;
+                                            this.layout.sidebar_open = true;
                                             this.open_new_workspace(project, window, cx);
                                         }
                                     })),
@@ -175,10 +176,10 @@ impl HangarApp {
                                 UiButton::new("settings-toggle")
                                     .icon(Lucide::Settings)
                                     .ghost()
-                                    .selected(self.screen == Screen::Settings)
+                                    .selected(self.layout.screen == Screen::Settings)
                                     .tooltip("Settings ⌘,")
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        let screen = if this.screen == Screen::Settings {
+                                        let screen = if this.layout.screen == Screen::Settings {
                                             Screen::Workspace
                                         } else {
                                             Screen::Settings
@@ -196,11 +197,12 @@ impl HangarApp {
         // Idle workspaces are only counted when nothing else is going on.
         let all_idle = counts.iter().all(|(s, _)| *s == AgentState::Idle);
         let agents = self
+            .live
             .sessions
             .values()
             .filter(|l| !l.session.status.is_terminal())
             .count();
-        let focused = self.panes.slot(self.panes.focused());
+        let focused = self.layout.panes.slot(self.layout.panes.focused());
         let pool = self.device_pool.read(cx);
         let device = match focused {
             Some(id) => {
@@ -225,7 +227,7 @@ impl HangarApp {
             Some(id) if pool.is_waiting(id) => {
                 Some(("Waiting for the device".to_owned(), AgentState::Working))
             }
-            Some(id) => self.runs.get(&id).map(|run| run.summary()),
+            Some(id) => self.live.runs.get(&id).map(|run| run.summary()),
             None => None,
         };
         h_flex()

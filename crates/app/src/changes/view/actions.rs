@@ -8,7 +8,9 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{IconName, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_worktree::{ChangedPath, Gh, MergeOutcome, MergeStrategy, PullOutcome, PushOutcome};
+use hangar_core::changes::ChangedPath;
+use hangar_core::ports::CodeHost;
+use hangar_core::review::{MergeOutcome, MergeStrategy, PullOutcome, PushOutcome, ReviewError};
 
 use super::{ChangesPanel, CommitBox};
 use crate::changes::dialogs::{MergeDialog, PrDialog};
@@ -43,7 +45,7 @@ impl Busy {
 
 impl ChangesPanel {
     /// How `gh` is run (the login PATH, or an explicit program).
-    pub fn set_gh(&mut self, gh: Gh, cx: &mut Context<Self>) {
+    pub fn set_gh(&mut self, gh: std::sync::Arc<dyn CodeHost>, cx: &mut Context<Self>) {
         self.gh = Some(gh);
         self.info.clear();
         self.reload_info(cx);
@@ -71,7 +73,7 @@ impl ChangesPanel {
         let task = cx.spawn(async move |this, cx| {
             let info = cx
                 .background_executor()
-                .spawn(async move { review::load_info(&gh, &target) })
+                .spawn(async move { review::load_info(gh.as_ref(), &target) })
                 .await;
             tracing::debug!(%workspace, gh = ?info.gh, pr = ?info.pr, "review info loaded");
             let _ = this.update(cx, |this, cx| {
@@ -209,7 +211,7 @@ impl ChangesPanel {
         self.run_op(
             source.workspace,
             Busy::Pulling,
-            move || Ok(hangar_worktree::pull_rebase(&worktree)?),
+            move || review::run_pull_rebase(&worktree),
             cx,
         )
     }
@@ -231,7 +233,7 @@ impl ChangesPanel {
         self.run_op(
             workspace,
             Busy::CreatingPr,
-            move || review::run_create_pr(&gh, &target, &request),
+            move || review::run_create_pr(gh.as_ref(), &target, &request),
             cx,
         )
     }
@@ -347,8 +349,8 @@ impl ChangesPanel {
                 Err(err) => {
                     tracing::error!("Push: {err:#}");
                     let behind = matches!(
-                        err.downcast_ref::<hangar_worktree::Error>(),
-                        Some(hangar_worktree::Error::PushRejected {
+                        err.downcast_ref::<ReviewError>(),
+                        Some(ReviewError::PushRejected {
                             non_fast_forward: true,
                             ..
                         })

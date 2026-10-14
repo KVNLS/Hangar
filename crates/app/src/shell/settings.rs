@@ -99,7 +99,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.appearance = appearance;
+        self.layout.appearance = appearance;
         appearance.apply(window, cx);
         self.persist(window, cx, move |store| {
             ops::save_appearance(store, appearance)
@@ -113,10 +113,10 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings_tab = tab;
+        self.layout.settings_tab = tab;
         if tab == SettingsTab::Agents
-            && self.ollama.settings.enabled
-            && self.ollama.status != ollama::OllamaStatus::Loading
+            && self.agent_setup.ollama.settings.enabled
+            && self.agent_setup.ollama.status != ollama::OllamaStatus::Loading
         {
             self.refresh_ollama(window, cx);
         }
@@ -142,10 +142,10 @@ impl HangarApp {
 
     fn render_settings_agents(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
-        let detected = self.path.is_some();
-        let rows = self.agent_choices.iter().map(|choice| {
+        let detected = self.agent_setup.path.is_some();
+        let rows = self.agent_setup.agent_choices.iter().map(|choice| {
             let id = SharedString::from(choice.id.clone());
-            let is_default = self.agent.as_ref() == choice.id;
+            let is_default = self.agent_setup.agent.as_ref() == choice.id;
             let program = match agents::preset(&choice.id) {
                 Some(agents::AgentPreset::Acp(acp))
                     if detected && !choice.installed && !acp.install_hint.is_empty() =>
@@ -214,10 +214,10 @@ impl HangarApp {
                         .small()
                         .disabled(!choice.installed)
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.agent = id.clone();
-                            this.agent_chosen_by_user = true;
-                            let agent = this.agent.clone();
-                            this.agent_select.update(cx, |select, cx| {
+                            this.agent_setup.agent = id.clone();
+                            this.agent_setup.agent_chosen_by_user = true;
+                            let agent = this.agent_setup.agent.clone();
+                            this.agent_setup.agent_select.update(cx, |select, cx| {
                                 select.set_selected_value(&agent, window, cx)
                             });
                             this.save_agent(window, cx);
@@ -649,7 +649,7 @@ impl HangarApp {
         let t = cx.tokens();
         let selected = Appearance::ALL
             .iter()
-            .position(|a| *a == self.appearance)
+            .position(|a| *a == self.layout.appearance)
             .unwrap_or(0);
         v_flex()
             .gap_4()
@@ -721,7 +721,7 @@ impl HangarApp {
     pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
         let nav = SettingsTab::ALL.map(|tab| {
-            let on = tab == self.settings_tab;
+            let on = tab == self.layout.settings_tab;
             div()
                 .id(SharedString::from(format!("settings-nav-{}", tab.label())))
                 .flex()
@@ -743,7 +743,7 @@ impl HangarApp {
                 .child(Icon::new(tab.icon()).size(px(14.)).text_color(t.tx3))
                 .child(tab.label())
         });
-        let page = match self.settings_tab {
+        let page = match self.layout.settings_tab {
             SettingsTab::Agents => self.render_settings_agents(cx),
             SettingsTab::Devices => self.render_settings_devices(cx),
             SettingsTab::Appearance => self.render_settings_appearance(cx),

@@ -37,7 +37,7 @@ pub enum Error {
     BranchMissing(String),
     #[error("no remote to push to: add one (e.g. `origin`) first")]
     NoRemote,
-    #[error("{}", push_rejected_message(.remote, .branch, .reason, *.non_fast_forward))]
+    #[error("{}", hangar_core::review::push_rejected_message(.remote, .branch, .reason, *.non_fast_forward))]
     PushRejected {
         remote: String,
         branch: String,
@@ -79,14 +79,3 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
-
-fn push_rejected_message(remote: &str, branch: &str, reason: &str, non_ff: bool) -> String {
-    if non_ff {
-        format!(
-            "push to {remote} rejected: {remote}/{branch} has commits that are not in \
-             {branch} ({reason}); pull or rebase, then push again"
-        )
-    } else {
-        format!("push of {branch} to {remote} rejected: {reason}")
-    }
-}

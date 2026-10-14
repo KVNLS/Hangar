@@ -2,6 +2,7 @@
 
 pub mod android;
 pub mod capacity;
+pub mod contract;
 pub mod geometry;
 pub mod logs;
 pub mod simctl;
@@ -32,7 +33,7 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub use hangar_core::device::{
-    DeviceInfo, Frame, Input, Key, LogLevel, Orientation, Platform, ScreenSpec,
+    Capabilities, DeviceInfo, Frame, Input, Key, LogLevel, Orientation, Platform, ScreenSpec,
 };
 
 /// PNG export of a [`Frame`], kept here because it needs the `image` encoder.
@@ -73,6 +74,12 @@ pub trait Device: Send + Sync {
 
     fn platform(&self) -> Platform {
         Platform::Ios
+    }
+
+    /// What this backend implements; the default methods below implement nothing. Every
+    /// backend declares its own, checked by [`contract::violations`].
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
     }
 
     fn frames(&self) -> FrameReceiver;

@@ -54,10 +54,10 @@ impl HangarApp {
                 .child(Icon::new(Lucide::Check).size(px(12.)).text_color(t.panel))
                 .into_any_element()
         };
-        let detected = self.path.is_some();
+        let detected = self.agent_setup.path.is_some();
         let agents = v_flex()
             .gap_1()
-            .children(self.agent_choices.iter().map(|c| {
+            .children(self.agent_setup.agent_choices.iter().map(|c| {
                 h_flex()
                     .h(px(24.))
                     .gap(px(10.))

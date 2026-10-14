@@ -9,11 +9,11 @@ use crate::ui::{ActiveTokens as _, PANE_TAB_HEIGHT, PANEL_TAB_HEIGHT, TypeScale 
 
 impl Render for HangarApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut panes = h_resizable("panes").with_state(&self.pane_sizes);
-        for pane in 0..self.panes.count() {
+        let mut panes = h_resizable("panes").with_state(&self.layout.pane_sizes);
+        for pane in 0..self.layout.panes.count() {
             panes = panes.child(resizable_panel().child(self.render_pane(pane, cx)));
         }
-        let main = match self.screen {
+        let main = match self.layout.screen {
             Screen::Review => div().flex_1().min_h_0().child(self.changes_panel.clone()),
             Screen::Settings => div()
                 .flex()
@@ -24,7 +24,7 @@ impl Render for HangarApp {
                 .flex()
                 .flex_1()
                 .min_h_0()
-                .when(self.sidebar_open, |this| {
+                .when(self.layout.sidebar_open, |this| {
                     this.child(self.render_sidebar(cx))
                 })
                 .child(self.render_overview(cx)),
@@ -34,11 +34,14 @@ impl Render for HangarApp {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .when(self.sidebar_open, |this| {
+                    .when(self.layout.sidebar_open, |this| {
                         this.child(self.render_sidebar(cx))
                     })
                     .map(|this| {
-                        if self.projects.is_empty() && !self.loading && self.load_error.is_none() {
+                        if self.work.projects.is_empty()
+                            && !self.work.loading
+                            && self.work.load_error.is_none()
+                        {
                             this.child(self.render_welcome(cx))
                         } else {
                             this.child(div().flex_1().min_w_0().h_full().child(panes))
@@ -55,12 +58,13 @@ impl Render for HangarApp {
             .on_action(cx.listener(Self::toggle_device))
             .on_action(cx.listener(Self::toggle_device_stats))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar_open = !this.sidebar_open;
+                this.layout.sidebar_open = !this.layout.sidebar_open;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FilterWorkspaces, window, cx| {
-                this.sidebar_open = true;
-                this.sidebar_filter
+                this.layout.sidebar_open = true;
+                this.layout
+                    .sidebar_filter
                     .update(cx, |state, cx| state.focus(window, cx));
                 cx.notify();
             }))
@@ -71,7 +75,7 @@ impl Render for HangarApp {
             .on_action(cx.listener(|this, _: &StopRun, _, cx| this.stop_run(cx)))
             .on_action(cx.listener(|this, _: &SplitPane, window, cx| this.split_pane(window, cx)))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
-                this.close_pane(this.panes.focused(), window, cx)
+                this.close_pane(this.layout.panes.focused(), window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &RestartServer, window, cx| this.restart_server(window, cx)),
@@ -103,7 +107,7 @@ impl Render for HangarApp {
                 this.set_appearance(next, window, cx)
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
-                let screen = if this.screen == Screen::Settings {
+                let screen = if this.layout.screen == Screen::Settings {
                     Screen::Workspace
                 } else {
                     Screen::Settings
@@ -117,7 +121,7 @@ impl Render for HangarApp {
             )
             .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
                 if let Some(project) = this.current_project() {
-                    this.sidebar_open = true;
+                    this.layout.sidebar_open = true;
                     this.open_new_workspace(project, window, cx);
                 }
             }))
@@ -165,11 +169,11 @@ pub(super) fn agent_options(choices: &[AgentChoice]) -> Vec<AgentOption> {
 impl HangarApp {
     pub(super) fn render_pane(&self, pane: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
-        let focused = self.panes.focused() == pane;
-        let workspace_id = self.panes.slot(pane);
-        let workspace = workspace_id.and_then(|id| self.projects.workspace(id));
-        let live = workspace_id.and_then(|id| self.sessions.get(&id));
-        let changes_open = self.changes.open && focused;
+        let focused = self.layout.panes.focused() == pane;
+        let workspace_id = self.layout.panes.slot(pane);
+        let workspace = workspace_id.and_then(|id| self.work.projects.workspace(id));
+        let live = workspace_id.and_then(|id| self.live.sessions.get(&id));
+        let changes_open = self.layout.changes.open && focused;
 
         let shown = workspace_id.map(|id| self.pane_tab(id)).unwrap_or_default();
         let tab = match workspace {
@@ -190,7 +194,7 @@ impl HangarApp {
                     }))
             }
         };
-        let run = workspace_id.and_then(|id| self.runs.get(&id));
+        let run = workspace_id.and_then(|id| self.live.runs.get(&id));
         let run_tabs: Vec<UiTab> = run
             .into_iter()
             .flat_map(|run| {
@@ -223,19 +227,21 @@ impl HangarApp {
                 .kbd("⌘R")
                 .ghost()
                 .small()
-                .disabled(self.busy.contains(&ws_id))
+                .disabled(self.work.busy.contains(&ws_id))
                 .tooltip("Build and run on this workspace's device")
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.panes.show(ws_id);
+                    this.layout.panes.show(ws_id);
                     this.panes_changed(window, cx);
                     this.run_focused(window, cx);
                 }))
         });
         let start = workspace.and_then(|ws| {
-            let can_start =
-                !self.busy.contains(&ws.id) && live.is_none_or(|l| l.session.status.is_terminal());
+            let can_start = !self.work.busy.contains(&ws.id)
+                && live.is_none_or(|l| l.session.status.is_terminal());
             let ws_id = ws.id;
-            let resumable = self.resumable_chat(ws_id, &self.agent).is_some();
+            let resumable = self
+                .resumable_chat(ws_id, &self.agent_setup.agent)
+                .is_some();
             let label = match (resumable, live.is_some()) {
                 (true, _) => "Resume",
                 (false, true) => "Restart",
@@ -307,14 +313,14 @@ impl HangarApp {
                     .icon(Lucide::Columns2)
                     .ghost()
                     .small()
-                    .disabled(self.panes.count() >= MAX_PANES)
+                    .disabled(self.layout.panes.count() >= MAX_PANES)
                     .tooltip("Split right ⌘D")
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.panes.focus(pane);
+                        this.layout.panes.focus(pane);
                         this.split_pane(window, cx)
                     })),
             )
-            .when(self.panes.count() > 1, |this| {
+            .when(self.layout.panes.count() > 1, |this| {
                 this.child(
                     UiButton::new(("close-pane", pane))
                         .icon(Lucide::X)
@@ -378,21 +384,22 @@ impl HangarApp {
 
     /// Device and changes as tabs of one right panel; each tab keeps its own width.
     fn render_right_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let device_tab = self.device.open;
-        let changes_tab = !device_tab && self.changes.open;
-        let files_tab = !device_tab && !changes_tab && self.files_open;
+        let device_tab = self.layout.device.open;
+        let changes_tab = !device_tab && self.layout.changes.open;
+        let files_tab = !device_tab && !changes_tab && self.layout.files_open;
         if !device_tab && !changes_tab && !files_tab {
             return None;
         }
         let t = cx.tokens();
         let width = if device_tab {
-            self.device.width
+            self.layout.device.width
         } else {
-            self.changes.width
+            self.layout.changes.width
         };
         let files = self
+            .layout
             .panes
-            .slot(self.panes.focused())
+            .slot(self.layout.panes.focused())
             .and_then(|id| self.diff_counts(id, cx))
             .map(|c| c.files)
             .filter(|n| *n > 0);
@@ -492,16 +499,16 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let agent = self.agent.to_string();
-        self.panes.show(ws_id);
+        let agent = self.agent_setup.agent.to_string();
+        self.layout.panes.show(ws_id);
         self.panes_changed(window, cx);
         self.start_session(ws_id, agent, resume, window, cx)
             .detach();
     }
 
     pub(super) fn agent_display_name(&self) -> String {
-        agents::preset(&self.agent)
+        agents::preset(&self.agent_setup.agent)
             .map(|a| a.display_name().to_owned())
-            .unwrap_or_else(|| self.agent.to_string())
+            .unwrap_or_else(|| self.agent_setup.agent.to_string())
     }
 }

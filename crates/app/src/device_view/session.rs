@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use hangar_devices::{Device, DeviceInfo, FrameReceiver, Input, LogFilter, LogStream, Orientation};
+use hangar_devices::{
+    Capabilities, Device, DeviceInfo, FrameReceiver, Input, LogFilter, LogStream, Orientation,
+};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -119,6 +121,7 @@ pub struct DeviceSession(Arc<Inner>);
 
 struct Inner {
     info: DeviceInfo,
+    capabilities: Capabilities,
     handle: DeviceHandle,
     backend: &'static str,
     frames: FrameReceiver,
@@ -130,6 +133,7 @@ impl DeviceSession {
     /// Moves the device onto a new input thread. Does not block (only spawns the thread).
     pub fn start(device: Arc<dyn Device>) -> anyhow::Result<Self> {
         let info = device.info().clone();
+        let capabilities = device.capabilities();
         let backend = device.backend();
         let frames = device.frames();
         let (input, rx) = mpsc::channel();
@@ -142,6 +146,7 @@ impl DeviceSession {
             .context("failed to start the device input thread")?;
         Ok(Self(Arc::new(Inner {
             info,
+            capabilities,
             handle,
             backend,
             frames,
@@ -156,6 +161,11 @@ impl DeviceSession {
 
     pub fn backend(&self) -> &'static str {
         self.0.backend
+    }
+
+    /// What the device's backend implements (read once when it was opened).
+    pub fn capabilities(&self) -> Capabilities {
+        self.0.capabilities
     }
 
     pub fn handle(&self) -> DeviceHandle {

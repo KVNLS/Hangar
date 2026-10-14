@@ -69,10 +69,63 @@ impl Platform {
             Self::Android => info.udid.starts_with("emulator-"),
         }
     }
+}
 
-    /// Whether `Device::set_orientation` can work on this platform (not on iOS, Xcode 27).
-    pub fn can_rotate(self) -> bool {
-        matches!(self, Self::Android)
+/// What an open device's backend can do beyond touches and Home, so callers ask instead of
+/// trying and matching on `Unsupported`. A `false` flag means the matching `Device` method (or
+/// input) fails with `Unsupported`; a `true` flag means it is implemented, not that it cannot fail.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// `send_text`.
+    pub text: bool,
+    /// [`Input::Key`].
+    pub keys: bool,
+    /// [`Input::Lock`] and the volume rocker.
+    pub side_buttons: bool,
+    /// [`Input::Back`] and [`Input::AppSwitch`] (Android).
+    pub navigation_buttons: bool,
+    /// `set_orientation` and `orientation`.
+    pub rotate: bool,
+    pub boot: bool,
+    pub shutdown: bool,
+    pub install: bool,
+    pub launch: bool,
+    pub logs: bool,
+    /// Logs from before the stream started (`LogFilter::history`).
+    pub log_history: bool,
+}
+
+impl Capabilities {
+    pub const ALL: Self = Self {
+        text: true,
+        keys: true,
+        side_buttons: true,
+        navigation_buttons: true,
+        rotate: true,
+        boot: true,
+        shutdown: true,
+        install: true,
+        launch: true,
+        logs: true,
+        log_history: true,
+    };
+
+    /// What `input` needs that this device lacks, worded for an "unsupported" error.
+    pub fn missing_for(&self, input: &Input) -> Option<&'static str> {
+        match input {
+            Input::Back | Input::AppSwitch if !self.navigation_buttons => {
+                Some("Back and app switcher buttons on this device")
+            }
+            Input::Lock | Input::VolumeUp | Input::VolumeDown if !self.side_buttons => {
+                Some("side and volume buttons on this device")
+            }
+            Input::Key(_) if !self.keys => Some("keyboard keys on this device"),
+            _ => None,
+        }
+    }
+
+    pub fn accepts(&self, input: &Input) -> bool {
+        self.missing_for(input).is_none()
     }
 }
 
@@ -296,6 +349,32 @@ impl std::str::FromStr for LogLevel {
             other => Err(format!(
                 "unknown log level {other:?} (expected verbose|debug|info|warn|error|fault)"
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_gate_inputs() {
+        let none = Capabilities::default();
+        assert!(none.accepts(&Input::Tap { x: 0.0, y: 0.0 }));
+        assert!(none.accepts(&Input::Home));
+        assert!(!none.accepts(&Input::Back));
+        assert!(!none.accepts(&Input::VolumeUp));
+        assert_eq!(
+            none.missing_for(&Input::Key(Key::Enter)),
+            Some("keyboard keys on this device")
+        );
+        for input in [
+            Input::Back,
+            Input::AppSwitch,
+            Input::Lock,
+            Input::Key(Key::Tab),
+        ] {
+            assert!(Capabilities::ALL.accepts(&input), "{input:?}");
         }
     }
 }

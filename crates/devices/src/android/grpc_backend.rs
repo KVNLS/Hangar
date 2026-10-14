@@ -287,6 +287,10 @@ impl Device for GrpcEmulator {
         "grpc"
     }
 
+    fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities::ALL
+    }
+
     fn platform(&self) -> Platform {
         Platform::Android
     }

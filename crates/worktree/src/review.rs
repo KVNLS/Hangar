@@ -5,11 +5,14 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use hangar_core::review::{MergeOutcome, MergeStrategy, PullOutcome, PushOutcome, Upstream};
+
 use crate::error::{Error, Result};
 use crate::git::{Git, RawOutput, bytes_to_path};
 use crate::repo::{branch_exists, current_branch};
-use crate::status::{ChangeKind, status};
+use crate::status::status;
 use crate::worktree::list;
+use hangar_core::changes::ChangeKind;
 
 fn pathspec_args(head: &[&str], paths: &[PathBuf]) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["--literal-pathspecs".into()];
@@ -148,20 +151,6 @@ pub fn remotes(repo: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// The branch's upstream and how far the branch is from it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Upstream {
-    /// Short name, e.g. `origin/hangar/fix-login`.
-    pub name: String,
-    pub remote: String,
-    /// Full ref on the remote, e.g. `refs/heads/hangar/fix-login`.
-    pub remote_ref: String,
-    pub ahead: u32,
-    pub behind: u32,
-    /// The upstream branch was deleted on the remote (after a fetch).
-    pub gone: bool,
-}
-
 /// Upstream of the checked-out branch; `None` when detached, when none is set, or when it
 /// tracks a differently named branch (e.g. the base it was started from): only a same-named
 /// branch on the remote is where [`push`] goes.
@@ -220,16 +209,6 @@ fn parse_counts(out: &str) -> Result<(u32, u32)> {
             "rev-list --left-right --count: {out:?}"
         ))),
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PushOutcome {
-    pub remote: String,
-    pub branch: String,
-    /// This push set the branch's upstream (first push).
-    pub set_upstream: bool,
-    /// The remote already had this commit.
-    pub up_to_date: bool,
 }
 
 /// Pushes the checked-out branch to the same-named branch on the remote. With such an
@@ -345,14 +324,6 @@ pub(crate) fn parse_push_porcelain(out: &str) -> Vec<PushRef> {
         .collect()
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PullOutcome {
-    /// The upstream rebased onto, e.g. `origin/hangar/fix-login`.
-    pub upstream: String,
-    /// Commits taken from the upstream.
-    pub pulled: u32,
-}
-
 /// After a non-fast-forward rejection: fetches the branch's upstream and rebases the local
 /// commits onto it (uncommitted changes are stashed and put back). A conflicting rebase is
 /// aborted, leaving the branch as it was, and reported as [`Error::RebaseConflicts`].
@@ -405,22 +376,6 @@ fn pull_rebase_within(worktree: &Path, timeout: Duration) -> Result<PullOutcome>
         }),
         _ => Err(git.failure(out)),
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MergeStrategy {
-    /// `git merge --no-ff`: a merge commit keeps the branch's history.
-    NoFf,
-    /// `git merge --squash` then one commit.
-    Squash,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MergeOutcome {
-    /// Checkout where `base` is checked out and the merge was made.
-    pub worktree: PathBuf,
-    /// The new commit on `base`.
-    pub head: String,
 }
 
 /// Where `base` is checked out, if it can take a merge now.

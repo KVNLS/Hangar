@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::pty::AgentHandle;
 use anyhow::anyhow;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -34,14 +35,14 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use hangar_agents::AgentHandle;
 use hangar_agents::acp::AcpSession;
+use hangar_core::ports::Store;
+use hangar_core::review::MergeStrategy;
 use hangar_core::{
     AgentState, Project, ProjectId, Session, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
-use hangar_store_sqlite::Store;
 use hangar_terminal::ExitInfo;
-use hangar_worktree::MergeStrategy;
+use hangar_usecases::settings::SettingsExt as _;
 
 use crate::agents::{self, AgentChoice, AgentPreset};
 use crate::changes::review::ReviewTarget;
@@ -281,22 +282,8 @@ enum Screen {
     Settings,
 }
 
-pub struct HangarApp {
-    store: Option<Arc<Store>>,
-    projects: ProjectList,
-    loading: bool,
-    load_error: Option<SharedString>,
-    path: Option<ResolvedPath>,
-    agent_select: Entity<AgentSelect>,
-    agent: SharedString,
-    agent_chosen_by_user: bool,
-    sessions: HashMap<WorkspaceId, LiveSession>,
-    /// Structured conversations each workspace can resume (saved in settings).
-    saved_chats: HashMap<WorkspaceId, ops::SavedChat>,
-    /// Build and dev-server tabs per workspace (⌘R).
-    runs: HashMap<WorkspaceId, run::WorkspaceRun>,
-    /// The tab each workspace's pane shows (agent, dev server or build).
-    pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
+/// What the window shows and how it is laid out, with its debounced saves.
+struct Layout {
     panes: Panes,
     pane_sizes: Entity<ResizableState>,
     /// Each pane's share of the width, once the user has resized (or it was restored); empty
@@ -305,27 +292,66 @@ pub struct HangarApp {
     /// Pending resize of the pane group to `pane_shares`; replacing it cancels the previous one.
     apply_shares: Option<Task<()>>,
     _pane_sizes_sub: Subscription,
-    new_workspace: Option<new_workspace::NewWorkspaceSheet>,
-    /// Agent presets with their install state (all assumed installed until the PATH is known).
-    agent_choices: Vec<AgentChoice>,
     palette: Option<palette::Palette>,
     overview_by_project: bool,
     settings_tab: settings::SettingsTab,
-    ollama: ollama::OllamaState,
     appearance: crate::ui::theme::Appearance,
     _appearance_observer: Subscription,
-    creating: HashSet<ProjectId>,
-    /// Workspaces with an archive, restore or delete in flight.
-    busy: HashSet<WorkspaceId>,
-    /// Live diffs of active workspaces, started when first shown in a pane.
-    diffs: HashMap<WorkspaceId, DiffEntry>,
     changes: ChangesLayout,
-    changes_panel: Entity<ChangesPanel>,
-    files_panel: Entity<crate::files_view::FilesPanel>,
     files_open: bool,
     save_changes: Option<Task<()>>,
     /// The window's device panel; it shows the focused workspace's device.
     device: DeviceLayout,
+    save_device: Option<Task<()>>,
+    /// The pending (debounced) pane layout save.
+    save_panes: Option<Task<()>>,
+    sidebar_open: bool,
+    screen: Screen,
+    sidebar_filter: Entity<InputState>,
+    collapsed_projects: HashSet<ProjectId>,
+    /// Projects whose archived group is expanded.
+    show_archived: HashSet<ProjectId>,
+}
+
+/// Which agent new sessions start, what is installed, and the login PATH they run with.
+struct AgentSetup {
+    path: Option<ResolvedPath>,
+    agent_select: Entity<AgentSelect>,
+    agent: SharedString,
+    agent_chosen_by_user: bool,
+    /// Agent presets with their install state (all assumed installed until the PATH is known).
+    agent_choices: Vec<AgentChoice>,
+    ollama: ollama::OllamaState,
+}
+
+/// What runs per workspace: agent sessions, build and dev-server tabs, live diffs.
+struct LiveState {
+    sessions: HashMap<WorkspaceId, LiveSession>,
+    /// Structured conversations each workspace can resume (saved in settings).
+    saved_chats: HashMap<WorkspaceId, ops::SavedChat>,
+    /// Build and dev-server tabs per workspace (⌘R).
+    runs: HashMap<WorkspaceId, run::WorkspaceRun>,
+    /// The tab each workspace's pane shows (agent, dev server or build).
+    pane_tabs: HashMap<WorkspaceId, run::PaneTab>,
+    /// Live diffs of active workspaces, started when first shown in a pane.
+    diffs: HashMap<WorkspaceId, DiffEntry>,
+}
+
+/// Projects and workspaces as loaded, and the operations in flight on them.
+struct WorkState {
+    projects: ProjectList,
+    loading: bool,
+    load_error: Option<SharedString>,
+    new_workspace: Option<new_workspace::NewWorkspaceSheet>,
+    creating: HashSet<ProjectId>,
+    /// Workspaces with an archive, restore or delete in flight.
+    busy: HashSet<WorkspaceId>,
+}
+
+pub struct HangarApp {
+    store: Option<Arc<dyn Store>>,
+    changes_panel: Entity<ChangesPanel>,
+    files_panel: Entity<crate::files_view::FilesPanel>,
     /// Every workspace's device.
     device_pool: Entity<DevicePool>,
     /// Serves the MCP device tools of `Hangar mcp-bridge`; `None` if the socket could not be bound.
@@ -333,18 +359,13 @@ pub struct HangarApp {
     /// `HANGAR_DEV_DEVICE_LIMIT`, applied when the pool loads.
     device_limit_override: Option<crate::device_pool::policy::Limit>,
     device_panel: Entity<DevicePanel>,
-    save_device: Option<Task<()>>,
-    /// The pending (debounced) pane layout save.
-    save_panes: Option<Task<()>>,
     focus: FocusHandle,
-    sidebar_open: bool,
-    screen: Screen,
-    sidebar_filter: Entity<InputState>,
-    collapsed_projects: HashSet<ProjectId>,
-    /// Projects whose archived group is expanded.
-    show_archived: HashSet<ProjectId>,
     _activity: Task<()>,
     _subscriptions: Vec<Subscription>,
+    layout: Layout,
+    agent_setup: AgentSetup,
+    live: LiveState,
+    work: WorkState,
 }
 
 impl HangarApp {
@@ -376,8 +397,8 @@ impl HangarApp {
                 let SelectEvent::Confirm(Some(id)) = event else {
                     return;
                 };
-                this.agent = id.clone();
-                this.agent_chosen_by_user = true;
+                this.agent_setup.agent = id.clone();
+                this.agent_setup.agent_chosen_by_user = true;
                 this.save_agent(window, cx);
                 cx.notify();
             },
@@ -414,16 +435,16 @@ impl HangarApp {
             window,
             |this, _, event: &DevicePanelEvent, window, cx| match event {
                 DevicePanelEvent::Selected(key) => {
-                    this.device.selected = key.clone();
+                    this.layout.device.selected = key.clone();
                     this.save_device_layout(window, cx);
                 }
                 DevicePanelEvent::Stats(stats) => {
-                    this.device.stats = *stats;
+                    this.layout.device.stats = *stats;
                     this.save_device_layout(window, cx);
                 }
                 DevicePanelEvent::Logs(logs) => {
-                    this.device.logs = logs.open;
-                    this.device.log_level = Some(logs.min_level.as_str().to_owned());
+                    this.layout.device.logs = logs.open;
+                    this.layout.device.log_level = Some(logs.min_level.as_str().to_owned());
                     this.save_device_layout(window, cx);
                 }
             },
@@ -432,8 +453,8 @@ impl HangarApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter workspaces"));
         let filter_sub = cx.subscribe(&sidebar_filter, |_, _, _: &InputEvent, cx| cx.notify());
         let appearance_observer = cx.observe_window_appearance(window, |this, window, cx| {
-            if this.appearance == crate::ui::theme::Appearance::System {
-                this.appearance.apply(window, cx);
+            if this.layout.appearance == crate::ui::theme::Appearance::System {
+                this.layout.appearance.apply(window, cx);
             }
         });
         let focus = cx.focus_handle();
@@ -450,7 +471,7 @@ impl HangarApp {
                     let db = db.ok_or_else(|| {
                         anyhow!("cannot locate the database: HOME is not set (set HANGAR_DB)")
                     })?;
-                    let store = ops::open_store(&db)?;
+                    let store = crate::adapters::open_store(&db)?;
                     let loaded = ops::load(&store)?;
                     tracing::info!(
                         db = %db.display(),
@@ -472,57 +493,65 @@ impl HangarApp {
 
         Self {
             store: None,
-            projects: ProjectList::default(),
-            loading: true,
-            load_error: None,
-            path: None,
-            agent_select,
-            agent,
-            agent_chosen_by_user: false,
-            sessions: HashMap::new(),
-            saved_chats: HashMap::new(),
-            runs: HashMap::new(),
-            pane_tabs: HashMap::new(),
-            panes: Panes::default(),
-            pane_sizes,
-            pane_shares: Vec::new(),
-            apply_shares: None,
-            _pane_sizes_sub: pane_sizes_sub,
-            new_workspace: None,
-            agent_choices: initial_choices,
-            palette: None,
-            overview_by_project: false,
-            settings_tab: Default::default(),
-            ollama,
-            appearance: Default::default(),
-            _appearance_observer: appearance_observer,
-            creating: HashSet::new(),
-            busy: HashSet::new(),
-            diffs: HashMap::new(),
-            changes: ChangesLayout::default(),
             changes_panel,
             files_panel: cx.new(crate::files_view::FilesPanel::new),
-            files_open: false,
-            save_changes: None,
-            device: DeviceLayout::default(),
             device_pool,
             mcp: mcp::start(window, cx),
             device_limit_override,
             device_panel,
-            save_device: None,
-            save_panes: None,
             focus,
-            sidebar_open: true,
-            screen: Screen::Workspace,
-            sidebar_filter,
-            collapsed_projects: HashSet::new(),
-            show_archived: HashSet::new(),
+            layout: Layout {
+                panes: Panes::default(),
+                pane_sizes,
+                pane_shares: Vec::new(),
+                apply_shares: None,
+                _pane_sizes_sub: pane_sizes_sub,
+                palette: None,
+                overview_by_project: false,
+                settings_tab: Default::default(),
+                appearance: Default::default(),
+                _appearance_observer: appearance_observer,
+                changes: ChangesLayout::default(),
+                files_open: false,
+                save_changes: None,
+                device: DeviceLayout::default(),
+                save_device: None,
+                save_panes: None,
+                sidebar_open: true,
+                screen: Screen::Workspace,
+                sidebar_filter,
+                collapsed_projects: HashSet::new(),
+                show_archived: HashSet::new(),
+            },
+            agent_setup: AgentSetup {
+                path: None,
+                agent_select,
+                agent,
+                agent_chosen_by_user: false,
+                agent_choices: initial_choices,
+                ollama,
+            },
+            live: LiveState {
+                sessions: HashMap::new(),
+                saved_chats: HashMap::new(),
+                runs: HashMap::new(),
+                pane_tabs: HashMap::new(),
+                diffs: HashMap::new(),
+            },
+            work: WorkState {
+                projects: ProjectList::default(),
+                loading: true,
+                load_error: None,
+                new_workspace: None,
+                creating: HashSet::new(),
+                busy: HashSet::new(),
+            },
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
                 // ACP agents run in their own process group and some (codex-acp) outlive a
                 // closed stdin, so quitting must stop them like ⌘W does.
                 cx.on_app_quit(|this, _| {
-                    for live in this.sessions.values() {
+                    for live in this.live.sessions.values() {
                         live.stop();
                     }
                     this.flush_layout();
@@ -551,7 +580,7 @@ impl HangarApp {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        job: impl FnOnce(&Store) -> anyhow::Result<()> + Send + 'static,
+        job: impl FnOnce(&dyn Store) -> anyhow::Result<()> + Send + 'static,
     ) {
         let Some(store) = self.store.clone() else {
             return;
@@ -569,23 +598,24 @@ impl HangarApp {
     }
 
     fn save_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let agent = self.agent.to_string();
+        let agent = self.agent_setup.agent.to_string();
         self.persist(window, cx, move |store| ops::save_agent(store, &agent));
     }
 
     fn on_loaded(
         &mut self,
-        loaded: anyhow::Result<(Arc<Store>, Loaded)>,
+        loaded: anyhow::Result<(Arc<dyn Store>, Loaded)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.loading = false;
+        self.work.loading = false;
         match loaded {
             Ok((store, loaded)) => {
                 self.store = Some(store.clone());
-                self.projects = ProjectList::new(loaded.entries);
-                self.saved_chats = loaded.chats;
+                self.work.projects = ProjectList::new(loaded.entries);
+                self.live.saved_chats = loaded.chats;
                 let workspaces: Vec<WorkspaceRef> = self
+                    .work
                     .projects
                     .entries()
                     .iter()
@@ -602,13 +632,16 @@ impl HangarApp {
                     self.restore_layout(&layout, window, cx);
                 }
                 if let Some(changes) = loaded.changes {
-                    self.changes = changes.sanitized();
+                    self.layout.changes = changes.sanitized();
                 }
                 if let Some(device) = loaded.device {
-                    self.device = device.sanitized();
-                    let (selected, stats) = (self.device.selected.clone(), self.device.stats);
-                    let open = self.device.open;
-                    let logs = self.device.logs_settings();
+                    self.layout.device = device.sanitized();
+                    let (selected, stats) = (
+                        self.layout.device.selected.clone(),
+                        self.layout.device.stats,
+                    );
+                    let open = self.layout.device.open;
+                    let logs = self.layout.device.logs_settings();
                     self.device_panel.update(cx, |panel, cx| {
                         panel.restore_logs(logs);
                         panel.restore(selected, stats, cx);
@@ -618,23 +651,23 @@ impl HangarApp {
                     });
                 }
                 if let Some(appearance) = loaded.appearance {
-                    self.appearance = appearance;
+                    self.layout.appearance = appearance;
                     appearance.apply(window, cx);
                 }
                 if let Some(ollama) = loaded.ollama {
                     self.restore_ollama(ollama, window, cx);
                 }
                 // One right panel, one tab: layouts saved before the merge may have both open.
-                if self.device.open {
-                    self.changes.open = false;
+                if self.layout.device.open {
+                    self.layout.changes.open = false;
                 }
                 self.sync_diffs(cx);
                 self.sync_device_focus(window, cx);
                 if let Some(agent) = loaded.agent.filter(|a| agents::preset(a).is_some()) {
-                    self.agent = agent.into();
-                    self.agent_chosen_by_user = true;
-                    let agent = self.agent.clone();
-                    self.agent_select.update(cx, |select, cx| {
+                    self.agent_setup.agent = agent.into();
+                    self.agent_setup.agent_chosen_by_user = true;
+                    let agent = self.agent_setup.agent.clone();
+                    self.agent_setup.agent_select.update(cx, |select, cx| {
                         select.set_selected_value(&agent, window, cx);
                     });
                 }
@@ -643,7 +676,7 @@ impl HangarApp {
                 }
             }
             Err(err) => {
-                self.load_error = Some(format!("{err:#}").into());
+                self.work.load_error = Some(format!("{err:#}").into());
                 self.report(&err, window, cx);
             }
         }
@@ -659,15 +692,15 @@ impl HangarApp {
                 cx,
             );
         }
-        let mut gh = hangar_worktree::Gh::new().with_path_env(path.value.clone());
-        if let Some(program) = std::env::var_os("HANGAR_GH").filter(|p| !p.is_empty()) {
-            gh = gh.with_program(program);
-        }
+        let gh = crate::adapters::code_host(
+            path.value.clone(),
+            std::env::var_os("HANGAR_GH").filter(|p| !p.is_empty()),
+        );
         self.changes_panel
             .update(cx, |panel, cx| panel.set_gh(gh, cx));
         // find_program stats files; cheap enough for five presets but keep it off this thread.
         let value = path.value.clone();
-        self.path = Some(path);
+        self.agent_setup.path = Some(path);
         cx.spawn_in(window, async move |this, cx| {
             let choices = cx
                 .background_executor()
@@ -686,19 +719,19 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.agent_chosen_by_user {
-            self.agent = agents::default_agent(&choices).into();
+        if !self.agent_setup.agent_chosen_by_user {
+            self.agent_setup.agent = agents::default_agent(&choices).into();
         }
         let installed: Vec<&str> = choices
             .iter()
             .filter(|c| c.installed)
             .map(|c| c.id.as_str())
             .collect();
-        tracing::info!(?installed, agent = %self.agent, "detected agents");
-        let agent = self.agent.clone();
+        tracing::info!(?installed, agent = %self.agent_setup.agent, "detected agents");
+        let agent = self.agent_setup.agent.clone();
         let options = agent_options(&choices);
-        self.agent_choices = choices;
-        self.agent_select.update(cx, |select, cx| {
+        self.agent_setup.agent_choices = choices;
+        self.agent_setup.agent_select.update(cx, |select, cx| {
             select.set_items(options, window, cx);
             select.set_selected_value(&agent, window, cx);
         });
@@ -748,7 +781,7 @@ impl HangarApp {
             this.update_in(cx, |this, window, cx| match result {
                 Ok(project) => {
                     tracing::info!(name = %project.name, repo = %project.repo_path.display(), "project added");
-                    this.projects.add_project(project.clone());
+                    this.work.projects.add_project(project.clone());
                     cx.notify();
                     Some(project)
                 }
@@ -777,6 +810,7 @@ impl HangarApp {
     /// Tells the pool about the workspace (name, worktree) before it is asked for its device.
     pub(super) fn track_workspace(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
         let Some(entry) = self
+            .work
             .projects
             .entries()
             .iter()
@@ -794,9 +828,10 @@ impl HangarApp {
     /// Points the pool and the device panel at the focused pane's workspace.
     pub(super) fn sync_device_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let focused = self
+            .layout
             .panes
-            .slot(self.panes.focused())
-            .filter(|id| self.projects.is_active(*id));
+            .slot(self.layout.panes.focused())
+            .filter(|id| self.work.projects.is_active(*id));
         if let Some(id) = focused {
             self.track_workspace(id, cx);
         }

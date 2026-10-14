@@ -113,7 +113,7 @@ impl FilesPanel {
         self.list_task = Some(cx.spawn(async move |this, cx| {
             let listed = cx
                 .background_executor()
-                .spawn(async move { hangar_worktree::list_files(&root) })
+                .spawn(async move { crate::adapters::changes().list_files(&root) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.source.as_ref().map(|s| s.workspace) != Some(workspace) {

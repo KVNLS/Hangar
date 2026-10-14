@@ -38,7 +38,14 @@ impl WorkspaceDiff {
             let started_at = Instant::now();
             let started = cx
                 .background_executor()
-                .spawn(async move { LiveDiff::start(&worktree, base, LiveDiffConfig::default()) })
+                .spawn(async move {
+                    LiveDiff::start(
+                        crate::adapters::changes(),
+                        &worktree,
+                        base,
+                        LiveDiffConfig::default(),
+                    )
+                })
                 .await;
             let mut updates = match started {
                 Ok((live, updates)) => {

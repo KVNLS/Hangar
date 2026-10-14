@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use hangar_core::changes::GitDirs;
+
 use crate::error::{Error, Result};
 use crate::git::{Git, bytes_to_path};
 
@@ -21,14 +23,6 @@ pub fn check_ignored(worktree: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>>
         .filter(|f| !f.is_empty())
         .map(bytes_to_path)
         .collect())
-}
-
-/// Absolute git directories of a worktree. For a linked worktree `git_dir` is
-/// `<repo>/.git/worktrees/<name>` (HEAD, index) and `common_dir` is `<repo>/.git` (refs).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GitDirs {
-    pub git_dir: PathBuf,
-    pub common_dir: PathBuf,
 }
 
 pub fn git_dirs(worktree: &Path) -> Result<GitDirs> {

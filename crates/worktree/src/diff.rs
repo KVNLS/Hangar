@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::git::{Git, bytes_to_path, bytes_to_string};
-use crate::patch::{DiffOptions, FileDiff, FileStatus, parse_patch};
+use crate::patch::parse_patch;
+use hangar_core::changes::{DiffOptions, FileDiff, FileStatus};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileStat {

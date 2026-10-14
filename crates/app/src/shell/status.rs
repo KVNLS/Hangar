@@ -115,7 +115,7 @@ impl HangarApp {
     fn tick_activity(&mut self, cx: &mut Context<Self>) -> bool {
         let now = Instant::now();
         let mut changed = false;
-        for live in self.sessions.values_mut() {
+        for live in self.live.sessions.values_mut() {
             let view = match &live.surface {
                 AgentSurface::Terminal { view, .. } => view,
                 AgentSurface::Chat { view, .. } => {
@@ -149,7 +149,7 @@ impl HangarApp {
     }
 
     pub(super) fn diff_counts(&self, id: WorkspaceId, cx: &App) -> Option<DiffCounts> {
-        let summary = self.diffs.get(&id)?.diff.read(cx).summary()?.clone();
+        let summary = self.live.diffs.get(&id)?.diff.read(cx).summary()?.clone();
         Some(DiffCounts {
             files: summary.files,
             insertions: usize::try_from(summary.insertions).unwrap_or(usize::MAX),
@@ -158,7 +158,7 @@ impl HangarApp {
     }
 
     pub(super) fn agent_state(&self, id: WorkspaceId, cx: &App) -> AgentState {
-        let live = self.sessions.get(&id);
+        let live = self.live.sessions.get(&id);
         let has_changes = self.diff_counts(id, cx).is_some_and(|c| c.files > 0);
         match live.map(|l| &l.surface) {
             Some(AgentSurface::Chat { view, .. }) => AgentState::from_acp(
@@ -177,13 +177,14 @@ impl HangarApp {
     /// Focuses the next workspace waiting on the user (⌘J).
     pub(super) fn focus_next_needing_you(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let items: Vec<(AgentState, WorkspaceId)> = self
+            .work
             .projects
             .entries()
             .iter()
             .flat_map(|e| e.active())
             .map(|ws| (self.agent_state(ws.id, cx), ws.id))
             .collect();
-        let current = self.panes.slot(self.panes.focused());
+        let current = self.layout.panes.slot(self.layout.panes.focused());
         match next_needing_you(&items, current) {
             Some(id) => {
                 self.set_screen(Screen::Workspace, window, cx);
@@ -198,7 +199,7 @@ impl HangarApp {
     /// Workspace count per state, in "needs you" order.
     pub(super) fn state_counts(&self, cx: &App) -> Vec<(AgentState, usize)> {
         let mut counts: HashMap<AgentState, usize> = HashMap::new();
-        for entry in self.projects.entries() {
+        for entry in self.work.projects.entries() {
             for ws in entry.active() {
                 *counts.entry(self.agent_state(ws.id, cx)).or_default() += 1;
             }

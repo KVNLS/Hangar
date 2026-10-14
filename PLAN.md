@@ -15,13 +15,14 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 ## Crates
 | crate    | owns                                                                             | depends on     |
 |----------|----------------------------------------------------------------------------------|----------------|
-| core     | domain: Project / Workspace / Session, AgentState, device vocabulary, Setting<T> | —              |
-| store-sqlite | SQLite Store (projects, workspaces, sessions, settings)                      | core           |
-| worktree | git CLI wrapper: worktree add/remove/list, status, diff                          | —              |
-| agents   | AgentAdapter trait, PtyAdapter; ACP client (`acp`: protocol, stdio, AcpAdapter)  | terminal       |
+| core     | domain: Project / Workspace / Session, AgentState, device, changes, review; ports | —              |
+| usecases | application services: workspaces, sessions, settings, review (headless)          | core           |
+| store-sqlite | SQLite Store (projects, workspaces, sessions, settings); `Store` port        | core           |
+| worktree | git/gh CLI wrapper; `GitCli` and `Gh` implement the git and code-host ports      | core           |
+| agents   | AgentAdapter trait, PtyAdapter (a `Launch`); ACP client (`acp`)                  | —              |
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |
-| files    | file watching (notify, debounced, git-ignore aware), LiveDiff model              | worktree       |
-| devices  | Device trait; iOS (private + simctl fallback), Android (M4)                      | core           |
+| files    | file watching (notify, debounced, git-ignore aware), LiveDiff over `Changes`     | core           |
+| devices  | Device trait and capabilities; iOS (private + simctl fallback), Android (M4)     | core           |
 | runner   | build/run per stack: Xcode, Gradle, React Native, Expo                           | core           |
 | mcp      | MCP device tools for agents: protocol engine, socket server, stdio bridge (M8)   | core           |
 | app      | GPUI shell, all views (terminal, diff, device), wiring                           | all            |

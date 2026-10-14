@@ -11,9 +11,9 @@ thiserror.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 libc.workspace = true
-hangar-terminal.workspace = true
 
 [dev-dependencies]
+hangar-terminal.workspace = true
 tempfile.workspace = true
 hangar-worktree.workspace = true
 

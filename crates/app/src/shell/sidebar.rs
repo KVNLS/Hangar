@@ -91,7 +91,7 @@ impl HangarApp {
         focused: Option<WorkspaceId>,
         cx: &App,
     ) -> WorkspaceRow {
-        let live = self.sessions.get(&ws.id);
+        let live = self.live.sessions.get(&ws.id);
         WorkspaceRow {
             id: ws.id,
             name: ws.name.clone().into(),
@@ -100,7 +100,7 @@ impl HangarApp {
             mark: live.map(|l| l.session.agent.monogram()),
             counts: self.diff_counts(ws.id, cx),
             active: focused == Some(ws.id),
-            busy: self.busy.contains(&ws.id),
+            busy: self.work.busy.contains(&ws.id),
         }
     }
 
@@ -201,7 +201,7 @@ impl HangarApp {
     ) -> Option<Div> {
         let t = cx.tokens();
         let project_id = entry.project.id;
-        let focused = self.panes.slot(self.panes.focused());
+        let focused = self.layout.panes.slot(self.layout.panes.focused());
         let rows: Vec<WorkspaceRow> = entry
             .active()
             .map(|ws| self.workspace_row(ws, focused, cx))
@@ -216,8 +216,8 @@ impl HangarApp {
         if !query.is_empty() && rows.is_empty() && archived.is_empty() {
             return None;
         }
-        let collapsed = self.collapsed_projects.contains(&project_id) && query.is_empty();
-        let show_archived = self.show_archived.contains(&project_id) || !query.is_empty();
+        let collapsed = self.layout.collapsed_projects.contains(&project_id) && query.is_empty();
+        let show_archived = self.layout.show_archived.contains(&project_id) || !query.is_empty();
 
         let app = cx.entity().downgrade();
         let project_menu = Button::new(SharedString::from(format!("project-menu-{project_id}")))
@@ -248,8 +248,8 @@ impl HangarApp {
             .pr_1()
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.collapsed_projects.remove(&project_id) {
-                    this.collapsed_projects.insert(project_id);
+                if !this.layout.collapsed_projects.remove(&project_id) {
+                    this.layout.collapsed_projects.insert(project_id);
                 }
                 cx.notify();
             }))
@@ -277,7 +277,7 @@ impl HangarApp {
                     .icon(Lucide::Plus)
                     .ghost()
                     .small()
-                    .disabled(self.creating.contains(&project_id))
+                    .disabled(self.work.creating.contains(&project_id))
                     .tooltip("New workspace")
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_new_workspace(project_id, window, cx)
@@ -302,8 +302,8 @@ impl HangarApp {
                         .text_color(t.tx3)
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.show_archived.remove(&project_id) {
-                                this.show_archived.insert(project_id);
+                            if !this.layout.show_archived.remove(&project_id) {
+                                this.layout.show_archived.insert(project_id);
                             }
                             cx.notify();
                         }))
@@ -340,25 +340,32 @@ impl HangarApp {
 
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
-        let query = self.sidebar_filter.read(cx).value().trim().to_lowercase();
+        let query = self
+            .layout
+            .sidebar_filter
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
         let sections: Vec<Div> = self
+            .work
             .projects
             .entries()
             .iter()
             .filter_map(|entry| self.render_project(entry, &query, cx))
             .collect();
-        let notice = if self.loading {
+        let notice = if self.work.loading {
             Some(SharedString::from("Loading…"))
-        } else if let Some(err) = &self.load_error {
+        } else if let Some(err) = &self.work.load_error {
             Some(err.clone())
-        } else if self.projects.is_empty() {
+        } else if self.work.projects.is_empty() {
             Some("No projects yet. Add a Git repository to start.".into())
         } else if sections.is_empty() {
             Some("No workspace matches the filter.".into())
         } else {
             None
         };
-        let notice_color = if self.load_error.is_some() {
+        let notice_color = if self.work.load_error.is_some() {
             t.red
         } else {
             t.tx3
@@ -373,7 +380,7 @@ impl HangarApp {
             .border_color(t.line)
             .child(
                 div().p_2().pb_1p5().child(
-                    Input::new(&self.sidebar_filter)
+                    Input::new(&self.layout.sidebar_filter)
                         .small()
                         .prefix(Icon::new(IconName::Search).size(px(12.)).text_color(t.tx3))
                         .suffix(
@@ -418,7 +425,7 @@ impl HangarApp {
                     .child(
                         div()
                             .flex_1()
-                            .child(Select::new(&self.agent_select).small()),
+                            .child(Select::new(&self.agent_setup.agent_select).small()),
                     ),
             )
             .child(

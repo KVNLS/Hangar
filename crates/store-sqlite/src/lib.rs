@@ -323,20 +323,39 @@ impl Store {
         self.get_session(id)
     }
 
+    /// The raw JSON stored under `key`; `None` when it was never set.
+    pub fn read_setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn()
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    }
+
+    /// Stores raw JSON under `key`, replacing any previous value.
+    pub fn write_setting(&self, key: &str, json: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, json],
+        )?;
+        Ok(())
+    }
+
+    /// Removes `key`; removing a missing one is not an error.
+    pub fn remove_setting(&self, key: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
     /// Reads a JSON-encoded setting; `None` when the key was never set.
     pub fn get_setting<T: serde::de::DeserializeOwned>(
         &self,
         setting: &Setting<T>,
     ) -> Result<Option<T>> {
-        let value: Option<String> = self
-            .conn()
-            .query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                [setting.key()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        value
+        self.read_setting(setting.key())?
             .map(|v| serde_json::from_str(&v))
             .transpose()
             .map_err(StoreError::from)
@@ -344,20 +363,12 @@ impl Store {
 
     /// Stores `value` as JSON under `setting`, replacing any previous value.
     pub fn set_setting<T: serde::Serialize>(&self, setting: &Setting<T>, value: &T) -> Result<()> {
-        let encoded = serde_json::to_string(value)?;
-        self.conn().execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![setting.key(), encoded],
-        )?;
-        Ok(())
+        self.write_setting(setting.key(), &serde_json::to_string(value)?)
     }
 
     /// Removes `setting`; removing a missing one is not an error.
     pub fn delete_setting<T>(&self, setting: &Setting<T>) -> Result<()> {
-        self.conn()
-            .execute("DELETE FROM settings WHERE key = ?1", [setting.key()])?;
-        Ok(())
+        self.remove_setting(setting.key())
     }
 }
 
@@ -563,5 +574,17 @@ impl hangar_core::ports::Store for Store {
 
     fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session> {
         Store::update_session_status(self, id, status).map_err(PortError::new)
+    }
+
+    fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
+        Store::read_setting(self, key).map_err(PortError::new)
+    }
+
+    fn write_setting(&self, key: &str, json: &str) -> PortResult<()> {
+        Store::write_setting(self, key, json).map_err(PortError::new)
+    }
+
+    fn remove_setting(&self, key: &str) -> PortResult<()> {
+        Store::remove_setting(self, key).map_err(PortError::new)
     }
 }

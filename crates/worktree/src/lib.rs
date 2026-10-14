@@ -19,19 +19,25 @@ pub use diff::{
     merge_base, parse_numstat, untracked_files,
 };
 pub use error::{Error, Result};
-pub use gh::{CreatePr, Gh, GhStatus, PrInfo, gh_available};
+pub use gh::{Gh, gh_available};
 pub use git::{Git, GitVersion, MIN_GIT_VERSION, git_version};
-pub use ignore::{GitDirs, check_ignored, git_dirs};
-pub use patch::{DiffLine, DiffOptions, FileDiff, FileStatus, Hunk, LineKind, parse_patch};
+pub use hangar_core::changes::{
+    ChangeKind, ChangedPath, DiffLine, DiffOptions, FileDiff, FileStatus, GitDirs, Hunk, LineKind,
+    Status,
+};
+pub use hangar_core::review::{
+    CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, Upstream,
+};
+pub use ignore::{check_ignored, git_dirs};
+pub use patch::parse_patch;
 pub use repo::{
     branch_exists, current_branch, default_branch, is_valid_branch_name, local_branches, repo_root,
 };
 pub use review::{
-    BaseCheckout, CommitOptions, MergeOutcome, MergeStrategy, PullOutcome, PushOutcome, Upstream,
-    base_checkout, commit, merge_conflicts, merge_into_base, pull_rebase, push, remotes, stage,
-    stage_all, unstage, upstream,
+    BaseCheckout, CommitOptions, base_checkout, commit, merge_conflicts, merge_into_base,
+    pull_rebase, push, remotes, stage, stage_all, unstage, upstream,
 };
-pub use status::{ChangeKind, ChangedPath, Status, parse_status, status, status_paths};
+pub use status::{parse_status, status, status_paths};
 pub use worktree::{
     CreateOptions, Worktree, create, delete_branch, list, parse_list, prune, remove,
 };

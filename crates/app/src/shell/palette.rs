@@ -16,12 +16,13 @@ pub(super) struct Palette {
 
 impl HangarApp {
     pub(super) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.is_some() {
+        if self.layout.palette.is_some() {
             return self.close_palette(window, cx);
         }
         let state = cx.new(|cx| CommandState::new(window, cx));
         state.update(cx, |state, cx| state.focus(window, cx));
         let mut workspaces: Vec<(AgentState, WorkspaceId)> = self
+            .work
             .projects
             .entries()
             .iter()
@@ -30,7 +31,7 @@ impl HangarApp {
             .collect();
         // Stable: within a state, sidebar order.
         workspaces.sort_by_key(|(state, _)| *state);
-        self.palette = Some(Palette {
+        self.layout.palette = Some(Palette {
             state,
             workspaces: workspaces.into_iter().map(|(_, id)| id).collect(),
         });
@@ -38,7 +39,7 @@ impl HangarApp {
     }
 
     pub(super) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.take().is_some() {
+        if self.layout.palette.take().is_some() {
             window.focus(&self.focus, cx);
             self.focus_terminal(window, cx);
             cx.notify();
@@ -46,11 +47,11 @@ impl HangarApp {
     }
 
     pub(super) fn render_palette(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let palette = self.palette.as_ref()?;
+        let palette = self.layout.palette.as_ref()?;
         let t = cx.tokens();
         let rows = palette.workspaces.iter().filter_map(|id| {
-            let ws = self.projects.workspace(*id)?;
-            let project = self.projects.project(ws.project_id)?;
+            let ws = self.work.projects.workspace(*id)?;
+            let project = self.work.projects.project(ws.project_id)?;
             let state = self.agent_state(*id, cx);
             let (name, project): (SharedString, SharedString) =
                 (ws.name.clone().into(), project.name.clone().into());

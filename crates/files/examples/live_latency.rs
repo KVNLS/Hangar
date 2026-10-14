@@ -8,9 +8,11 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hangar_files::{DiffUpdate, LiveDiff, LiveDiffConfig};
+use hangar_worktree::GitCli;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
 
@@ -35,7 +37,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let started = Instant::now();
-    let (live, mut rx) = LiveDiff::start(&repo, base, LiveDiffConfig::default())?;
+    let (live, mut rx) = LiveDiff::start(Arc::new(GitCli), &repo, base, LiveDiffConfig::default())?;
     let initial = next(&mut rx).await?;
     println!(
         "initial full diff: {:?} ({} files changed vs base)",

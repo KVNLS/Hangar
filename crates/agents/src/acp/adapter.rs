@@ -25,6 +25,8 @@ const SET_MODE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Switching models can make the agent fetch model metadata.
 const SET_CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
 const STDERR_TAIL: usize = 4096;
+/// How long to wait for the rest of an exited agent's stderr before reporting it.
+const STDERR_DRAIN: Duration = Duration::from_secs(1);
 /// How long a stopped agent gets between SIGTERM and SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(3);
 
@@ -83,8 +85,8 @@ impl AcpAdapter {
     /// session id from an earlier [`AcpSession::session_id`]) is loaded with `session/load` when
     /// the agent supports it, its history arriving as updates; otherwise, or when loading fails,
     /// a new session is created and [`AcpSession::resume_error`] says why. Blocks for the
-    /// handshake (up to a few minutes), so call it off the UI thread. `ctx.size` is unused;
-    /// `ctx.on_update` runs after every event sent to the returned receiver.
+    /// handshake (up to a few minutes), so call it off the UI thread. `ctx.on_update` runs
+    /// after every event sent to the returned receiver.
     pub fn start(
         &self,
         ctx: &SpawnContext,
@@ -117,9 +119,14 @@ impl AcpAdapter {
         let tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL)));
         let tail_writer = Arc::clone(&tail);
         let agent_id = self.id.clone();
+        let stderr_closed = Arc::new(AtomicBool::new(false));
+        let closed_writer = Arc::clone(&stderr_closed);
         std::thread::Builder::new()
             .name("acp-stderr".into())
-            .spawn(move || collect_stderr(stderr, &tail_writer, &agent_id))?;
+            .spawn(move || {
+                collect_stderr(stderr, &tail_writer, &agent_id);
+                closed_writer.store(true, Ordering::SeqCst);
+            })?;
 
         let exited = Arc::new(AtomicBool::new(false));
         let on_close = {
@@ -156,6 +163,7 @@ impl AcpAdapter {
             conn,
             exited,
             tail,
+            stderr_closed,
         };
         match session.handshake(&ctx.cwd, mcp_servers, resume) {
             Ok(()) => Ok((session, events)),
@@ -199,6 +207,8 @@ pub struct AcpSession {
     conn: AcpConnection<ChildStdin>,
     exited: Arc<AtomicBool>,
     tail: Arc<Mutex<VecDeque<u8>>>,
+    /// The agent's stderr reached EOF: [`AcpSession::tail`] is complete.
+    stderr_closed: Arc<AtomicBool>,
 }
 
 impl AcpSession {
@@ -259,13 +269,25 @@ impl AcpSession {
     }
 
     /// Adds what the agent printed on stderr to errors caused by it going away.
+    /// Turns "the pipe closed" into "the agent exited", with its last stderr lines. Writing the
+    /// first request to an agent that already exited fails with `BrokenPipe` instead of
+    /// `Disconnected`, depending on which side notices first.
     fn explain(&self, e: Error) -> Error {
         match e {
-            Error::Disconnected { .. } => Error::AgentExited {
-                agent: self.agent_id.clone(),
-                stderr_tail: read_tail(&self.tail),
-            },
+            Error::Disconnected { .. } => self.exited_error(),
+            Error::Io(io) if io.kind() == std::io::ErrorKind::BrokenPipe => self.exited_error(),
             other => other,
+        }
+    }
+
+    fn exited_error(&self) -> Error {
+        let deadline = std::time::Instant::now() + STDERR_DRAIN;
+        while !self.stderr_closed.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Error::AgentExited {
+            agent: self.agent_id.clone(),
+            stderr_tail: read_tail(&self.tail),
         }
     }
 

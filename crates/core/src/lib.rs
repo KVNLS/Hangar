@@ -2,9 +2,11 @@
 //! setting keys. Pure data and rules; persistence lives in `hangar-store-sqlite`.
 
 mod agent_state;
+pub mod changes;
 pub mod device;
 mod model;
 pub mod ports;
+pub mod review;
 mod setting;
 mod slug;
 

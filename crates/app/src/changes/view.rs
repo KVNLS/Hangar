@@ -18,7 +18,8 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_worktree::{ChangedPath, FileDiff, FileStatus, Gh, LineKind};
+use hangar_core::changes::{ChangedPath, FileDiff, FileStatus, LineKind};
+use hangar_core::ports::CodeHost;
 
 use super::highlight::{RowStyles, highlight_rows};
 use super::language::language_for_path;
@@ -90,7 +91,7 @@ pub struct ChangesPanel {
     staged: usize,
     uncommitted: usize,
     /// `None` until the login PATH is known: never run a `gh` found on another PATH.
-    gh: Option<Gh>,
+    gh: Option<Arc<dyn CodeHost>>,
     info: HashMap<WorkspaceId, ReviewInfo>,
     info_tasks: HashMap<WorkspaceId, Task<()>>,
     busy: HashMap<WorkspaceId, Busy>,
@@ -988,7 +989,12 @@ fn render_row(shown: &Shown, ix: usize, cx: &App) -> Option<AnyElement> {
 }
 
 /// A diff line's text, syntax-highlighted when highlights for unified row `ix` are ready.
-fn line_body(shown: &Shown, ix: usize, line: &hangar_worktree::DiffLine, cx: &App) -> AnyElement {
+fn line_body(
+    shown: &Shown,
+    ix: usize,
+    line: &hangar_core::changes::DiffLine,
+    cx: &App,
+) -> AnyElement {
     if line.kind == LineKind::NoNewlineAtEof {
         return div()
             .text_color(cx.tokens().tx3)

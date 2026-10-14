@@ -25,6 +25,7 @@ impl HangarApp {
                 .clone()
                 .ok_or_else(|| anyhow!("the database is not open"))?;
             let project = self
+                .work
                 .projects
                 .project(project_id)
                 .cloned()
@@ -40,7 +41,7 @@ impl HangarApp {
                 return Task::ready(None);
             }
         };
-        self.creating.insert(project_id);
+        self.work.creating.insert(project_id);
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -60,7 +61,7 @@ impl HangarApp {
                 .await;
             let started = this
                 .update_in(cx, |this, window, cx| {
-                    this.creating.remove(&project_id);
+                    this.work.creating.remove(&project_id);
                     cx.notify();
                     match result {
                         Ok(workspace) => {
@@ -71,14 +72,14 @@ impl HangarApp {
                                 "workspace created"
                             );
                             let id = workspace.id;
-                            this.projects.upsert_workspace(workspace);
+                            this.work.projects.upsert_workspace(workspace);
                             this.track_workspace(id, cx);
                             if let Some(target) = target {
                                 this.device_pool.update(cx, |pool, cx| {
                                     pool.assign(id, target.platform, target.id, cx)
                                 });
                             }
-                            this.panes.show(id);
+                            this.layout.panes.show(id);
                             this.panes_changed(window, cx);
                             Some((id, this.start_session(id, agent_id, false, window, cx)))
                         }
@@ -113,6 +114,7 @@ impl HangarApp {
                 .clone()
                 .ok_or_else(|| anyhow!("the database is not open"))?;
             let workspace = self
+                .work
                 .projects
                 .workspace(workspace_id)
                 .cloned()
@@ -128,7 +130,7 @@ impl HangarApp {
                 return Task::ready(false);
             }
         };
-        let path = self.path.as_ref().map(|p| p.value.clone());
+        let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
         if let Some(message) = self.ollama_unavailable(&agent_id) {
             window.push_notification(Notification::warning(message), cx);
         }
@@ -200,7 +202,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.projects.is_active(workspace_id) && !self.busy.contains(&workspace_id) {
+        if self.work.projects.is_active(workspace_id) && !self.work.busy.contains(&workspace_id) {
             return true;
         }
         let id = session.id;
@@ -217,14 +219,14 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(previous) = self.sessions.insert(workspace_id, live)
+        if let Some(previous) = self.live.sessions.insert(workspace_id, live)
             && let Some(id) = previous.stop()
         {
             self.persist(window, cx, move |store| {
                 ops::stop_session(store, id, "replaced by a new session")
             });
         }
-        if self.panes.slot(self.panes.focused()) == Some(workspace_id) {
+        if self.layout.panes.slot(self.layout.panes.focused()) == Some(workspace_id) {
             self.focus_terminal(window, cx);
         }
         cx.notify();
@@ -264,11 +266,12 @@ impl HangarApp {
             agent: acp.agent_id().to_owned(),
             session: acp.session_id().to_owned(),
         };
-        self.saved_chats.insert(workspace_id, chat.clone());
+        self.live.saved_chats.insert(workspace_id, chat.clone());
         self.persist(window, cx, move |store| {
             Ok(store.set_setting(&setting_keys::chat(workspace_id), &chat)?)
         });
         let root = self
+            .work
             .projects
             .workspace(workspace_id)
             .map(|ws| ws.worktree_path.clone())
@@ -324,14 +327,15 @@ impl HangarApp {
         workspace_id: WorkspaceId,
         agent_id: &str,
     ) -> Option<String> {
-        self.saved_chats
+        self.live
+            .saved_chats
             .get(&workspace_id)
             .filter(|chat| chat.agent == agent_id)
             .map(|chat| chat.session.clone())
     }
 
     fn forget_chat(&mut self, workspace_id: WorkspaceId) {
-        self.saved_chats.remove(&workspace_id);
+        self.live.saved_chats.remove(&workspace_id);
         if let Some(store) = &self.store
             && let Err(err) = store.delete_setting(&setting_keys::chat(workspace_id))
         {
@@ -347,7 +351,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ws) = self.projects.workspace(workspace_id) else {
+        let Some(ws) = self.work.projects.workspace(workspace_id) else {
             return;
         };
         let Ok(relative) = path.strip_prefix(&ws.worktree_path) else {
@@ -355,7 +359,7 @@ impl HangarApp {
             return;
         };
         let relative = relative.to_owned();
-        if let Some(pane) = self.panes.pane_of(workspace_id) {
+        if let Some(pane) = self.layout.panes.pane_of(workspace_id) {
             self.focus_pane(pane, window, cx);
         }
         self.set_files_open(true, window, cx);
@@ -422,7 +426,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(live) = self.sessions.get_mut(&workspace_id) else {
+        let Some(live) = self.live.sessions.get_mut(&workspace_id) else {
             return;
         };
         tracing::info!(workspace = %workspace_id, session = %live.session.id, ?status, "session ended");
@@ -440,7 +444,7 @@ impl HangarApp {
         &mut self,
         workspace_id: WorkspaceId,
     ) -> (Option<hangar_core::SessionId>, Option<ExitWaiter>) {
-        match self.sessions.remove(&workspace_id) {
+        match self.live.sessions.remove(&workspace_id) {
             Some(live) => (live.stop(), Some(live.exit_waiter())),
             None => (None, None),
         }
@@ -452,7 +456,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
-        if self.busy.contains(&workspace_id) || !self.projects.is_active(workspace_id) {
+        if self.work.busy.contains(&workspace_id) || !self.work.projects.is_active(workspace_id) {
             return Task::ready(());
         }
         let Some(store) = self.store.clone() else {
@@ -461,12 +465,13 @@ impl HangarApp {
         let (session, _) = self.close_session(workspace_id);
         self.close_run(workspace_id);
         self.close_mcp(workspace_id);
-        self.projects
+        self.work
+            .projects
             .set_status(workspace_id, WorkspaceStatus::Archived);
-        if self.panes.clear(workspace_id) {
+        if self.layout.panes.clear(workspace_id) {
             self.save_layout(window, cx);
         }
-        self.busy.insert(workspace_id);
+        self.work.busy.insert(workspace_id);
         self.sync_diffs(cx);
         self.sync_device_focus(window, cx);
         let device = self
@@ -485,12 +490,12 @@ impl HangarApp {
                 }
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                this.busy.remove(&workspace_id);
+                this.work.busy.remove(&workspace_id);
                 match result {
                     Ok(()) => tracing::info!(workspace = %workspace_id, "workspace archived"),
                     Err(err) => {
                         // The agent is already stopped; show the row where the store still has it.
-                        this.projects
+                        this.work.projects
                             .set_status(workspace_id, WorkspaceStatus::Active);
                         this.report(&err, window, cx);
                     }
@@ -509,7 +514,7 @@ impl HangarApp {
         let Some(store) = self.store.clone() else {
             return Task::ready(());
         };
-        if !self.busy.insert(workspace_id) {
+        if !self.work.busy.insert(workspace_id) {
             return Task::ready(());
         }
         cx.notify();
@@ -519,13 +524,14 @@ impl HangarApp {
                 .spawn(async move { ops::restore_workspace(&store, workspace_id) })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.busy.remove(&workspace_id);
+                this.work.busy.remove(&workspace_id);
                 match result {
                     Ok(()) => {
                         tracing::info!(workspace = %workspace_id, "workspace restored");
-                        this.projects
+                        this.work
+                            .projects
                             .set_status(workspace_id, WorkspaceStatus::Active);
-                        this.panes.show(workspace_id);
+                        this.layout.panes.show(workspace_id);
                         this.panes_changed(window, cx);
                     }
                     Err(err) => this.report(&err, window, cx),
@@ -541,10 +547,10 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.busy.contains(&workspace_id) {
+        if self.work.busy.contains(&workspace_id) {
             return;
         }
-        let Some(workspace) = self.projects.workspace(workspace_id).cloned() else {
+        let Some(workspace) = self.work.projects.workspace(workspace_id).cloned() else {
             return;
         };
         let title: SharedString = format!("Delete workspace “{}”?", workspace.name).into();
@@ -609,7 +615,7 @@ impl HangarApp {
             self.report(&anyhow!("the database is not open"), window, cx);
             return Task::ready(false);
         };
-        if !self.busy.insert(workspace_id) {
+        if !self.work.busy.insert(workspace_id) {
             return Task::ready(false);
         }
         let (session, terminal) = self.close_session(workspace_id);
@@ -634,7 +640,7 @@ impl HangarApp {
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                this.busy.remove(&workspace_id);
+                this.work.busy.remove(&workspace_id);
                 cx.notify();
                 match result {
                     Ok(outcome) => {
@@ -644,7 +650,7 @@ impl HangarApp {
                             branch_error = ?outcome.branch_error,
                             "workspace deleted"
                         );
-                        this.projects.remove_workspace(workspace_id);
+                        this.work.projects.remove_workspace(workspace_id);
                         this.forget_run_config(workspace_id);
                         this.forget_chat(workspace_id);
                         let device = this
@@ -655,7 +661,7 @@ impl HangarApp {
                             Err(err) => tracing::warn!(workspace = %workspace_id, "workspace device not deleted: {err:#}"),
                         })
                         .detach();
-                        if this.panes.clear(workspace_id) {
+                        if this.layout.panes.clear(workspace_id) {
                             this.panes_changed(window, cx);
                         }
                         if let Some(message) = outcome.branch_error {
@@ -680,7 +686,7 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(entry) = self.projects.entry(project_id) else {
+        let Some(entry) = self.work.projects.entry(project_id) else {
             return;
         };
         let name = entry.project.name.clone();
@@ -747,22 +753,23 @@ impl HangarApp {
                 match result {
                     Ok(()) => {
                         tracing::info!(project = %project_id, "project removed");
-                        let removed = this.projects.remove_project(project_id);
+                        let removed = this.work.projects.remove_project(project_id);
                         let mut cleared = false;
                         for ws in removed.iter().flat_map(|e| &e.workspaces) {
                             this.close_session(ws.id);
-                            cleared |= this.panes.clear(ws.id);
+                            cleared |= this.layout.panes.clear(ws.id);
                         }
                         if cleared {
                             this.save_layout(window, cx);
                         }
                         this.sync_diffs(cx);
                         if this
+                            .work
                             .new_workspace
                             .as_ref()
                             .is_some_and(|n| n.project_id == project_id)
                         {
-                            this.new_workspace = None;
+                            this.work.new_workspace = None;
                         }
                     }
                     Err(err) => this.report(&err, window, cx),
@@ -778,15 +785,15 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.panes.show(workspace_id);
+        self.layout.panes.show(workspace_id);
         self.focus_terminal(window, cx);
         self.panes_changed(window, cx);
         cx.notify();
     }
 
     pub(super) fn focus_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panes.focused() != pane {
-            self.panes.focus(pane);
+        if self.layout.panes.focused() != pane {
+            self.layout.panes.focus(pane);
             self.focus_terminal(window, cx);
             self.panes_changed(window, cx);
             cx.notify();
@@ -794,12 +801,16 @@ impl HangarApp {
     }
 
     pub(super) fn focus_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.panes.slot(self.panes.focused()) else {
+        let Some(id) = self.layout.panes.slot(self.layout.panes.focused()) else {
             return;
         };
         let handle = match self.run_view(id, self.pane_tab(id)) {
             Some(view) => Some(view.focus_handle(cx)),
-            None => self.sessions.get(&id).map(|live| live.focus_handle(cx)),
+            None => self
+                .live
+                .sessions
+                .get(&id)
+                .map(|live| live.focus_handle(cx)),
         };
         if let Some(handle) = handle {
             window.focus(&handle, cx);
@@ -814,8 +825,8 @@ impl HangarApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.pane_tabs.insert(id, tab);
-        if let Some(pane) = self.panes.pane_of(id) {
+        self.live.pane_tabs.insert(id, tab);
+        if let Some(pane) = self.layout.panes.pane_of(id) {
             self.focus_pane(pane, window, cx);
         }
         self.focus_terminal(window, cx);
@@ -824,7 +835,8 @@ impl HangarApp {
 
     /// The first active workspace with this slug, for dev hooks.
     pub(super) fn workspace_by_slug(&self, slug: &str) -> Option<WorkspaceId> {
-        self.projects
+        self.work
+            .projects
             .entries()
             .iter()
             .flat_map(|e| &e.workspaces)

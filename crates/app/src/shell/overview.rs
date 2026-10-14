@@ -15,8 +15,9 @@ impl HangarApp {
         let t = cx.tokens();
         let id = ws.id;
         let state = self.agent_state(id, cx);
-        let live = self.sessions.get(&id);
+        let live = self.live.sessions.get(&id);
         let project = self
+            .work
             .projects
             .project(ws.project_id)
             .map(|p| p.name.clone())
@@ -127,6 +128,7 @@ impl HangarApp {
     pub(super) fn render_overview(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
         let workspaces: Vec<&Workspace> = self
+            .work
             .projects
             .entries()
             .iter()
@@ -143,8 +145,10 @@ impl HangarApp {
             workspaces.len(),
             if workspaces.len() == 1 { "" } else { "s" }
         );
-        let groups: Vec<(AnyElement, String, Vec<&Workspace>)> = if self.overview_by_project {
-            self.projects
+        let groups: Vec<(AnyElement, String, Vec<&Workspace>)> = if self.layout.overview_by_project
+        {
+            self.work
+                .projects
                 .entries()
                 .iter()
                 .map(|e| {
@@ -234,9 +238,9 @@ impl HangarApp {
                     .child(div().flex_1())
                     .child(
                         Segmented::new("overview-group", ["By status", "By project"])
-                            .selected(usize::from(self.overview_by_project))
+                            .selected(usize::from(self.layout.overview_by_project))
                             .on_select(cx.listener(|this, i: &usize, _, cx| {
-                                this.overview_by_project = *i == 1;
+                                this.layout.overview_by_project = *i == 1;
                                 cx.notify();
                             })),
                     )

@@ -103,6 +103,18 @@ impl Device for SimctlSimulator {
         "simctl"
     }
 
+    /// Mouse events into Simulator.app: touches and Home only; no rotation or log history.
+    fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities {
+            boot: true,
+            shutdown: true,
+            install: true,
+            launch: true,
+            logs: true,
+            ..crate::Capabilities::default()
+        }
+    }
+
     fn frames(&self) -> FrameReceiver {
         self.frames.clone()
     }

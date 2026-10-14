@@ -4,6 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::changes::{DiffOptions, FileDiff, GitDirs, Status};
+use crate::review::{
+    CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, ReviewError,
+    Upstream,
+};
 use crate::{
     Project, ProjectId, Session, SessionId, SessionStatus, Workspace, WorkspaceId, WorkspaceStatus,
 };
@@ -40,6 +45,62 @@ pub trait Store: Send + Sync {
     fn insert_session(&self, session: &Session) -> PortResult<()>;
     fn list_sessions(&self, workspace: WorkspaceId) -> PortResult<Vec<Session>>;
     fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session>;
+
+    /// The JSON stored under `key`; `None` when it was never set.
+    fn read_setting(&self, key: &str) -> PortResult<Option<String>>;
+    /// Stores `json` under `key`, replacing any previous value.
+    fn write_setting(&self, key: &str, json: &str) -> PortResult<()>;
+    /// Removing a missing key is not an error.
+    fn remove_setting(&self, key: &str) -> PortResult<()>;
+}
+
+/// A shared store is a store, so `&Arc<dyn Store>` can be passed where `&dyn Store` is expected.
+impl<S: Store + ?Sized> Store for std::sync::Arc<S> {
+    fn insert_project(&self, project: &Project) -> PortResult<()> {
+        (**self).insert_project(project)
+    }
+    fn list_projects(&self) -> PortResult<Vec<Project>> {
+        (**self).list_projects()
+    }
+    fn get_project(&self, id: ProjectId) -> PortResult<Project> {
+        (**self).get_project(id)
+    }
+    fn delete_project(&self, id: ProjectId) -> PortResult<()> {
+        (**self).delete_project(id)
+    }
+    fn insert_workspace(&self, workspace: &Workspace) -> PortResult<()> {
+        (**self).insert_workspace(workspace)
+    }
+    fn list_workspaces(&self, project: ProjectId) -> PortResult<Vec<Workspace>> {
+        (**self).list_workspaces(project)
+    }
+    fn get_workspace(&self, id: WorkspaceId) -> PortResult<Workspace> {
+        (**self).get_workspace(id)
+    }
+    fn update_workspace_status(&self, id: WorkspaceId, status: WorkspaceStatus) -> PortResult<()> {
+        (**self).update_workspace_status(id, status)
+    }
+    fn delete_workspace(&self, id: WorkspaceId) -> PortResult<()> {
+        (**self).delete_workspace(id)
+    }
+    fn insert_session(&self, session: &Session) -> PortResult<()> {
+        (**self).insert_session(session)
+    }
+    fn list_sessions(&self, workspace: WorkspaceId) -> PortResult<Vec<Session>> {
+        (**self).list_sessions(workspace)
+    }
+    fn update_session_status(&self, id: SessionId, status: &SessionStatus) -> PortResult<Session> {
+        (**self).update_session_status(id, status)
+    }
+    fn read_setting(&self, key: &str) -> PortResult<Option<String>> {
+        (**self).read_setting(key)
+    }
+    fn write_setting(&self, key: &str, json: &str) -> PortResult<()> {
+        (**self).write_setting(key, json)
+    }
+    fn remove_setting(&self, key: &str) -> PortResult<()> {
+        (**self).remove_setting(key)
+    }
 }
 
 /// A worktree to add on a new branch.
@@ -76,6 +137,8 @@ pub trait VersionControl: Send + Sync {
     fn default_branch(&self, repo: &Path) -> PortResult<Option<String>>;
     fn is_valid_branch_name(&self, repo: &Path, name: &str) -> PortResult<bool>;
     fn branch_exists(&self, repo: &Path, name: &str) -> PortResult<bool>;
+    /// Local branch names, for picking a workspace's base.
+    fn local_branches(&self, repo: &Path) -> PortResult<Vec<String>>;
     /// Creates the branch and its worktree; returns the worktree path as created.
     fn add_worktree(&self, repo: &Path, worktree: &NewWorktree) -> PortResult<PathBuf>;
     fn worktrees(&self, repo: &Path) -> PortResult<Vec<ListedWorktree>>;
@@ -87,4 +150,60 @@ pub trait VersionControl: Send + Sync {
     fn change_counts(&self, worktree: &Path) -> PortResult<ChangeCounts>;
     /// Commits on `HEAD` of `worktree` that are not on `base`.
     fn commits_ahead(&self, worktree: &Path, base: &str) -> PortResult<u32>;
+}
+
+/// Reading a worktree's changes: what the file watcher and the live diff need.
+pub trait Changes: Send + Sync {
+    /// Status limited to `paths` (relative to the worktree, a directory covers everything below
+    /// it); empty `paths` means the whole worktree.
+    fn status(&self, worktree: &Path, paths: &[PathBuf]) -> PortResult<Status>;
+    fn merge_base(&self, worktree: &Path, rev: &str) -> PortResult<String>;
+    /// The working tree against the commit `rev`, limited to `paths` as in [`Changes::status`].
+    fn diff(
+        &self,
+        worktree: &Path,
+        rev: &str,
+        paths: &[PathBuf],
+        options: &DiffOptions,
+    ) -> PortResult<Vec<FileDiff>>;
+    fn git_dirs(&self, worktree: &Path) -> PortResult<GitDirs>;
+    /// The subset of `paths` the repository ignores.
+    fn ignored(&self, worktree: &Path, paths: &[PathBuf]) -> PortResult<Vec<PathBuf>>;
+    /// Tracked and untracked, not ignored, files of the worktree, relative to it.
+    fn list_files(&self, worktree: &Path) -> PortResult<Vec<PathBuf>>;
+}
+
+/// The git side of reviewing a workspace: stage, commit, publish, merge into the base.
+pub trait ReviewOps: Send + Sync {
+    fn stage(&self, worktree: &Path, paths: &[PathBuf]) -> Result<(), ReviewError>;
+    fn unstage(&self, worktree: &Path, paths: &[PathBuf]) -> Result<(), ReviewError>;
+    fn stage_all(&self, worktree: &Path) -> Result<(), ReviewError>;
+    /// Commits what is staged; returns the new `HEAD`.
+    fn commit(&self, worktree: &Path, message: &str) -> Result<String, ReviewError>;
+    /// The same-named remote branch the checked-out branch tracks, if any.
+    fn upstream(&self, worktree: &Path) -> Result<Option<Upstream>, ReviewError>;
+    /// Pushes the checked-out branch to its same-named remote branch. Never forces.
+    fn push(&self, worktree: &Path) -> Result<PushOutcome, ReviewError>;
+    /// Rebases local commits onto the fetched upstream; a conflicting rebase is aborted.
+    fn pull_rebase(&self, worktree: &Path) -> Result<PullOutcome, ReviewError>;
+    /// Merges local `branch` into local `base` where `base` is checked out, or refuses.
+    fn merge_into_base(
+        &self,
+        repo: &Path,
+        branch: &str,
+        base: &str,
+        strategy: MergeStrategy,
+        message: &str,
+    ) -> Result<MergeOutcome, ReviewError>;
+    /// Subject of the newest commit in `base..HEAD`.
+    fn last_subject(&self, worktree: &Path, base: &str) -> Result<Option<String>, ReviewError>;
+    fn has_remote(&self, worktree: &Path) -> Result<bool, ReviewError>;
+}
+
+/// Where pull requests live (GitHub through `gh`).
+pub trait CodeHost: Send + Sync {
+    fn status(&self) -> Result<GhStatus, ReviewError>;
+    fn pr_for_branch(&self, worktree: &Path, branch: &str) -> Result<Option<PrInfo>, ReviewError>;
+    /// Opens the pull request; returns its URL.
+    fn create_pr(&self, worktree: &Path, request: &CreatePr) -> Result<String, ReviewError>;
 }
