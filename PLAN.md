@@ -321,6 +321,11 @@ Git access is the `git` CLI with porcelain output, not a library.
   - Seen with a live Claude Code (ACP) turn: "wants to run a command", ⏎ approving once, then the "Ready for review" card with "1 file changed, +1 −0" and the trailer on by default.
   - Seen with `HANGAR_DEV_SCREENSHOT=1` (new hook): the PNG is saved, its path is typed into the terminal agent, and the toast shows. The toast covers the device panel's Shut down button for 2.8 s (bottom right, as in the mockup).
   - Not seen live: the in-use overlay (needs a lease held by a run, so a buildable app; unit-tested).
+- Owner decisions (2026-10-07):
+  - Panes keep one workspace each: no multi-workspace tabs, "shell" tab or "+" tab.
+  - ⌘R stays Build and run; the design's "Reload app" maps to it.
+  - `VersionControl::branch_tips` is kept.
+  - Settings › Permissions is approved: notify and Dock badge, default approval mode, max concurrent agents (in progress).
 - `changes/review.rs` calls `hangar_worktree::base_branch_name` directly instead of through a `ReviewOps` port.
 
 ## Device panel visual pass (2026-10-05)
