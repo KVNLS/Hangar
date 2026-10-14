@@ -212,6 +212,7 @@ impl FilesPanel {
         Some(
             h_flex()
                 .id(("file-row", ix))
+                .w_full()
                 .h(px(TREE_ROW_HEIGHT))
                 .pl(px(6. + row.depth as f32 * 14.))
                 .pr_1p5()

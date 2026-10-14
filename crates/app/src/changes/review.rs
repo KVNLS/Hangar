@@ -192,7 +192,12 @@ pub struct ReviewInfo {
     /// Why the PR lookup failed (network, auth); the toolbar still works.
     pub pr_error: Option<String>,
     pub last_subject: Option<String>,
+    /// The repository has at least one remote (push and pull requests need one).
+    pub remote: bool,
 }
+
+/// Why push and pull requests are unavailable for lack of a remote.
+pub const NO_REMOTE: &str = "Add a Git remote to publish this branch and open pull requests";
 
 pub fn load_info(gh: &Gh, target: &ReviewTarget) -> ReviewInfo {
     let ws = &target.workspace;
@@ -201,11 +206,15 @@ pub fn load_info(gh: &Gh, target: &ReviewTarget) -> ReviewInfo {
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
+    let remote = hangar_worktree::Git::new(&ws.worktree_path)
+        .run(["remote"])
+        .map(|out| !out.trim().is_empty())
+        .unwrap_or(true);
     let gh_status = gh.status().unwrap_or_else(|err| {
         tracing::warn!(%err, "gh auth status failed");
         GhStatus::Missing
     });
-    let (pr, pr_error) = if gh_blocker(&gh_status).is_none() {
+    let (pr, pr_error) = if remote && gh_blocker(&gh_status).is_none() {
         match gh.pr_for_branch(&ws.worktree_path, &ws.branch) {
             Ok(pr) => (pr, None),
             Err(err) => {
@@ -221,6 +230,7 @@ pub fn load_info(gh: &Gh, target: &ReviewTarget) -> ReviewInfo {
         pr,
         pr_error,
         last_subject,
+        remote,
     }
 }
 
