@@ -558,6 +558,7 @@ impl HangarApp {
         tracing::info!(workspace = %workspace_id, session = %live.session.id, ?status, "session ended");
         live.session.status = status.clone();
         let session_id = live.session.id;
+        self.withdraw_question(workspace_id, "the agent exited");
         cx.notify();
         let changes = self.diff_stat(workspace_id, cx);
         self.record_session_end(window, cx, move |store| {
@@ -574,6 +575,7 @@ impl HangarApp {
         workspace_id: WorkspaceId,
     ) -> (Option<hangar_core::SessionId>, Option<ExitWaiter>) {
         self.live.agent_queue.remove(workspace_id);
+        self.withdraw_question(workspace_id, "the workspace's agent was stopped");
         match self.live.sessions.remove(&workspace_id) {
             Some(live) => (live.stop(), Some(live.exit_waiter())),
             None => (None, None),

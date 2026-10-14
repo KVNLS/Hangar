@@ -36,6 +36,7 @@ fn short() -> Timeouts {
         call: Duration::from_millis(200),
         build_and_run: Duration::from_millis(800),
         create: Duration::from_millis(800),
+        ask: Duration::from_millis(800),
     }
 }
 
@@ -87,6 +88,18 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                         _ => Ok(()),
                     };
                     let _ = reply.send(result);
+                }
+                McpRequest::Ask {
+                    question,
+                    choices,
+                    reply,
+                    ..
+                } => {
+                    record(format!("ask {question} {choices:?}"));
+                    let _ = reply.send(Ok(hangar_mcp::Answer {
+                        text: choices.first().cloned().unwrap_or_else(|| "typed".into()),
+                        choice: (!choices.is_empty()).then_some(0),
+                    }));
                 }
                 McpRequest::Signal { signal, .. } => record(format!("signal {}", signal.as_str())),
                 McpRequest::Text { text, reply, .. } => {
@@ -581,4 +594,40 @@ fn only_jsonl_files_inside_the_projects_directory_are_accepted() {
     ] {
         assert_eq!(accept_transcript(&bad, &root), None, "{}", bad.display());
     }
+}
+
+#[test]
+fn ask_user_waits_for_the_answer() {
+    let (host, sessions, rx) = host(short());
+    let log = Log::default();
+    fake_consumer(rx, log.clone());
+    let s = sessions.register(WorkspaceId::new());
+    let out = host
+        .call(
+            &s,
+            Tool::AskUser {
+                question: "REST or GraphQL?".into(),
+                choices: vec!["REST".into(), "GraphQL".into()],
+            },
+        )
+        .unwrap();
+    assert_eq!(text(&out), r#"{"answer":"REST","choice":0}"#);
+    assert!(log.lock().unwrap()[0].ends_with(r#"ask REST or GraphQL? ["REST", "GraphQL"]"#));
+}
+
+#[test]
+fn an_unanswered_question_times_out() {
+    // Nobody consumes the requests: the question is never answered.
+    let (host, sessions, _rx) = host(short());
+    let s = sessions.register(WorkspaceId::new());
+    let err = host
+        .call(
+            &s,
+            Tool::AskUser {
+                question: "Still there?".into(),
+                choices: vec![],
+            },
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("ask_user timed out"), "{err}");
 }

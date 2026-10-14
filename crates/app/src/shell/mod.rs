@@ -15,6 +15,7 @@ mod ollama;
 mod orchestration;
 mod overview;
 mod palette;
+mod questions;
 mod queue;
 mod run;
 mod settings;
@@ -160,6 +161,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SubmitSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("NewWorkspaceSheet")),
         KeyBinding::new("escape", CloseSheet, Some("CompareAttempts")),
+        KeyBinding::new("cmd-enter", SubmitSheet, Some("AnswerSheet")),
+        KeyBinding::new("escape", CloseSheet, Some("AnswerSheet")),
     ]);
 }
 
@@ -388,6 +391,8 @@ struct LiveState {
     diffs: HashMap<WorkspaceId, DiffEntry>,
     /// "Max concurrent agents" and the workspaces waiting for a slot.
     agent_queue: hangar_usecases::agents::AgentQueue<queue::StartRequest>,
+    /// Questions agents asked the user (`ask_user`), one per workspace.
+    questions: HashMap<WorkspaceId, questions::PendingQuestion>,
     /// The queue as last saved, to write it only when it changed.
     saved_queue: Vec<(WorkspaceId, queue::StartRequest)>,
     /// Agents spawning off the main thread: they hold a slot before they have a session.
@@ -407,6 +412,8 @@ struct WorkState {
     busy: HashSet<WorkspaceId>,
     /// "Compare attempts", when open.
     compare: Option<compare::CompareAttempts>,
+    /// The answer sheet of an agent's question, when open.
+    answer: Option<questions::AnswerSheet>,
     /// Child workspaces each agent is creating through the orchestration tools.
     child_creates: HashMap<WorkspaceId, usize>,
 }
@@ -623,6 +630,7 @@ impl HangarApp {
                 diffs: HashMap::new(),
                 agent_queue: Default::default(),
                 saved_queue: Vec::new(),
+                questions: HashMap::new(),
                 starting: HashSet::new(),
                 done_today: Default::default(),
             },
@@ -632,6 +640,7 @@ impl HangarApp {
                 load_error: None,
                 new_workspace: None,
                 compare: None,
+                answer: None,
                 child_creates: HashMap::new(),
                 creating: HashSet::new(),
                 busy: HashSet::new(),

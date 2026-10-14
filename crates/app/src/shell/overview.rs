@@ -465,6 +465,11 @@ impl HangarApp {
                     .as_ref()
                     .map(|r| format!("Permission: {}", r.title).into())
             })
+            .or_else(|| {
+                self.question(id).map(|q| {
+                    format!("Question: {}", super::questions::question_line(&q.text)).into()
+                })
+            })
             .or_else(|| live.and_then(|l| l.activity.last_line.clone()))
             .unwrap_or_else(|| {
                 if live.is_some() {
@@ -484,6 +489,7 @@ impl HangarApp {
         let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
         let attempts = self.attempts_of(id);
         let allow_inline = request.is_some();
+        let asks = self.question(id).is_some();
         let (action_label, action) =
             card_action(state, live.is_some_and(|l| !l.session.status.is_terminal()));
         let (action_fg, action_bg, action_border) = if card_action_tinted(state) {
@@ -628,6 +634,8 @@ impl HangarApp {
                             .hover(|s| s.opacity(0.85))
                             .child(if request.is_some() {
                                 "Allow once"
+                            } else if asks {
+                                "Answer"
                             } else {
                                 action_label
                             })
@@ -635,6 +643,8 @@ impl HangarApp {
                                 cx.stop_propagation();
                                 if allow_inline {
                                     this.answer_request(id, true, cx);
+                                } else if asks {
+                                    this.open_answer_sheet(id, window, cx);
                                 } else {
                                     this.run_card_action(id, action, window, cx);
                                 }

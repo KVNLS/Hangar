@@ -22,7 +22,8 @@ const INSTRUCTIONS: &str = "These tools act on the iOS simulator or Android emul
     the Hangar workspace this agent runs in. Take a screenshot to see the screen; tap and swipe \
     coordinates are device points with the origin at the top-left of the screen as currently \
     oriented (the screenshot result states the point size). Use build_and_run after code changes, \
-    then screenshot and logs to verify.";
+    then screenshot and logs to verify. When a decision belongs to the user, ask_user asks them and \
+    waits for the answer.";
 
 const ORCHESTRATION_INSTRUCTIONS: &str = " The user also lets this agent split work across \
     parallel Hangar workspaces: workspace_create starts another agent on a self-contained task in \
@@ -520,7 +521,8 @@ pub(crate) mod tests {
                 "press",
                 "logs",
                 "build_and_run",
-                "launch_app"
+                "launch_app",
+                "ask_user"
             ]
         );
         for t in tools {

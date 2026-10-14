@@ -113,6 +113,9 @@ pub struct DevOptions {
     /// After `show`: raw keys typed into the focused agent, each step after its delay
     /// (`HANGAR_DEV_KEYS="8|\e[B\r||3|hello\r"`: seconds, `|`, text with `\r`, `\n`, `\e`).
     pub keys: Vec<(u64, String)>,
+    /// After `show`: answer the first question an agent asks (`ask_user`), `<seconds>|<text>`; a
+    /// text that is a number picks that choice (0-based).
+    pub answer: Option<(u64, String)>,
     /// Build and run on their devices: `1` = the workspaces `HANGAR_DEV_OPEN` created (else the
     /// focused one), or comma-separated slugs.
     pub run: Option<String>,
@@ -253,6 +256,10 @@ impl DevOptions {
             screenshot: flag("HANGAR_DEV_SCREENSHOT"),
             approve: var("HANGAR_DEV_APPROVE").and_then(|v| v.parse().ok()),
             keys: var("HANGAR_DEV_KEYS").map(|v| key_steps(&v)).unwrap_or_default(),
+            answer: var("HANGAR_DEV_ANSWER").and_then(|v| {
+                let (delay, text) = v.split_once('|')?;
+                Some((delay.trim().parse().ok()?, text.to_owned()))
+            }),
             run: var("HANGAR_DEV_RUN"),
             select: var("HANGAR_DEV_SELECT"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
@@ -510,6 +517,60 @@ pub(super) async fn run_dev_hooks(
     if let Some(delay) = dev.approve {
         dev_approve(&this, Duration::from_secs(delay), cx).await;
     }
+    if let Some((delay, text)) = dev.answer.clone() {
+        dev_answer(&this, Duration::from_secs(delay), text, cx).await;
+    }
+}
+
+/// `HANGAR_DEV_ANSWER=<seconds>|<text>`: opens the answer sheet of the first question, then
+/// answers it `seconds` later.
+async fn dev_answer(
+    this: &WeakEntity<HangarApp>,
+    delay: Duration,
+    text: String,
+    cx: &mut AsyncWindowContext,
+) {
+    let deadline = std::time::Instant::now() + DEV_BOOT_TIMEOUT;
+    let asked = loop {
+        let first = this
+            .update(cx, |this, _| {
+                this.live
+                    .questions
+                    .iter()
+                    .next()
+                    .map(|(id, q)| (*id, q.text.clone(), q.choices.clone()))
+            })
+            .ok()
+            .flatten();
+        if let Some(first) = first {
+            break first;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::error!("HANGAR_DEV_ANSWER: no question");
+            return;
+        }
+        cx.background_executor().timer(DEV_POLL).await;
+    };
+    let (id, question, choices) = asked;
+    tracing::info!(workspace = %id, %question, ?choices, "HANGAR_DEV_ANSWER question");
+    let _ = this.update_in(cx, |this, window, cx| {
+        this.select_workspace(id, window, cx);
+        this.open_answer_sheet(id, window, cx)
+    });
+    cx.background_executor().timer(delay).await;
+    let choice = text
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|i| *i < choices.len());
+    let answer = hangar_mcp::Answer {
+        text: choice.map_or(text, |i| choices[i].clone()),
+        choice,
+    };
+    let _ = this.update_in(cx, |this, window, cx| {
+        this.answer_question(id, answer, window, cx)
+    });
+    tracing::info!(workspace = %id, ?choice, "HANGAR_DEV_ANSWER answered");
 }
 
 /// `8|\e[B\r||3|hi\r` → `[(8, "\x1b[B\r"), (3, "hi\r")]`.

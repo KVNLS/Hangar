@@ -50,6 +50,8 @@
 //! device panel's ⌘S screenshot for the agent.
 //! `HANGAR_DEV_APPROVE=<seconds>` then waits for a structured agent's permission request and
 //! allows it once that many seconds later, through the overview's and palette's path.
+//! `HANGAR_DEV_ANSWER="<s>|<text or choice index>"` opens the first question an agent asks
+//! (`ask_user`) and answers it that many seconds later.
 //! `HANGAR_DEV_KEYS="<s>|<keys>||<s>|<keys>"` types raw keys into the focused agent after each
 //! delay (`\r`, `\n`, `\e` escapes), e.g. to answer Claude Code's folder trust prompt.
 //!

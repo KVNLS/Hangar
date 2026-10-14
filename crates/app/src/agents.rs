@@ -308,8 +308,9 @@ pub fn mcp_launch(
         }
         McpWiring::CodexOverride => {
             extras.args.push("-c".to_owned());
+            // Codex gives MCP tools 60 s by default; `ask_user` waits for the user (30 min).
             extras.args.push(format!(
-                "mcp_servers.{SERVER_NAME}={{command={},args=[{}],env_vars=[{},{}]}}",
+                "mcp_servers.{SERVER_NAME}={{command={},args=[{}],env_vars=[{},{}],tool_timeout_sec=1800}}",
                 toml_string(exe),
                 toml_string(BRIDGE_ARG),
                 toml_string(hangar_mcp::SESSION_ENV),
@@ -633,7 +634,7 @@ mod tests {
             vec![
                 "-c".to_owned(),
                 format!(
-                    "mcp_servers.hangar={{command=\"{EXE}\",args=[\"mcp-bridge\"],env_vars=[\"HANGAR_MCP_SESSION\",\"HANGAR_MCP_SOCKET\"]}}"
+                    "mcp_servers.hangar={{command=\"{EXE}\",args=[\"mcp-bridge\"],env_vars=[\"HANGAR_MCP_SESSION\",\"HANGAR_MCP_SOCKET\"],tool_timeout_sec=1800}}"
                 ),
             ]
         );

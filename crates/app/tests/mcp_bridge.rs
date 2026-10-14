@@ -95,6 +95,7 @@ fn bridge_binary_reaches_the_host() {
         call: Duration::from_secs(5),
         build_and_run: Duration::from_secs(5),
         create: Duration::from_secs(5),
+        ask: Duration::from_secs(5),
     };
     let (handle, rx) = start_with(&socket, timeouts).unwrap();
     fake_gpui_side(rx);

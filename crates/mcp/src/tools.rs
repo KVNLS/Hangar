@@ -44,6 +44,12 @@ pub enum Tool {
     LaunchApp {
         app_id: String,
     },
+    /// Asks the user a question and waits for the answer.
+    AskUser {
+        question: String,
+        /// Answers to offer as buttons (the user may still type another one).
+        choices: Vec<String>,
+    },
     /// The workspaces the caller's agent created.
     WorkspacesList,
     WorkspaceCreate {
@@ -145,6 +151,7 @@ impl Tool {
             Self::Logs { .. } => "logs",
             Self::BuildAndRun => "build_and_run",
             Self::LaunchApp { .. } => "launch_app",
+            Self::AskUser { .. } => "ask_user",
             Self::WorkspacesList => "workspaces_list",
             Self::WorkspaceCreate { .. } => "workspace_create",
             Self::AgentPrompt { .. } => "agent_prompt",
@@ -257,6 +264,39 @@ impl Tool {
                     agent: agent.map(|a| a.trim().to_owned()),
                 }
             }
+            "ask_user" => {
+                let question = a.required_string("question").map_err(invalid)?;
+                let question = question.trim().to_owned();
+                if question.is_empty() || question.chars().count() > MAX_QUESTION_CHARS {
+                    return Err(invalid(format!(
+                        "\"question\" must have 1 to {MAX_QUESTION_CHARS} characters"
+                    )));
+                }
+                let choices = match a.get("choices") {
+                    None => Vec::new(),
+                    Some(Value::Array(items)) => items
+                        .iter()
+                        .map(|item| match item.as_str().map(str::trim) {
+                            Some(c) if !c.is_empty() && c.chars().count() <= MAX_CHOICE_CHARS => {
+                                Ok(c.to_owned())
+                            }
+                            _ => Err(invalid(format!(
+                                "each choice must be a string of 1 to {MAX_CHOICE_CHARS} characters"
+                            ))),
+                        })
+                        .collect::<Result<_, _>>()?,
+                    Some(v) => {
+                        return Err(invalid(format!(
+                            "\"choices\" must be an array of strings, got {}",
+                            kind(v)
+                        )));
+                    }
+                };
+                if choices.len() > MAX_CHOICES {
+                    return Err(invalid(format!("at most {MAX_CHOICES} choices")));
+                }
+                Self::AskUser { question, choices }
+            }
             "agent_prompt" => {
                 let workspace = a.workspace().map_err(invalid)?;
                 let text = a.required_string("text").map_err(invalid)?;
@@ -278,7 +318,7 @@ impl Tool {
     }
 }
 
-const TOOL_NAMES: [&str; 13] = [
+const TOOL_NAMES: [&str; 14] = [
     "device_info",
     "screenshot",
     "tap",
@@ -288,6 +328,7 @@ const TOOL_NAMES: [&str; 13] = [
     "logs",
     "build_and_run",
     "launch_app",
+    "ask_user",
     "workspaces_list",
     "workspace_create",
     "agent_prompt",
@@ -309,6 +350,7 @@ fn allowed_args(tool: &str) -> &'static [&'static str] {
         "press" => &["button", "key"],
         "logs" => &["lines", "level", "process"],
         "launch_app" => &["app_id"],
+        "ask_user" => &["question", "choices"],
         "workspace_create" => &["task", "name", "agent"],
         "agent_prompt" => &["workspace", "text"],
         "agent_transcript" => &["workspace", "last"],
@@ -441,10 +483,42 @@ fn point_schema(description: &str) -> Value {
     json!({ "type": "number", "minimum": 0, "description": description })
 }
 
-/// The `tools` array of a `tools/list` result: the device tools, then the orchestration tools
-/// when they are on.
+/// Longest `ask_user` question, in characters.
+pub const MAX_QUESTION_CHARS: usize = 2000;
+/// Most `ask_user` choices, and the longest one.
+pub const MAX_CHOICES: usize = 6;
+pub const MAX_CHOICE_CHARS: usize = 80;
+
+/// The `tools` array of a `tools/list` result: the device tools and `ask_user`, then the
+/// orchestration tools when they are on.
 pub fn definitions(orchestration: bool) -> Vec<Value> {
     let mut tools = device_definitions();
+    tools.push(json!({
+        "name": "ask_user",
+        "description": "Ask the user a question and wait for the answer (it may take minutes). \
+            Use it when a decision is theirs to make: an ambiguous requirement, a risky step, a \
+            choice between approaches. Offer choices when the likely answers are known; the \
+            user can still type their own. Returns {\"answer\", \"choice\"} (the chosen index, \
+            or null for a typed answer).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "maxLength": MAX_QUESTION_CHARS,
+                    "description": "The question, self-contained: the user may not have followed your work.",
+                },
+                "choices": {
+                    "type": "array",
+                    "items": { "type": "string", "maxLength": MAX_CHOICE_CHARS },
+                    "maxItems": MAX_CHOICES,
+                    "description": "Suggested answers, shown as buttons.",
+                },
+            },
+            "required": ["question"],
+            "additionalProperties": false,
+        },
+    }));
     if orchestration {
         tools.extend(orchestration_definitions());
     }
@@ -650,9 +724,9 @@ fn orchestration_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "agent_transcript",
-            "description": "The last messages of the structured agent in a workspace this agent \
-                created: prompts, replies, tool calls with their status, permission requests. \
-                Terminal agents have no transcript.",
+            "description": "The last messages of the agent in a workspace this agent created: \
+                prompts, replies, tool calls with their status, permission requests. For a \
+                terminal agent other than Claude Code, its recent screen and scrollback text.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -685,11 +759,24 @@ pub struct ToolOutput {
     pub content: Vec<Content>,
 }
 
+/// The user's answer to `ask_user`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answer {
+    pub text: String,
+    /// Index of the offered choice the user picked; `None` for a typed answer.
+    pub choice: Option<usize>,
+}
+
 impl ToolOutput {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             content: vec![Content::Text(text.into())],
         }
+    }
+
+    /// `{"answer": "...", "choice": 1 | null}`.
+    pub fn answer(answer: &Answer) -> Self {
+        Self::text(json!({ "answer": answer.text, "choice": answer.choice }).to_string())
     }
 
     /// The image plus a line mapping its pixels to the device's point space.
@@ -794,7 +881,7 @@ mod tests {
                 .map(|d| d["name"].as_str().unwrap().to_owned())
                 .collect()
         };
-        assert_eq!(names(false), TOOL_NAMES[..9]);
+        assert_eq!(names(false), TOOL_NAMES[..10]);
         assert_eq!(names(true), TOOL_NAMES);
         for name in TOOL_NAMES {
             assert_eq!(
@@ -1070,5 +1157,55 @@ mod tests {
         };
         assert!(caption.contains("512x1024 px"), "{caption}");
         assert!(caption.contains("393 x 852 points"), "{caption}");
+    }
+
+    #[test]
+    fn ask_user_arguments() {
+        let ok = Tool::parse(
+            "ask_user",
+            Some(&json!({ "question": "  Which API? ", "choices": ["REST", " GraphQL "] })),
+        )
+        .unwrap();
+        assert_eq!(
+            ok,
+            Tool::AskUser {
+                question: "Which API?".into(),
+                choices: vec!["REST".into(), "GraphQL".into()],
+            }
+        );
+        let plain = Tool::parse("ask_user", Some(&json!({ "question": "Go?" }))).unwrap();
+        assert_eq!(
+            plain,
+            Tool::AskUser {
+                question: "Go?".into(),
+                choices: vec![],
+            }
+        );
+        for bad in [
+            json!({}),
+            json!({ "question": " " }),
+            json!({ "question": "x".repeat(MAX_QUESTION_CHARS + 1) }),
+            json!({ "question": "q", "choices": "yes" }),
+            json!({ "question": "q", "choices": [""] }),
+            json!({ "question": "q", "choices": [1] }),
+            json!({ "question": "q", "choices": ["a", "b", "c", "d", "e", "f", "g"] }),
+            json!({ "question": "q", "other": 1 }),
+        ] {
+            assert!(
+                matches!(
+                    Tool::parse("ask_user", Some(&bad)),
+                    Err(ParseError::InvalidArguments { .. })
+                ),
+                "{bad}"
+            );
+        }
+        let out = ToolOutput::answer(&Answer {
+            text: "REST".into(),
+            choice: Some(0),
+        });
+        assert_eq!(
+            out.content,
+            [Content::Text(r#"{"answer":"REST","choice":0}"#.into())]
+        );
     }
 }

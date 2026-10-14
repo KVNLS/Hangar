@@ -19,7 +19,8 @@ pub(super) struct Palette {
 /// Section indexes of the palette's groups (the workspace group is always first).
 const WORKSPACE_SECTION: usize = 0;
 const APPROVE_SECTION: usize = 1;
-const DEVICE_SECTION: usize = 3;
+const ANSWER_SECTION: usize = 2;
+const DEVICE_SECTION: usize = 4;
 
 /// The first group: workspaces needing you (approval, input, failed) when the query is empty,
 /// every workspace while searching; "needs you" order, sidebar order within a state.
@@ -113,6 +114,26 @@ impl HangarApp {
                     .icon(Lucide::Check)
             }));
         let approvals: Vec<WorkspaceId> = approvals.into_iter().map(|(id, _, _)| id).collect();
+        let questions: Vec<(WorkspaceId, SharedString)> = self
+            .work
+            .projects
+            .entries()
+            .iter()
+            .flat_map(|e| e.active())
+            .filter_map(|ws| {
+                let q = self.question(ws.id)?;
+                let line = super::questions::question_line(&q.text);
+                Some((ws.id, format!("Answer {}: {line}", ws.name).into()))
+            })
+            .collect();
+        let answer = CommandGroup::new()
+            .label("Answer")
+            .items(questions.iter().map(|(_, label)| {
+                CommandItem::new()
+                    .label(label.clone())
+                    .icon(Lucide::MessageCircleQuestionMark)
+            }));
+        let questions: Vec<WorkspaceId> = questions.into_iter().map(|(id, _)| id).collect();
         let command = |label: &'static str, icon: Lucide, action: Box<dyn Action>| {
             CommandItem::new().label(label).icon(icon).action(action)
         };
@@ -193,6 +214,7 @@ impl HangarApp {
             .placeholder("Search workspaces and commands…")
             .group(CommandGroup::new().label(group_label).items(rows))
             .group(approve)
+            .group(answer)
             .group(actions)
             .group(device)
             .group(app_commands)
@@ -207,6 +229,9 @@ impl HangarApp {
                 let approve = (ix.section == APPROVE_SECTION)
                     .then(|| approvals.get(ix.row).copied())
                     .flatten();
+                let asked = (ix.section == ANSWER_SECTION)
+                    .then(|| questions.get(ix.row).copied())
+                    .flatten();
                 let boot = (ix.section == DEVICE_SECTION)
                     .then(|| ix.row.checked_sub(first_boot))
                     .flatten()
@@ -219,6 +244,10 @@ impl HangarApp {
                     }
                     if let Some(id) = approve {
                         this.answer_request(id, true, cx);
+                    }
+                    if let Some(id) = asked {
+                        this.select_workspace(id, window, cx);
+                        this.open_answer_sheet(id, window, cx);
                     }
                     if let Some(key) = boot {
                         this.device_panel

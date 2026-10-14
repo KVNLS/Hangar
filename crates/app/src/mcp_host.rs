@@ -14,7 +14,7 @@ use anyhow::Context as _;
 use hangar_core::{AgentSignal, WorkspaceId};
 use hangar_devices::{Frame, Input, LogEntry, LogLevel};
 use hangar_mcp::{
-    ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost,
+    Answer, ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost,
     ToolOutput, TranscriptEntry, encode_screenshot, new_session_secret,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -73,6 +73,13 @@ pub enum McpRequest {
         app_id: String,
         reply: Reply<()>,
     },
+    /// `ask_user`: shows the question and replies with the user's answer.
+    Ask {
+        ws: WorkspaceId,
+        question: String,
+        choices: Vec<String>,
+        reply: Reply<Answer>,
+    },
     /// What the workspace's terminal agent reported through its hooks (no reply), with its
     /// transcript file when the hook named an acceptable one.
     Signal {
@@ -123,7 +130,8 @@ impl McpRequest {
             | Self::Children { ws, .. }
             | Self::CreateChild { ws, .. }
             | Self::PromptChild { ws, .. }
-            | Self::Transcript { ws, .. } => *ws,
+            | Self::Transcript { ws, .. }
+            | Self::Ask { ws, .. } => *ws,
         }
     }
 }
@@ -144,6 +152,8 @@ pub struct Timeouts {
     pub build_and_run: Duration,
     /// `workspace_create`: a worktree checkout and the agent's start.
     pub create: Duration,
+    /// `ask_user`: how long a question waits for the user.
+    pub ask: Duration,
 }
 
 impl Default for Timeouts {
@@ -152,6 +162,7 @@ impl Default for Timeouts {
             call: Duration::from_secs(30),
             build_and_run: Duration::from_secs(20 * 60),
             create: Duration::from_secs(3 * 60),
+            ask: Duration::from_secs(30 * 60),
         }
     }
 }
@@ -490,6 +501,15 @@ impl ToolHost for McpHost {
                     reply,
                 })?;
                 Ok(ToolOutput::text(format!("Launched {label}.")))
+            }
+            Tool::AskUser { question, choices } => {
+                let answer = self.ask("ask_user", self.timeouts.ask, |reply| McpRequest::Ask {
+                    ws,
+                    question,
+                    choices,
+                    reply,
+                })?;
+                Ok(ToolOutput::answer(&answer))
             }
             Tool::WorkspacesList => {
                 let children = self.ask("workspaces_list", call, |reply| McpRequest::Children {

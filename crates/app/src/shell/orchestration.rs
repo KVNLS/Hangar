@@ -352,7 +352,7 @@ impl HangarApp {
 
     /// Shows what `ws`'s agent did through the orchestration tools in its pane: a line in a
     /// structured agent's chat, else a toast (an error notification for failures).
-    fn tell_parent(
+    pub(super) fn tell_parent(
         &mut self,
         ws: WorkspaceId,
         error: bool,

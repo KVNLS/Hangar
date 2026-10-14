@@ -85,6 +85,12 @@ impl HangarApp {
                     cx.notify();
                 }
             }
+            McpRequest::Ask {
+                ws,
+                question,
+                choices,
+                reply,
+            } => self.on_question(ws, question, choices, reply, window, cx),
             McpRequest::Status { ws, reply } => {
                 let task = self.device_status(ws, cx);
                 answer(task, reply, status, cx);
