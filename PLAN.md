@@ -17,13 +17,15 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 | worktree | git CLI wrapper: worktree add/remove/list, status, diff                          | —              |
 | agents   | AgentAdapter trait; PtyAdapter (now), AcpAdapter (M7)                            | core, terminal |
 | terminal | PTY (portable-pty), emulation (alacritty_terminal), grid snapshots, key encoding | —              |
-| files    | file watching (notify), live diff model, tree-sitter highlighting                | worktree       |
+| files    | file watching (notify, debounced, git-ignore aware), LiveDiff model              | worktree       |
 | devices  | Device trait; iOS (private + simctl fallback), Android (M4)                      | —              |
 | runner   | build/run per stack: Xcode, Gradle, React Native, Flutter                        | devices        |
 | mcp      | MCP server exposing device tools to agents (M8)                                  | devices        |
 | app      | GPUI shell, all views (terminal, diff, device), wiring                           | all            |
 
 Views (terminal, diff, device) live in `app`; library crates expose plain data and input enums.
+Syntax highlighting uses gpui-component's tree-sitter features (per-language, enabled in `app`), so it lives
+in `app`, not `files`. Dart is not bundled (needs `tree-sitter-dart`, not yet approved).
 Git access is the `git` CLI with porcelain output, not a library.
 
 ## Roadmap
@@ -70,11 +72,21 @@ Git access is the `git` CLI with porcelain output, not a library.
       sidebar (projects → workspaces, add project, new workspace) + two resizable terminal panes.
       End-to-end flow verified headlessly; UI look and click paths still need a manual pass.
 
-## M2 gaps (next)
-- Delete/archive workspaces and projects, worktree removal from the UI.
-- More than one session per workspace; pane layout persisted across restarts; Escape to cancel inputs.
-- Store errors during session bookkeeping are only logged.
-- Terminal selection/copy and mouse reporting (from Spike A).
+## Done since M2 first cut
+- Terminal: selection (drag/word/line/shift-extend, auto-scroll), Cmd-C/Cmd-A, mouse reporting (1000/1002/1003,
+  X10/UTF-8/SGR; Shift bypasses), focus reporting (1004).
+- Workspaces: archive/restore, delete (status-checked, optional non-forced branch delete, only linked worktrees),
+  remove project, Escape cancels, layout + agent picker persisted (schema v2 `settings`), store errors surfaced.
+- M3 headless: unified diff parser + `diff_files`/`diff_file` (incl. untracked, renames, binary, truncation),
+  `check_ignored`; `hangar-files` Watcher (150 ms debounce) + LiveDiff (incremental status).
+  Write → DiffUpdate ~220–245 ms p50 (see spikes/m3-files-notes.md).
+
+## Remaining gaps
+- Archived rows: click does nothing (restore via menu). Layout saved without debounce.
+- Terminal: no block selection, right-click menu, middle-click paste.
+- Diff: `mv` without `git mv` shows delete + untracked; one git process per untracked file.
 
 ## Next
-- Close the M2 gaps above, then M3 live changes and review (`files` crate: notify + diff view).
+- M3 UI: per-workspace changes panel (file list + diff view with highlighting) fed by LiveDiff.
+- M3 review actions: commit, push/PR (via `gh` if installed), merge back into base.
+- Then M4 Android device panel.
