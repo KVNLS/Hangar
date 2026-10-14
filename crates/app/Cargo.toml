@@ -11,6 +11,7 @@ name = "hangar"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
 gpui-kit.workspace = true
 hangar-core.workspace = true
 hangar-worktree.workspace = true
@@ -20,6 +21,10 @@ hangar-files.workspace = true
 hangar-devices.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
