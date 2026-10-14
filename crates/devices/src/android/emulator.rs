@@ -63,13 +63,7 @@ fn describe(adb: &Adb, d: Discovery, adb_devices: &[AdbDevice]) -> RunningEmulat
             .and_then(|c| c.target.as_deref())
             .map_or_else(|| "Android".to_owned(), avd::target_label),
     };
-    let state = match &adb_dev {
-        Some(a) if a.is_online() && adb.boot_completed(&serial) => "Booted",
-        Some(a) if a.is_online() => "Booting",
-        Some(a) => a.state.as_str(),
-        None => "Starting",
-    }
-    .to_owned();
+    let state = device_state(adb, adb_dev.as_ref()).to_owned();
     let info = DeviceInfo {
         udid: serial,
         name: d.avd_name.clone(),
@@ -82,6 +76,50 @@ fn describe(adb: &Adb, d: Discovery, adb_devices: &[AdbDevice]) -> RunningEmulat
         discovery: d,
         adb: adb_dev,
         info,
+    }
+}
+
+/// `DeviceInfo::state` values used for Android.
+pub mod state {
+    /// Online in adb and `sys.boot_completed=1`.
+    pub const BOOTED: &str = "Booted";
+    /// Online in adb, Android still starting.
+    pub const BOOTING: &str = "Booting";
+    /// Process running (or device attached) but adb cannot talk to it yet or any more.
+    pub const OFFLINE: &str = "Offline";
+    /// AVD not running.
+    pub const SHUTDOWN: &str = "Shutdown";
+}
+
+pub(crate) fn device_state(adb: &Adb, dev: Option<&AdbDevice>) -> &'static str {
+    match dev {
+        Some(a) if a.is_online() && adb.boot_completed(&a.serial) => state::BOOTED,
+        Some(a) if a.is_online() => state::BOOTING,
+        _ => state::OFFLINE,
+    }
+}
+
+/// A non-emulator adb device (USB or Wi-Fi phone), for the adb backend.
+pub fn describe_physical(adb: &Adb, dev: &AdbDevice) -> DeviceInfo {
+    let online = dev.is_online();
+    let screen = online
+        .then(|| adb.screen(&dev.serial).ok())
+        .flatten()
+        .and_then(|(w, h, dpi)| avd::screen_from_density(w, h, dpi));
+    let runtime = match online.then(|| adb.version(&dev.serial).ok()).flatten() {
+        Some((release, sdk)) if !release.is_empty() => format!("Android {release} (API {sdk})"),
+        _ => "Android".to_owned(),
+    };
+    DeviceInfo {
+        udid: dev.serial.clone(),
+        name: dev
+            .model
+            .as_deref()
+            .map_or_else(|| dev.serial.clone(), |m| m.replace('_', " ")),
+        runtime,
+        state: device_state(adb, Some(dev)).to_owned(),
+        device_type: dev.device.clone(),
+        screen,
     }
 }
 

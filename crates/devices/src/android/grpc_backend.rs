@@ -176,11 +176,9 @@ async fn stream_frames(conn: Arc<RwLock<Option<Conn>>>, tx: FrameSender, size: F
                             if w == 0 || h == 0 {
                                 continue;
                             }
-                            let Some(bgra) = grpc::rgba_to_bgra(&img.image, w, h) else {
-                                tracing::warn!(
-                                    "short frame: {} bytes for {w}x{h}",
-                                    img.image.len()
-                                );
+                            let got = img.image.len();
+                            let Some(bgra) = grpc::rgba_to_bgra(img.image, w, h) else {
+                                tracing::warn!("short frame: {got} bytes for {w}x{h}");
                                 continue;
                             };
                             seq += 1;

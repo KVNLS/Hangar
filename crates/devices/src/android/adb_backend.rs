@@ -123,10 +123,7 @@ pub fn parse_raw(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
             ))
         })?;
     let mut bgra = data[header..].to_vec();
-    for px in bgra.as_chunks_mut::<4>().0 {
-        px.swap(0, 2);
-        px[3] = 0xff;
-    }
+    super::grpc::rgba_to_bgra_in_place(&mut bgra);
     Ok((width, height, bgra))
 }
 

@@ -105,7 +105,7 @@ fn main() -> anyhow::Result<()> {
             opts.window, opts.cold_boot
         );
         let t0 = Instant::now();
-        let r = android::boot(&sdk, avd, &opts)?;
+        let r = android::boot_with(&sdk, avd, &opts)?;
         println!(
             "boot: {avd} booted as {} in {:.1} s (window={:?}, cold={})",
             r.serial(),
