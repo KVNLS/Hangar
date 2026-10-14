@@ -60,6 +60,8 @@ pub struct DevOptions {
     pub review: bool,
     /// Open the overview, log what it counts, then go back.
     pub overview: bool,
+    /// Worktree-relative path to open in the Files tab.
+    pub files: Option<String>,
     /// `dark`, `light` or `system`: render every settings page, then set the appearance.
     pub appearance: Option<String>,
     pub merge: Option<MergeStrategy>,
@@ -156,6 +158,7 @@ impl DevOptions {
             pr: var("HANGAR_DEV_PR"),
             review: flag("HANGAR_DEV_REVIEW"),
             overview: flag("HANGAR_DEV_OVERVIEW"),
+            files: var("HANGAR_DEV_FILES"),
             appearance: var("HANGAR_DEV_APPEARANCE"),
             merge: var("HANGAR_DEV_MERGE").and_then(|v| match v.as_str() {
                 "noff" => Some(MergeStrategy::NoFf),
@@ -252,6 +255,29 @@ pub(super) async fn run_dev_hooks(
     }
     if let Some(name) = dev.appearance.clone() {
         dev_settings(&this, &name, cx).await;
+    }
+    if let Some(path) = dev.files.clone() {
+        let _ = this.update_in(cx, |this, window, cx| this.set_files_open(true, window, cx));
+        cx.background_executor()
+            .timer(Duration::from_millis(800))
+            .await;
+        let _ = this.update(cx, |this, cx| {
+            this.files_panel
+                .update(cx, |panel, cx| panel.open(PathBuf::from(path), cx))
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        let _ = this.update(cx, |this, cx| {
+            let (files, rows, lines) = this.files_panel.read(cx).stats();
+            tracing::info!(
+                files,
+                rows,
+                ?lines,
+                open = this.files_open,
+                "HANGAR_DEV_FILES"
+            );
+        });
     }
     if dev.overview {
         let _ = this.update_in(cx, |this, window, cx| {

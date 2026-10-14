@@ -13,8 +13,8 @@ mod status;
 mod worktree;
 
 pub use diff::{
-    FileStat, diff_file, diff_files, diff_files_with, diff_paths, diff_stat, merge_base,
-    parse_numstat, untracked_files,
+    FileStat, diff_file, diff_files, diff_files_with, diff_paths, diff_stat, list_files,
+    merge_base, parse_numstat, untracked_files,
 };
 pub use error::{Error, Result};
 pub use gh::{CreatePr, Gh, GhStatus, PrInfo, gh_available};

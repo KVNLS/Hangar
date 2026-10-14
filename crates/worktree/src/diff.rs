@@ -128,6 +128,28 @@ pub fn untracked_files(worktree: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf
         .collect())
 }
 
+/// Every file in the worktree that is tracked or untracked-but-not-ignored, sorted, relative to
+/// the worktree. Tracked files deleted from disk are left out.
+pub fn list_files(worktree: &Path) -> Result<Vec<PathBuf>> {
+    let out = Git::new(worktree).run_bytes([
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    ])?;
+    let mut files: Vec<PathBuf> = out
+        .split(|&b| b == 0)
+        // A trailing slash marks a nested repository.
+        .filter(|f| !f.is_empty() && !f.ends_with(b"/"))
+        .map(bytes_to_path)
+        .filter(|p| worktree.join(p).symlink_metadata().is_ok())
+        .collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 const PATCH_ARGS: [&str; 10] = [
     "--raw",
     "--patch",

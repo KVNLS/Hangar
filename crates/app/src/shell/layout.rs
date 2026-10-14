@@ -61,8 +61,15 @@ impl HangarApp {
                 },
             })
         });
+        let files = source.as_ref().map(|s| crate::files_view::FilesSource {
+            workspace: s.workspace,
+            root: s.target.workspace.worktree_path.clone(),
+            diff: s.diff.clone(),
+        });
         self.changes_panel
             .update(cx, |panel, cx| panel.set_source(source, cx));
+        self.files_panel
+            .update(cx, |panel, cx| panel.set_source(files, cx));
     }
 
     pub(super) fn set_screen(
@@ -100,15 +107,33 @@ impl HangarApp {
         self.set_screen(screen, window, cx);
     }
 
+    /// The Files tab (not saved: it reopens on Device or Changes).
+    pub(super) fn set_files_open(
+        &mut self,
+        open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if open {
+            self.set_device_open(false, window, cx);
+            self.set_changes_open(false, window, cx);
+        }
+        self.files_open = open;
+        cx.notify();
+    }
+
     pub(super) fn set_changes_open(
         &mut self,
         open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Device and changes are tabs of one right panel.
+        // Device, changes and files are tabs of one right panel.
         if open && self.device.open {
             self.set_device_open(false, window, cx);
+        }
+        if open {
+            self.files_open = false;
         }
         if self.changes.open != open {
             self.changes.open = open;
@@ -195,6 +220,9 @@ impl HangarApp {
     ) {
         if open && self.changes.open {
             self.set_changes_open(false, window, cx);
+        }
+        if open {
+            self.files_open = false;
         }
         if self.device.open != open {
             self.device.open = open;

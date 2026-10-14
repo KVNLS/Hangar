@@ -72,6 +72,9 @@ impl Render for HangarApp {
             .on_action(cx.listener(|this, _: &ShowChangesTab, window, cx| {
                 this.set_changes_open(true, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &ShowFilesTab, window, cx| {
+                this.set_files_open(true, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &OpenReview, window, cx| {
                 this.set_screen(Screen::Review, window, cx)
             }))
@@ -263,7 +266,9 @@ impl HangarApp {
     /// Device and changes as tabs of one right panel; each tab keeps its own width.
     fn render_right_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let device_tab = self.device.open;
-        if !device_tab && !self.changes.open {
+        let changes_tab = !device_tab && self.changes.open;
+        let files_tab = !device_tab && !changes_tab && self.files_open;
+        if !device_tab && !changes_tab && !files_tab {
             return None;
         }
         let t = cx.tokens();
@@ -302,9 +307,18 @@ impl HangarApp {
                         this.trailing(CountBadge::new(n.to_string()))
                     })
                     .kbd("⌘2")
-                    .active(!device_tab)
+                    .active(changes_tab)
                     .on_click(
                         cx.listener(|this, _, window, cx| this.set_changes_open(true, window, cx)),
+                    ),
+            )
+            .child(
+                UiTab::new("tab-files", TabStyle::Panel, "Files")
+                    .icon(Lucide::Folder)
+                    .kbd("⌘3")
+                    .active(files_tab)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.set_files_open(true, window, cx)),
                     ),
             )
             .child(div().flex_1())
@@ -317,6 +331,7 @@ impl HangarApp {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.set_device_open(false, window, cx);
                         this.set_changes_open(false, window, cx);
+                        this.set_files_open(false, window, cx);
                     })),
             );
         let handle = div()
@@ -345,8 +360,10 @@ impl HangarApp {
                 .child(div().flex_1().min_h_0().map(|this| {
                     if device_tab {
                         this.child(self.device_panel.clone())
-                    } else {
+                    } else if changes_tab {
                         this.child(self.changes_panel.clone())
+                    } else {
+                        this.child(self.files_panel.clone())
                     }
                 }))
                 .child(handle)

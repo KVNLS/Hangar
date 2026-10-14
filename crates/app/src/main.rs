@@ -19,6 +19,9 @@
 //! - `HANGAR_DEV_REMOVE_PROJECT=<repo>` — forget the project (refused while it has active
 //!   workspaces). Never touches the repository.
 //!
+//! `HANGAR_DEV_FILES=<path>` opens the Files tab on the dev workspace, opens that file and logs the
+//! listed files, tree rows and viewer lines.
+//!
 //! `HANGAR_DEV_APPEARANCE=dark|light|system` renders every settings page, then sets and saves
 //! the appearance.
 //!

@@ -21,6 +21,7 @@ gpui_kit::assets::icon_assets!(
         House,
         Keyboard,
         LayoutGrid,
+        ListCollapse,
         Lock,
         MessageSquare,
         Pencil,

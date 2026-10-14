@@ -96,6 +96,7 @@ impl HangarApp {
                 Lucide::GitCommitHorizontal,
                 Box::new(ShowChangesTab),
             ),
+            command("Show files", Lucide::Folder, Box::new(ShowFilesTab)),
             command("Toggle sidebar", Lucide::PanelLeft, Box::new(ToggleSidebar)),
             command(
                 "Filter workspaces",
