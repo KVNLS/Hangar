@@ -349,7 +349,8 @@ impl TerminalView {
                 blank: false,
             };
             let shaped = self.shape_run(&run, cell, window);
-            overlays.push(fill(
+            // Backgrounds go under the text: overlays paint after it and would hide it.
+            quads.push(fill(
                 Bounds::new(cursor.origin, size(shaped.width(), cell.height)),
                 hsla(snapshot.background),
             ));
@@ -375,7 +376,7 @@ impl TerminalView {
                 bounds.right() - shaped.width() - cell.width,
                 bounds.bottom() - cell.height,
             );
-            overlays.push(fill(
+            quads.push(fill(
                 Bounds::new(origin, size(shaped.width(), cell.height)),
                 hsla(snapshot.foreground),
             ));
