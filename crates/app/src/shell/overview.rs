@@ -5,12 +5,72 @@ use hangar_core::Timestamp;
 
 use super::status::age_label;
 use super::*;
-use crate::ui::components::{AgentMark, Delta, Segmented, StateGlyph, UiButton, card};
+use crate::ui::components::{
+    AgentMark, Delta, Segmented, StateGlyph, UiButton, card, state_colors,
+};
 use gpui_kit::component::Icon;
 
 use crate::ui::{ActiveTokens as _, TypeScale as _};
 
+/// What a card's action button does for a workspace in a given state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CardAction {
+    /// Show the workspace.
+    Open,
+    /// Show the review screen.
+    Review,
+    /// Start the agent again (resuming its conversation when it can), then show it.
+    Restart,
+}
+
+/// Button label and action of an overview card. Approval and input are answered in the agent's
+/// pane, so they open it.
+pub(super) fn card_action(state: AgentState) -> (&'static str, CardAction) {
+    match state {
+        AgentState::Approval => ("Review request", CardAction::Open),
+        AgentState::Input => ("Reply", CardAction::Open),
+        AgentState::Failed => ("Retry", CardAction::Restart),
+        AgentState::Review => ("Review diff", CardAction::Review),
+        AgentState::Working => ("Open", CardAction::Open),
+        AgentState::Idle => ("Resume", CardAction::Restart),
+    }
+}
+
+/// States whose action button takes the state's colors (the rest are neutral).
+pub(super) fn card_action_tinted(state: AgentState) -> bool {
+    matches!(
+        state,
+        AgentState::Approval | AgentState::Input | AgentState::Failed | AgentState::Review
+    )
+}
+
 impl HangarApp {
+    fn run_card_action(
+        &mut self,
+        id: WorkspaceId,
+        action: CardAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let stopped = self
+            .live
+            .sessions
+            .get(&id)
+            .is_none_or(|l| l.session.status.is_terminal());
+        let restart = action == CardAction::Restart && stopped && !self.work.busy.contains(&id);
+        self.select_workspace(id, window, cx);
+        let screen = if action == CardAction::Review {
+            Screen::Review
+        } else {
+            Screen::Workspace
+        };
+        self.set_screen(screen, window, cx);
+        if restart {
+            let agent = self.agent_setup.agent.to_string();
+            self.start_session(id, agent, true, window, cx).detach();
+        }
+    }
+
     fn overview_card(&self, ws: &Workspace, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.tokens();
         let id = ws.id;
@@ -37,11 +97,13 @@ impl HangarApp {
                 }
             });
         let counts = self.diff_counts(id, cx);
-        let review = state == AgentState::Review;
-        let (action, action_icon) = if review {
-            ("Review diff", Lucide::FileDiff)
+        let device = self.device_pool.read(cx).device_name(id).map(str::to_owned);
+        let (action_label, action) = card_action(state);
+        let (action_fg, action_bg, action_border) = if card_action_tinted(state) {
+            let (fg, bg) = state_colors(state, t);
+            (fg, bg, bg)
         } else {
-            ("Open", Lucide::ArrowRight)
+            (t.tx2, t.elev, t.line2)
         };
         card(cx)
             .id(SharedString::from(format!("overview-{id}")))
@@ -104,21 +166,38 @@ impl HangarApp {
                     .gap_2()
                     .items_center()
                     .children(counts.map(|c| Delta::new(c.insertions, c.deletions)))
+                    .when_some(device, |this, device| {
+                        this.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .type_mono_small()
+                                .text_color(t.tx3)
+                                .child(format!("· {device}")),
+                        )
+                    })
                     .child(div().flex_1())
                     .child(
-                        UiButton::new(SharedString::from(format!("overview-action-{id}")))
-                            .icon(action_icon)
-                            .label(action)
-                            .small()
-                            .when(review, |b| b.primary())
+                        div()
+                            .id(SharedString::from(format!("overview-action-{id}")))
+                            .flex()
+                            .flex_none()
+                            .h(px(24.))
+                            .px_2()
+                            .items_center()
+                            .rounded(px(5.))
+                            .border_1()
+                            .border_color(action_border)
+                            .bg(action_bg)
+                            .text_color(action_fg)
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.85))
+                            .child(action_label)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_workspace(id, window, cx);
-                                let screen = if review {
-                                    Screen::Review
-                                } else {
-                                    Screen::Workspace
-                                };
-                                this.set_screen(screen, window, cx);
+                                cx.stop_propagation();
+                                this.run_card_action(id, action, window, cx);
                             })),
                     ),
             )
@@ -141,7 +220,7 @@ impl HangarApp {
         let needs_you = states.iter().filter(|s| s.needs_you()).count();
         let to_review = states.iter().filter(|s| **s == AgentState::Review).count();
         let summary = format!(
-            "{} workspace{} · {needs_you} need you · {to_review} to review",
+            "{} agent{} · {needs_you} need you · {to_review} to review",
             workspaces.len(),
             if workspaces.len() == 1 { "" } else { "s" }
         );
@@ -276,5 +355,44 @@ impl HangarApp {
                     }),
             )
             .text_color(t.tx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the shell glob-imports gpui, whose `test` macro would shadow `#[test]`.
+    use super::{CardAction, card_action, card_action_tinted};
+    use hangar_core::AgentState::{self, *};
+
+    #[test]
+    fn action_labels_follow_the_state() {
+        let labels: Vec<&str> = AgentState::ORDER
+            .into_iter()
+            .map(|s| card_action(s).0)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Review request",
+                "Reply",
+                "Retry",
+                "Review diff",
+                "Open",
+                "Resume"
+            ]
+        );
+        assert_eq!(card_action(Review).1, CardAction::Review);
+        assert_eq!(card_action(Failed).1, CardAction::Restart);
+        assert_eq!(card_action(Idle).1, CardAction::Restart);
+        assert_eq!(card_action(Approval).1, CardAction::Open);
+    }
+
+    #[test]
+    fn only_states_waiting_on_the_user_are_tinted() {
+        let tinted: Vec<AgentState> = AgentState::ORDER
+            .into_iter()
+            .filter(|s| card_action_tinted(*s))
+            .collect();
+        assert_eq!(tinted, [Approval, Input, Failed, Review]);
     }
 }
