@@ -368,6 +368,7 @@ pub struct HangarApp {
     live: LiveState,
     work: WorkState,
     toast: Option<toast::Toast>,
+    settings_ui: settings::SettingsUi,
 }
 
 impl HangarApp {
@@ -458,6 +459,7 @@ impl HangarApp {
         let sidebar_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter workspaces"));
         let filter_sub = cx.subscribe(&sidebar_filter, |_, _, _: &InputEvent, cx| cx.notify());
+        let (settings_ui, settings_sub) = settings::SettingsUi::new(window, cx);
         let appearance_observer = cx.observe_window_appearance(window, |this, window, cx| {
             if this.layout.appearance == crate::ui::theme::Appearance::System {
                 this.layout.appearance.apply(window, cx);
@@ -553,6 +555,7 @@ impl HangarApp {
                 busy: HashSet::new(),
             },
             toast: None,
+            settings_ui,
             _activity: Self::track_activity(cx),
             _subscriptions: vec![
                 // ACP agents run in their own process group and some (codex-acp) outlive a
@@ -565,6 +568,7 @@ impl HangarApp {
                     async {}
                 }),
                 select_sub,
+                settings_sub,
                 changes_sub,
                 device_sub,
                 filter_sub,

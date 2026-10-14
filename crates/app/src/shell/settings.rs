@@ -1,10 +1,18 @@
 //! Settings (⌘,): agents, devices, appearance and a read-only list of the keybindings.
 
+use std::cell::Cell;
+use std::io::Read as _;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::Icon;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::{Icon, Sizable as _};
 
 use hangar_devices::capacity::Pressure;
 
+use super::new_workspace::tilde;
 use super::*;
 use crate::device_panel::Platform;
 use crate::device_pool::policy::{self, Limit};
@@ -31,7 +39,7 @@ impl SettingsTab {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Agents => "Agents",
+            Self::Agents => "Agents & providers",
             Self::Devices => "Devices",
             Self::Appearance => "Appearance",
             Self::Keybindings => "Keybindings",
@@ -75,6 +83,92 @@ pub(super) const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Create workspace", "cmd-enter", "New workspace sheet"),
     ("Cancel", "escape", "New workspace sheet"),
 ];
+
+/// How long `<agent> --version` may take before it is given up on.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// View state of the settings screen that outlives a render.
+pub(super) struct SettingsUi {
+    keys_filter: Entity<InputState>,
+    /// Agent id → version printed by `--version`, read once per run.
+    versions: HashMap<String, String>,
+    versions_started: Cell<bool>,
+}
+
+impl SettingsUi {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<HangarApp>) -> (Self, Subscription) {
+        let keys_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search actions or shortcuts"));
+        let sub = cx.subscribe(&keys_filter, |_, _, _: &InputEvent, cx| cx.notify());
+        (
+            Self {
+                keys_filter,
+                versions: HashMap::new(),
+                versions_started: Cell::new(false),
+            },
+            sub,
+        )
+    }
+}
+
+/// The first version-looking word of `--version` output (`2.1.4 (Claude Code)` → `2.1.4`,
+/// `zsh 5.9 (arm64-apple-darwin24.0)` → `5.9`, `v0.3.1` → `0.3.1`).
+pub(super) fn parse_version(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find(|l| !l.trim().is_empty())?
+        .split_whitespace()
+        .find_map(|word| {
+            let word = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            let word = word.strip_prefix('v').unwrap_or(word);
+            (word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('.'))
+                .then(|| word.to_owned())
+        })
+}
+
+/// Runs `<program> --version` with `path` as `PATH`; `None` when it fails, prints no version or
+/// outlasts [`VERSION_TIMEOUT`]. Blocking: call it off the UI thread.
+fn program_version(program: &Path, path: Option<&str>) -> Option<String> {
+    let mut command = Command::new(program);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("agent-version".into())
+        .spawn(move || {
+            let mut out = String::new();
+            let _ = stdout.read_to_string(&mut out);
+            let _ = tx.send(out);
+        })
+        .ok()?;
+    let out = rx.recv_timeout(VERSION_TIMEOUT).ok();
+    let _ = child.kill();
+    let _ = child.wait();
+    parse_version(&out?)
+}
+
+/// Whether a SHORTCUTS row matches the keybindings search: by action, context or keys (`cmd-k`,
+/// `⌘K`).
+pub(super) fn shortcut_matches(label: &str, keys: &str, context: &str, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    let caps = key_caps(keys).concat().to_lowercase();
+    let compact: String = query.chars().filter(|c| !c.is_whitespace()).collect();
+    label.to_lowercase().contains(&query)
+        || context.to_lowercase().contains(&query)
+        || keys.contains(&query)
+        || caps.contains(&compact)
+}
 
 /// `cmd-shift-r` → `["⌘", "⇧", "R"]`.
 pub(super) fn key_caps(keystroke: &str) -> Vec<String> {
@@ -140,8 +234,42 @@ impl HangarApp {
             .child(div().type_secondary().text_color(t.tx2).child(hint))
     }
 
+    /// Reads every found agent's version once, in the background.
+    fn load_agent_versions(&self, cx: &mut Context<Self>) {
+        if self.agent_setup.path.is_none() || self.settings_ui.versions_started.replace(true) {
+            return;
+        }
+        let path = self.agent_setup.path.as_ref().map(|p| p.value.clone());
+        let programs: Vec<(String, std::path::PathBuf)> = self
+            .agent_setup
+            .agent_choices
+            .iter()
+            .filter_map(|c| Some((c.id.clone(), c.path.clone()?)))
+            .collect();
+        cx.spawn(async move |this, cx| {
+            let tasks: Vec<_> = programs
+                .into_iter()
+                .map(|(id, program)| {
+                    let path = path.clone();
+                    cx.background_executor()
+                        .spawn(async move { (id, program_version(&program, path.as_deref())) })
+                })
+                .collect();
+            for task in tasks {
+                let (id, version) = task.await;
+                let Some(version) = version else { continue };
+                let _ = this.update(cx, |this, cx| {
+                    this.settings_ui.versions.insert(id, version);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     fn render_settings_agents(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
+        self.load_agent_versions(cx);
         let detected = self.agent_setup.path.is_some();
         let rows = self.agent_setup.agent_choices.iter().map(|choice| {
             let id = SharedString::from(choice.id.clone());
@@ -151,6 +279,13 @@ impl HangarApp {
                     if detected && !choice.installed && !acp.install_hint.is_empty() =>
                 {
                     format!("{} · {}", acp.program, acp.install_hint)
+                }
+                _ if choice.path.is_some() => {
+                    let path = choice.path.as_deref().map(tilde).unwrap_or_default();
+                    match self.settings_ui.versions.get(&choice.id) {
+                        Some(version) => format!("{path} · {version}"),
+                        None => path,
+                    }
                 }
                 Some(preset) => preset.program().to_owned(),
                 None => String::new(),
@@ -229,8 +364,8 @@ impl HangarApp {
         v_flex()
             .gap_4()
             .child(self.settings_heading(
-                "Agents",
-                "CLIs Hangar can launch in a workspace. Each runs in its own worktree and terminal.",
+                "Agents & providers",
+                "CLIs Hangar can launch in a workspace. Each runs in its own worktree and PTY.",
                 cx,
             ))
             .child(card(cx).children(rows))
@@ -499,92 +634,112 @@ impl HangarApp {
                 .cloned()
                 .flatten();
             let mut seen = HashSet::new();
-            let rows: Vec<AnyElement> = picker
-                .entries()
-                .iter()
-                .filter(|e| e.key.platform == platform)
-                .filter(|e| {
-                    !e.info
-                        .name
-                        .starts_with(crate::device_pool::backend::CLONE_PREFIX)
-                })
-                .filter(|e| seen.insert(e.key.clone()))
-                .map(|entry| {
-                    let base_key = entry.key.clone();
-                    let is_base = base.as_deref() == Some(entry.key.id.as_str());
-                    let ready = entry.ready;
-                    let color = if ready { t.grn } else { t.tx3 };
-                    h_flex()
-                        .h(px(36.))
-                        .px(px(14.))
-                        .gap_3()
-                        .items_center()
-                        .border_b_1()
-                        .border_color(t.line)
-                        .text_size(px(12.))
-                        .child(
-                            Icon::new(Lucide::Smartphone)
-                                .size(px(13.))
-                                .text_color(t.tx3),
-                        )
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .gap_2()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(entry.info.name.clone()),
-                                )
-                                .when(is_base, |this| this.child(CountBadge::new("Base"))),
-                        )
-                        .child(
-                            div()
-                                .w(px(110.))
-                                .type_mono_small()
-                                .text_color(t.tx2)
-                                .truncate()
-                                .child(entry.info.runtime.clone()),
-                        )
-                        .child(
-                            h_flex()
-                                .w(px(90.))
-                                .gap_1p5()
-                                .items_center()
-                                .font_mono()
-                                .text_size(px(11.))
-                                .text_color(color)
-                                .child(div().size(px(6.)).rounded_full().bg(color))
-                                .child(entry.info.state.to_lowercase()),
-                        )
-                        .child(
-                            UiButton::new(SharedString::from(format!(
-                                "settings-device-{}",
-                                entry.key.value()
-                            )))
-                            .label("Make base")
-                            .small()
-                            .disabled(is_base)
-                            .tooltip(
-                                "New workspaces of this platform get their own device made \
-                                 from this one",
+            let rows: Vec<AnyElement> =
+                picker
+                    .entries()
+                    .iter()
+                    .filter(|e| e.key.platform == platform)
+                    .filter(|e| {
+                        !e.info
+                            .name
+                            .starts_with(crate::device_pool::backend::CLONE_PREFIX)
+                    })
+                    .filter(|e| seen.insert(e.key.clone()))
+                    .map(|entry| {
+                        let base_key = entry.key.clone();
+                        let boot_key = entry.key.clone();
+                        let can_boot = entry.key.platform.can_boot(&entry.info);
+                        let is_base = base.as_deref() == Some(entry.key.id.as_str());
+                        let ready = entry.ready;
+                        let color = if ready { t.grn } else { t.tx3 };
+                        h_flex()
+                            .h(px(36.))
+                            .px(px(14.))
+                            .gap_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(t.line)
+                            .text_size(px(12.))
+                            .child(
+                                Icon::new(Lucide::Smartphone)
+                                    .size(px(13.))
+                                    .text_color(t.tx3),
                             )
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    let key = base_key.clone();
-                                    this.device_pool.update(cx, |pool, cx| {
-                                        pool.set_platform_base(key.platform, key.id, cx)
-                                    });
-                                },
-                            )),
-                        )
-                        .into_any_element()
-                })
-                .collect();
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(entry.info.name.clone()),
+                                    )
+                                    .when(is_base, |this| this.child(CountBadge::new("Base"))),
+                            )
+                            .child(
+                                div()
+                                    .w(px(110.))
+                                    .type_mono_small()
+                                    .text_color(t.tx2)
+                                    .truncate()
+                                    .child(entry.info.runtime.clone()),
+                            )
+                            .child(
+                                h_flex()
+                                    .w(px(90.))
+                                    .gap_1p5()
+                                    .items_center()
+                                    .font_mono()
+                                    .text_size(px(11.))
+                                    .text_color(color)
+                                    .child(div().size(px(6.)).rounded_full().bg(color))
+                                    .child(entry.info.state.to_lowercase()),
+                            )
+                            .when(can_boot, |this| {
+                                this.child(
+                                    UiButton::new(SharedString::from(format!(
+                                        "settings-boot-{}",
+                                        entry.key.value()
+                                    )))
+                                    .label("Boot")
+                                    .small()
+                                    .tooltip("Boot this device and open it in the Device panel")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        let key = boot_key.clone();
+                                        this.device_panel.update(cx, |panel, cx| {
+                                            panel.boot_device(key, window, cx)
+                                        });
+                                    })),
+                                )
+                            })
+                            .child(
+                                UiButton::new(SharedString::from(format!(
+                                    "settings-device-{}",
+                                    entry.key.value()
+                                )))
+                                .label("Make base")
+                                .small()
+                                .disabled(is_base)
+                                .tooltip(
+                                    "New workspaces of this platform get their own device made \
+                                 from this one",
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        let key = base_key.clone();
+                                        this.device_pool.update(cx, |pool, cx| {
+                                            pool.set_platform_base(key.platform, key.id, cx)
+                                        });
+                                    },
+                                )),
+                            )
+                            .into_any_element()
+                    })
+                    .collect();
             let empty = rows.is_empty();
             v_flex()
                 .gap_2()
@@ -684,30 +839,37 @@ impl HangarApp {
 
     fn render_settings_keys(&self, cx: &mut Context<Self>) -> Div {
         let t = cx.tokens();
-        let rows = SHORTCUTS.iter().map(|(label, keys, context)| {
-            h_flex()
-                .h(px(32.))
-                .px(px(14.))
-                .gap_3()
-                .items_center()
-                .border_b_1()
-                .border_color(t.line)
-                .text_size(px(12.))
-                .child(div().flex_1().child(*label))
-                .child(
-                    div()
-                        .w(px(160.))
-                        .text_size(px(11.))
-                        .text_color(t.tx3)
-                        .child(*context),
-                )
-                .child(
-                    h_flex()
-                        .w(px(110.))
-                        .justify_end()
-                        .child(kbd_keys(key_caps(keys))),
-                )
-        });
+        let filter = &self.settings_ui.keys_filter;
+        let query = filter.read(cx).value().to_string();
+        let rows: Vec<Div> = SHORTCUTS
+            .iter()
+            .filter(|(label, keys, context)| shortcut_matches(label, keys, context, &query))
+            .map(|(label, keys, context)| {
+                h_flex()
+                    .h(px(32.))
+                    .px(px(14.))
+                    .gap_3()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(t.line)
+                    .text_size(px(12.))
+                    .child(div().flex_1().child(*label))
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .text_size(px(11.))
+                            .text_color(t.tx3)
+                            .child(*context),
+                    )
+                    .child(
+                        h_flex()
+                            .w(px(110.))
+                            .justify_end()
+                            .child(kbd_keys(key_caps(keys))),
+                    )
+            })
+            .collect();
+        let empty = rows.is_empty();
         v_flex()
             .gap_4()
             .child(self.settings_heading(
@@ -715,7 +877,21 @@ impl HangarApp {
                 "Every action is reachable from the keyboard.",
                 cx,
             ))
-            .child(card(cx).children(rows))
+            .child(
+                Input::new(filter)
+                    .small()
+                    .prefix(Icon::new(IconName::Search).size(px(12.)).text_color(t.tx3)),
+            )
+            .child(card(cx).children(rows).when(empty, |this| {
+                this.child(
+                    div()
+                        .px(px(14.))
+                        .py_3()
+                        .text_size(px(12.))
+                        .text_color(t.tx3)
+                        .child("No shortcut matches."),
+                )
+            }))
     }
 
     pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -788,7 +964,59 @@ impl HangarApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{SHORTCUTS, key_caps};
+    use super::{SHORTCUTS, key_caps, parse_version, shortcut_matches};
+
+    #[test]
+    fn versions() {
+        assert_eq!(
+            parse_version("2.1.4 (Claude Code)\n").as_deref(),
+            Some("2.1.4")
+        );
+        assert_eq!(
+            parse_version("zsh 5.9 (arm64-apple-darwin24.0)").as_deref(),
+            Some("5.9")
+        );
+        assert_eq!(parse_version("\nv0.3.1").as_deref(), Some("0.3.1"));
+        assert_eq!(parse_version("codex-cli 0.46.0").as_deref(), Some("0.46.0"));
+        assert_eq!(parse_version("usage: foo [options]"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn shortcut_search() {
+        assert!(shortcut_matches("Command palette", "cmd-k", "Global", ""));
+        assert!(shortcut_matches(
+            "Command palette",
+            "cmd-k",
+            "Global",
+            "PALETTE"
+        ));
+        assert!(shortcut_matches(
+            "Command palette",
+            "cmd-k",
+            "Global",
+            "cmd-k"
+        ));
+        assert!(shortcut_matches("Command palette", "cmd-k", "Global", "⌘K"));
+        assert!(shortcut_matches(
+            "Review changes",
+            "cmd-shift-r",
+            "Workspace",
+            "⌘ ⇧ r"
+        ));
+        assert!(shortcut_matches(
+            "Cancel",
+            "escape",
+            "New workspace sheet",
+            "sheet"
+        ));
+        assert!(!shortcut_matches(
+            "Command palette",
+            "cmd-k",
+            "Global",
+            "⌘J"
+        ));
+    }
 
     #[test]
     fn caps() {
