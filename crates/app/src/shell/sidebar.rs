@@ -5,7 +5,6 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::select::Select;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _};
 
@@ -454,22 +453,6 @@ impl HangarApp {
                                 .child(notice),
                         )
                     }),
-            )
-            .child(
-                h_flex()
-                    .px(px(10.))
-                    .py_1p5()
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(t.line)
-                    .text_size(px(12.))
-                    .text_color(t.tx2)
-                    .child("Agent")
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(Select::new(&self.agent_setup.agent_select).small()),
-                    ),
             )
             .child(
                 div()

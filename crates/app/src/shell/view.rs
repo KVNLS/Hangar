@@ -206,20 +206,6 @@ impl Render for HangarApp {
     }
 }
 
-pub(super) fn agent_options(choices: &[AgentChoice]) -> Vec<AgentOption> {
-    choices
-        .iter()
-        .map(|c| AgentOption {
-            id: c.id.clone().into(),
-            title: if c.installed {
-                c.name.clone().into()
-            } else {
-                format!("{} (not found)", c.name).into()
-            },
-        })
-        .collect()
-}
-
 impl HangarApp {
     pub(super) fn render_pane(&self, pane: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.tokens();
@@ -304,14 +290,19 @@ impl HangarApp {
                 (false, false) => "Start",
             };
             can_start.then(|| {
-                UiButton::new(("start", pane))
-                    .icon(Lucide::Play)
-                    .label(format!("{label} {}", agent_display_name(&agent)))
-                    .ghost()
-                    .small()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.start_agent_in(ws_id, true, window, cx)
-                    }))
+                h_flex()
+                    .items_center()
+                    .child(
+                        UiButton::new(("start", pane))
+                            .icon(Lucide::Play)
+                            .label(format!("{label} {}", agent_display_name(&agent)))
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_agent_in(ws_id, true, window, cx)
+                            })),
+                    )
+                    .child(self.agent_menu(pane, ws_id, agent, cx))
             })
         });
         let new_conversation = workspace.map(|ws| ws.id).filter(|id| {
@@ -644,6 +635,49 @@ impl HangarApp {
         )
     }
 
+    /// The chevron next to Start: starts another agent in the workspace, which then keeps it.
+    fn agent_menu(
+        &self,
+        pane: usize,
+        ws_id: WorkspaceId,
+        current: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let app = cx.entity().downgrade();
+        let choices: Vec<(String, String, bool)> = self
+            .agent_setup
+            .agent_choices
+            .iter()
+            .map(|c| (c.id.clone(), c.name.clone(), c.installed))
+            .collect();
+        Button::new(("agent-menu", pane))
+            .ghost()
+            .small()
+            .icon(Lucide::ChevronDown)
+            .tooltip("Start another agent")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                for (id, name, installed) in &choices {
+                    let label = if *installed {
+                        name.clone()
+                    } else {
+                        format!("{name} (not on PATH)")
+                    };
+                    let (app, id) = (app.clone(), id.clone());
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .checked(id == current)
+                            .disabled(!installed)
+                            .on_click(move |_, window, cx| {
+                                let _ = app.update(cx, |this, cx| {
+                                    this.start_agent_with(ws_id, id.clone(), window, cx)
+                                });
+                            }),
+                    );
+                }
+                menu
+            })
+    }
+
     /// Starts the workspace's agent (see [`Self::agent_for`]) from the pane header and shows it.
     fn start_agent_in(
         &mut self,
@@ -653,6 +687,29 @@ impl HangarApp {
         cx: &mut Context<Self>,
     ) {
         let agent = self.agent_for(ws_id);
+        self.start_agent_with_resume(ws_id, agent, resume, window, cx);
+    }
+
+    /// Starts `agent` in the workspace; it resumes the saved chat only if it is the workspace's agent.
+    fn start_agent_with(
+        &mut self,
+        ws_id: WorkspaceId,
+        agent: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let resume = agent == self.agent_for(ws_id);
+        self.start_agent_with_resume(ws_id, agent, resume, window, cx);
+    }
+
+    fn start_agent_with_resume(
+        &mut self,
+        ws_id: WorkspaceId,
+        agent: String,
+        resume: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.layout.panes.show(ws_id);
         self.panes_changed(window, cx);
         self.start_session(ws_id, agent, resume, window, cx)

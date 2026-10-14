@@ -79,7 +79,6 @@ use dev::run_dev_hooks;
 pub use device_api::{DeviceFrame, DeviceStatusInfo};
 use dialogs::DeleteWorkspaceDialog;
 pub use run::RunConfig;
-use view::agent_options;
 
 /// How long a killed agent gets to exit before its worktree is removed.
 const KILL_GRACE: Duration = Duration::from_secs(3);
@@ -374,7 +373,6 @@ struct Layout {
 /// Which agent new sessions start, what is installed, and the login PATH they run with.
 struct AgentSetup {
     path: Option<ResolvedPath>,
-    agent_select: Entity<AgentSelect>,
     agent: SharedString,
     agent_chosen_by_user: bool,
     /// Agent presets with their install state (all assumed installed until the PATH is known).
@@ -389,7 +387,7 @@ struct LiveState {
     sessions: HashMap<WorkspaceId, LiveSession>,
     /// Structured conversations each workspace can resume (saved in settings).
     saved_chats: HashMap<WorkspaceId, ops::SavedChat>,
-    /// The agent each workspace last started; workspaces without one use the picker's.
+    /// The agent each workspace last started; workspaces without one use the default agent.
     workspace_agents: HashMap<WorkspaceId, String>,
     /// Build and dev-server tabs per workspace (⌘R).
     runs: HashMap<WorkspaceId, run::WorkspaceRun>,
@@ -461,30 +459,7 @@ impl HangarApp {
                 path: None,
             })
             .collect();
-        let options = agent_options(&initial_choices);
         let agent: SharedString = agents::FALLBACK_AGENT.into();
-        let selected = options.iter().position(|o| o.id == agent);
-        let agent_select = cx.new(|cx| {
-            SelectState::new(
-                options,
-                selected.map(|row| gpui_kit::component::IndexPath::default().row(row)),
-                window,
-                cx,
-            )
-        });
-        let select_sub = cx.subscribe_in(
-            &agent_select,
-            window,
-            |this, _, event: &SelectEvent<Vec<AgentOption>>, window, cx| {
-                let SelectEvent::Confirm(Some(id)) = event else {
-                    return;
-                };
-                this.agent_setup.agent = id.clone();
-                this.agent_setup.agent_chosen_by_user = true;
-                this.save_agent(window, cx);
-                cx.notify();
-            },
-        );
         let pane_groups = Self::new_pane_groups(1, window, cx);
 
         let changes_panel = cx.new(ChangesPanel::new);
@@ -631,7 +606,6 @@ impl HangarApp {
             },
             agent_setup: AgentSetup {
                 path: None,
-                agent_select,
                 agent,
                 agent_chosen_by_user: false,
                 agent_choices: initial_choices,
@@ -676,7 +650,6 @@ impl HangarApp {
                     this.flush_layout();
                     async {}
                 }),
-                select_sub,
                 settings_sub,
                 changes_sub,
                 files_sub,
@@ -858,10 +831,6 @@ impl HangarApp {
                 if let Some(agent) = loaded.agent.filter(|a| agents::preset(a).is_some()) {
                     self.agent_setup.agent = agent.into();
                     self.agent_setup.agent_chosen_by_user = true;
-                    let agent = self.agent_setup.agent.clone();
-                    self.agent_setup.agent_select.update(cx, |select, cx| {
-                        select.set_selected_value(&agent, window, cx);
-                    });
                 }
                 if let Some(err) = loaded.settings_error {
                     self.report(&err, window, cx);
@@ -902,19 +871,12 @@ impl HangarApp {
                 .background_executor()
                 .spawn(async move { agents::choices(Some(&value)) })
                 .await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.set_agent_choices(choices, window, cx)
-            });
+            let _ = this.update(cx, |this, cx| this.set_agent_choices(choices, cx));
         })
         .detach();
     }
 
-    fn set_agent_choices(
-        &mut self,
-        choices: Vec<AgentChoice>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_agent_choices(&mut self, choices: Vec<AgentChoice>, cx: &mut Context<Self>) {
         if !self.agent_setup.agent_chosen_by_user {
             self.agent_setup.agent = agents::default_agent(&choices).into();
         }
@@ -924,13 +886,7 @@ impl HangarApp {
             .map(|c| c.id.as_str())
             .collect();
         tracing::info!(?installed, agent = %self.agent_setup.agent, "detected agents");
-        let agent = self.agent_setup.agent.clone();
-        let options = agent_options(&choices);
         self.agent_setup.agent_choices = choices;
-        self.agent_setup.agent_select.update(cx, |select, cx| {
-            select.set_items(options, window, cx);
-            select.set_selected_value(&agent, window, cx);
-        });
         cx.notify();
     }
 
