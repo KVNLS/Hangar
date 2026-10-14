@@ -212,7 +212,8 @@ Git access is the `git` CLI with porcelain output, not a library.
   deprecated). Both get the hangar bridge through `session/new`. codex-acp checked at the protocol level:
   standard `modes` (Read Only default, Default, Full Access), loadSession, tool calls, session/new MCP servers
   used (MCP tool calls ask for approval). Its turn fails while `~/.codex/config.toml` picks a model the
-  ChatGPT login refuses (owner's config, left alone). Gemini is not signed in here: `session/new` answers
+  ChatGPT login refuses (owner's config, left alone). Gemini is not signed in here (Google sign-in for
+  individuals no longer works with Gemini CLI): `session/new` answers
   -32000, which Hangar now reports as `NotSignedIn` with each preset's login hint. Gemini turns unchecked.
 - Model and effort: the composer shows a chip per non-mode `configOptions` select the agent offers (Claude
   Code: model, effort, fast mode; Codex: model, then reasoning effort once a model with efforts is picked;
@@ -271,5 +272,6 @@ Git access is the `git` CLI with porcelain output, not a library.
   sheet until `stylus_handwriting_enabled` is turned off.
 
 ## Next
-- Gemini over ACP: sign in (`gemini`, Log in with Google), then check a turn, modes and MCP live.
+- Gemini over ACP: Google sign-in for individuals is retired ("migrate to Antigravity"); needs a
+  `GEMINI_API_KEY` (or Vertex AI) before a turn, modes and MCP can be checked live, or drop the presets.
 - Device panel visual pass (controls, logs pane, Rotate, boot stage text never seen on screen by Claude).

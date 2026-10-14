@@ -484,8 +484,9 @@ pub fn acp_presets() -> Vec<AcpAdapter> {
         AcpAdapter::new("gemini-acp", "Gemini CLI (structured)", "gemini")
             .with_args(["--acp", "--skip-trust"])
             .with_install_hint("npm install -g @google/gemini-cli")
+            // Google sign-in for individuals was retired (Gemini Code Assist → Antigravity).
             .with_login_hint(
-                "Run `gemini` in a terminal and choose Log in with Google, or set GEMINI_API_KEY.",
+                "Set GEMINI_API_KEY, or run `gemini` in a terminal and choose an API key or Vertex AI.",
             ),
     ]
 }
