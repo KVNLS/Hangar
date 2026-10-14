@@ -47,6 +47,19 @@ impl Render for HangarApp {
             .on_action(
                 cx.listener(|this, _: &AddProject, window, cx| this.pick_project(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ShowDeviceTab, window, cx| {
+                this.set_device_open(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowChangesTab, window, cx| {
+                this.set_changes_open(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenReview, window, cx| {
+                this.set_screen(Screen::Review, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),
+            )
+            .on_action(|_: &ToggleTheme, window, cx| HangarApp::toggle_theme(window, cx))
             .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
                 if let Some(project) = this.current_project() {
                     this.sidebar_open = true;
@@ -76,6 +89,7 @@ impl Render for HangarApp {
             .child(main)
             .child(self.render_status_bar(cx))
             .children(self.render_new_workspace_sheet(cx))
+            .children(self.render_palette(cx))
     }
 }
 

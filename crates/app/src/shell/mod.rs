@@ -6,6 +6,7 @@ mod dialogs;
 mod layout;
 mod lifecycle;
 mod new_workspace;
+mod palette;
 mod sidebar;
 mod status;
 mod view;
@@ -75,7 +76,9 @@ actions!(
         ShowChangesTab,
         OpenReview,
         SubmitSheet,
-        CloseSheet
+        CloseSheet,
+        OpenPalette,
+        ToggleTheme
     ]
 );
 
@@ -86,6 +89,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-alt-shift-p", ToggleDeviceStats, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-n", NewWorkspace, None),
+        KeyBinding::new("cmd-k", OpenPalette, None),
         KeyBinding::new("cmd-p", FilterWorkspaces, None),
         KeyBinding::new("cmd-o", AddProject, None),
         KeyBinding::new("cmd-1", ShowDeviceTab, None),
@@ -189,6 +193,7 @@ pub struct HangarApp {
     new_workspace: Option<new_workspace::NewWorkspaceSheet>,
     /// Agent presets with their install state (all assumed installed until the PATH is known).
     agent_choices: Vec<AgentChoice>,
+    palette: Option<palette::Palette>,
     creating: HashSet<ProjectId>,
     /// Workspaces with an archive, restore or delete in flight.
     busy: HashSet<WorkspaceId>,
@@ -339,6 +344,7 @@ impl HangarApp {
             split: None,
             new_workspace: None,
             agent_choices: initial_choices,
+            palette: None,
             creating: HashSet::new(),
             busy: HashSet::new(),
             diffs: HashMap::new(),
@@ -556,5 +562,44 @@ impl HangarApp {
             .ok()
             .flatten()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A key binding without an `on_action` handler does nothing, silently. Every action
+    /// declared for the shell must be taken as `&Action` by some handler in the shell's sources.
+    #[test]
+    fn every_shell_action_has_a_handler() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell");
+        let sources: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .collect();
+        let module = std::fs::read_to_string(dir.join("mod.rs")).unwrap();
+        let start = module.find("actions!(").unwrap();
+        let list = &module[start..];
+        let list = &list[list.find('[').unwrap() + 1..list.find(']').unwrap()];
+        let names: Vec<&str> = list
+            .split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .collect();
+        assert!(names.len() > 5, "{names:?}");
+        let missing: Vec<&str> = names
+            .into_iter()
+            .filter(|name| {
+                let taken = format!("&{name}");
+                !sources.iter().any(|s| {
+                    s.match_indices(&taken).any(|(at, _)| {
+                        // `&Name` followed by a non-identifier char (not `&NameLonger`).
+                        !s[at + taken.len()..]
+                            .starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                    })
+                })
+            })
+            .collect();
+        assert!(missing.is_empty(), "actions without a handler: {missing:?}");
     }
 }
