@@ -278,6 +278,15 @@ impl<S: Session> PoolMachine<S> {
         true
     }
 
+    /// The device `ws` should use changed (a new assignment, or single-device mode switched on
+    /// or off): it leaves the one it uses. Its waiting calls fail with `message`, its
+    /// reservation ends once its calls in flight end, and its next call picks a device afresh.
+    pub(super) fn unbind(&mut self, ws: WorkspaceId, now: Instant, message: &str) {
+        self.leave(ws, now, message);
+        self.bindings.remove(&ws);
+        self.prune_bindings();
+    }
+
     /// Takes the lease on `key` from `ws` whatever it has in flight.
     pub(super) fn drop_holder(&mut self, key: &PoolKey, ws: WorkspaceId, now: Instant) {
         if let Some(device) = self.devices.get_mut(key) {

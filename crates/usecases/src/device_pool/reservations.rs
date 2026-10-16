@@ -31,6 +31,15 @@ impl<S: Session> PoolMachine<S> {
     /// it out of line: its waiting tickets fail. Whether another workspace was waiting for a
     /// device it held.
     pub fn release_reservation(&mut self, ws: WorkspaceId, now: Instant) -> bool {
+        let waited = self.leave(ws, now, RELEASED);
+        self.prune_bindings();
+        self.enforce_limit();
+        waited
+    }
+
+    /// Fails the waiting tickets of `ws` with `message` and ends its reservations (once its
+    /// calls in flight end). Whether another workspace was waiting for a device it held.
+    pub(super) fn leave(&mut self, ws: WorkspaceId, now: Instant, message: &str) -> bool {
         let mut cancelled = Vec::new();
         for device in self.devices.values_mut() {
             cancelled.extend(device.leases.cancel(&ws));
@@ -38,7 +47,7 @@ impl<S: Session> PoolMachine<S> {
         for token in cancelled {
             self.push(Command::FailLease {
                 token,
-                message: RELEASED.into(),
+                message: message.into(),
             });
         }
         let held: Vec<PoolKey> = self
@@ -57,8 +66,6 @@ impl<S: Session> PoolMachine<S> {
             tracing::info!(target: "device_pool", workspace = %ws, ?key, "reservation released");
             self.push_grants(&key, granted);
         }
-        self.prune_bindings();
-        self.enforce_limit();
         waited
     }
 

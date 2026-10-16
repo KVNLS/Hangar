@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use hangar_core::WorkspaceId;
 use hangar_core::device::{DeviceKey, Platform, Target, clone_name};
@@ -9,6 +10,10 @@ use hangar_core::device::{DeviceKey, Platform, Target, clone_name};
 use super::policy::{Assignment, LeaseQueue};
 use super::shutdown::Replaced;
 use super::{PoolDevice, PoolKey, PoolMachine, Save, Session, State, WorkspaceRef};
+
+/// What a waiting call gets when its workspace is given another device.
+const REASSIGNED: &str =
+    "this workspace was given another device while this call waited; call again";
 
 impl<S: Session> PoolMachine<S> {
     /// Records the workspace (name, worktree) for later calls that only have its id.
@@ -42,12 +47,14 @@ impl<S: Session> PoolMachine<S> {
 
     /// Assigns a platform and base device to a workspace (New workspace sheet, device panel).
     /// A different base replaces the workspace's own device: it is shut down and, when it is a
-    /// simulator the pool created, deleted (returned for the caller to carry out).
+    /// simulator the pool created, deleted (returned for the caller to carry out). The
+    /// workspace leaves the device it used ([`Self::unbind`]).
     pub fn assign(
         &mut self,
         ws: WorkspaceId,
         platform: Platform,
         base: String,
+        now: Instant,
     ) -> Option<Replaced<S>> {
         let previous = self.assignments.get(&ws).cloned();
         if previous
@@ -57,6 +64,7 @@ impl<S: Session> PoolMachine<S> {
             return None;
         }
         tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), %base, "device assigned");
+        self.unbind(ws, now, REASSIGNED);
         let assignment = Assignment::new(platform, base.clone());
         self.assignments.insert(ws, assignment.clone());
         self.save(Save::Assignment(ws, assignment));

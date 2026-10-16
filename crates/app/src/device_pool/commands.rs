@@ -171,7 +171,7 @@ impl DevicePool {
                 .await;
             let _ = this.update(cx, |pool, cx| {
                 pool.machine
-                    .host_detected(host.map_err(|e| e.to_string()), cost);
+                    .host_detected(host.map_err(|e| e.to_string()), cost, Instant::now());
                 pool.run(cx);
                 cx.notify();
             });

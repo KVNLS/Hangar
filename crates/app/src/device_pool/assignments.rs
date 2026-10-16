@@ -36,7 +36,10 @@ impl DevicePool {
         base: String,
         cx: &mut Context<Self>,
     ) {
-        if let Some(Replaced { shutdown, clone }) = self.machine.assign(ws, platform, base) {
+        if let Some(Replaced { shutdown, clone }) =
+            self.machine
+                .assign(ws, platform, base, std::time::Instant::now())
+        {
             let shutdown = match shutdown {
                 Some(job) => self.run_shutdown(job, cx),
                 None => Task::ready(Ok(())),

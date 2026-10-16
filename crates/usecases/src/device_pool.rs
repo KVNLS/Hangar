@@ -395,6 +395,7 @@ impl<S: Session> PoolMachine<S> {
                 });
             }
         }
+        self.waiting_slot.remove(key);
         self.bindings.retain(|_, k| k != key);
     }
 

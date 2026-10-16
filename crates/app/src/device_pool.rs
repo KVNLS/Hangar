@@ -266,7 +266,7 @@ impl DevicePool {
     }
 
     pub fn set_limit(&mut self, limit: Limit, cx: &mut Context<Self>) {
-        self.machine.set_limit(limit);
+        self.machine.set_limit(limit, std::time::Instant::now());
         self.run(cx);
         cx.notify();
     }

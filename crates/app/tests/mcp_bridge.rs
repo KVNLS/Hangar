@@ -249,7 +249,7 @@ fn shared_pool(workspaces: &[WorkspaceRef]) -> Pool {
         efficiency_cores: 12,
         pressure: Pressure::Normal,
     };
-    m.host_detected(Ok(host), DeviceCost::android(2048, 2));
+    m.host_detected(Ok(host), DeviceCost::android(2048, 2), Instant::now());
     m.take_commands();
     Arc::new(Mutex::new(m))
 }
