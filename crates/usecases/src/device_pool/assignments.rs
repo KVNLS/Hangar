@@ -100,12 +100,17 @@ impl<S: Session> PoolMachine<S> {
         self.devices.get(key).map(|d| d.name.as_str())
     }
 
-    /// Which device the workspace uses now.
+    /// Which device the workspace uses now: the one it is bound to (possibly another
+    /// workspace's), else its own.
     pub fn key_for(&self, ws: WorkspaceId) -> Option<PoolKey> {
+        if let Some(key) = self.bindings.get(&ws) {
+            return Some(key.clone());
+        }
         let a = self.assignments.get(&ws)?;
         Some(self.key_of(ws, a))
     }
 
+    /// The workspace's own device given its assignment (the base device in single-device mode).
     pub fn key_of(&self, ws: WorkspaceId, a: &Assignment) -> PoolKey {
         if self.single_device(a.platform) {
             PoolKey::Base(DeviceKey {
@@ -168,6 +173,7 @@ impl<S: Session> PoolMachine<S> {
             leases: LeaseQueue::default(),
             error: None,
             conflict: None,
+            installed_by: None,
         })
     }
 

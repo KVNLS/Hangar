@@ -3,7 +3,6 @@
 use std::time::Instant;
 
 use hangar_core::WorkspaceId;
-use hangar_core::device::Platform;
 
 use super::policy::{Acquire, Grant, LEASE_TIMEOUT};
 use super::{Command, PoolKey, PoolMachine, Session, State, Token};
@@ -28,7 +27,8 @@ impl<S: Session> PoolMachine<S> {
         self.queue_for(key, ws, now, true)
     }
 
-    /// Joins the lease queue of `key`: a call (`hold`) or a bare reservation.
+    /// Joins the lease queue of `key`: a call (`hold`) or a bare reservation. `ws` is bound to
+    /// `key` from now on.
     pub(super) fn queue_for(
         &mut self,
         key: &PoolKey,
@@ -41,7 +41,9 @@ impl<S: Session> PoolMachine<S> {
             .entry(key)
             .ok_or_else(|| "no device assigned to this workspace".to_owned())?;
         let name = device.name.clone();
-        match device.leases.acquire(ws, now, token, hold) {
+        let acquired = device.leases.acquire(ws, now, token, hold);
+        self.bindings.insert(ws, key.clone());
+        match acquired {
             Acquire::Granted(_) => {
                 self.mark_used(key);
                 Ok(LeaseStart::Granted)
@@ -72,6 +74,7 @@ impl<S: Session> PoolMachine<S> {
         }
         self.push_grants(key, granted);
         self.review(key, now);
+        self.prune_bindings();
         self.mark_used(key);
         self.enforce_limit();
     }
@@ -89,13 +92,14 @@ impl<S: Session> PoolMachine<S> {
         else {
             return;
         };
+        let stale_app = self.stale_app(key, holder);
         for grant in granted {
             self.push(Command::GrantLease {
                 token: grant.payload,
                 key: key.clone(),
                 holder,
                 hold: grant.hold,
-                stale_app: None,
+                stale_app: stale_app.clone(),
             });
         }
         tracing::info!(target: "device_pool", workspace = %holder, ?key, "device lease granted");
@@ -128,24 +132,5 @@ impl<S: Session> PoolMachine<S> {
             || self
                 .key_for(ws)
                 .is_some_and(|k| self.waiting_slot.contains(&k))
-    }
-
-    /// A running device of `platform` other than `key`, the one with the shortest queue.
-    /// Open ones first, then ones opening or left running (which need no boot).
-    pub fn borrowable(&self, platform: Platform, key: &PoolKey) -> Option<PoolKey> {
-        self.devices
-            .iter()
-            .filter(|(k, d)| *k != key && d.platform == platform)
-            .filter_map(|(k, d)| {
-                let rank = match d.state {
-                    State::Open { .. } => 0,
-                    State::Opening(_) => 1,
-                    State::Closed if d.running => 2,
-                    _ => return None,
-                };
-                Some(((rank, d.leases.waiting_len()), k))
-            })
-            .min_by_key(|(rank, _)| *rank)
-            .map(|(_, k)| k.clone())
     }
 }

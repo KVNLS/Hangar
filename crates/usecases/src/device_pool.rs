@@ -3,12 +3,14 @@
 //! the base (an iOS simulator created with the base's device type and runtime, or a read-only
 //! instance of the base AVD), booted on demand and kept open while the app runs. In
 //! single-device mode (a cap of one device, detected or chosen) the workspaces of a platform
-//! share its base device.
+//! share its base device. At the cap, or when the boot guard refuses, a workspace shares a
+//! running device of its class (same platform and base) instead of waiting for a slot
+//! ([`PoolMachine::request_device`]).
 //!
 //! Every run and tool call holds a lease on the device it uses (FIFO, re-entrant per
 //! workspace), which marks the device busy: at the cap, and under critical memory pressure, only
 //! idle devices (no lease, not shown in the panel) are shut down, least recently used first.
-//! The holder keeps the device between its calls (a reservation, see [`reservations`]) so that
+//! The holder keeps the device between its calls (a reservation, [`RESERVATION_IDLE`]) so that
 //! another workspace cannot slip in between a screenshot and a tap.
 //!
 //! [`PoolMachine`] takes calls and I/O results together with the current [`Instant`] and queues
@@ -17,6 +19,7 @@
 //! and feeds the results back. It never blocks and holds no channel: waiters are [`Token`]s.
 
 mod assignments;
+mod binding;
 mod boot;
 mod host;
 mod leases;
@@ -37,11 +40,12 @@ use hangar_core::device::{BackendReason, Conflict, DeviceInfo, DeviceKey, Platfo
 
 use policy::{Assignment, LeaseQueue, Limit};
 
+pub use binding::DeviceStart;
 pub use boot::{BootFailed, OpenStart, StepDone};
 pub use leases::LeaseStart;
 pub use policy::{LEASE_TIMEOUT, MAX_HOLD, RESERVATION_IDLE, REVOKE_GRACE};
 pub use shutdown::{OwnShutdown, Replaced};
-pub use status::{DeviceRow, DeviceStatus};
+pub use status::{DeviceRow, DeviceStatus, Member, Sharing};
 
 /// How often memory pressure, lease timeouts, the cap and open simulators are checked.
 pub const MONITOR_TICK: Duration = Duration::from_secs(10);
@@ -78,12 +82,18 @@ pub enum OpenError {
     /// The runtime guard refused to boot another device (message with the numbers).
     Refused(String),
     Failed(String),
+    /// Every slot is in use and the calls waiting to boot this device now share `to`, which
+    /// runs: drop the lease on this device and ask again ([`PoolMachine::request_device`]).
+    Moved {
+        to: PoolKey,
+        message: String,
+    },
 }
 
 impl OpenError {
     pub fn message(&self) -> &str {
         match self {
-            Self::Refused(m) | Self::Failed(m) => m,
+            Self::Refused(m) | Self::Failed(m) | Self::Moved { message: m, .. } => m,
         }
     }
 
@@ -272,6 +282,8 @@ struct PoolDevice<S> {
     error: Option<String>,
     /// The last boot was blocked by an instance running outside the pool.
     conflict: Option<Conflict>,
+    /// The workspace whose build was installed last ([`PoolMachine::app_installed`]).
+    installed_by: Option<WorkspaceId>,
 }
 
 impl<S: Session> PoolDevice<S> {
@@ -311,6 +323,9 @@ pub struct PoolMachine<S> {
     devices: HashMap<PoolKey, PoolDevice<S>>,
     /// Keys whose boot waits for a free slot.
     waiting_slot: HashSet<PoolKey>,
+    /// The device each workspace uses right now (it holds or waits for its lease), which is
+    /// another workspace's when every slot is in use. Not saved: the assignment is.
+    bindings: HashMap<WorkspaceId, PoolKey>,
     focused: Option<WorkspaceId>,
     tick: u64,
     single_alert_shown: bool,
@@ -335,6 +350,7 @@ impl<S: Session> PoolMachine<S> {
             workspaces: HashMap::new(),
             devices: HashMap::new(),
             waiting_slot: HashSet::new(),
+            bindings: HashMap::new(),
             focused: None,
             tick: 0,
             single_alert_shown: false,
@@ -379,6 +395,7 @@ impl<S: Session> PoolMachine<S> {
                 });
             }
         }
+        self.bindings.retain(|_, k| k != key);
     }
 
     /// Answers the waiters of a bring-up that will not finish.

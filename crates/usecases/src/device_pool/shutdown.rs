@@ -204,9 +204,10 @@ impl<S: Session> PoolMachine<S> {
         }
     }
 
-    /// The workspace is archived: its waiters give up and its reservations end. Whether its
-    /// assignment is known; the caller reads an unknown one ([`Self::adopt_assignment`]) before
-    /// [`Self::shutdown_own`].
+    /// The workspace is archived: its waiters give up and its reservations end. Its own device
+    /// is about to shut down, so the workspaces sharing it lose it too (waiters fail, a holder
+    /// is revoked). Whether its assignment is known; the caller reads an unknown one
+    /// ([`Self::adopt_assignment`]) before [`Self::shutdown_own`].
     pub fn archive(&mut self, ws: WorkspaceId, now: Instant) -> bool {
         let mut cancelled = Vec::new();
         for device in self.devices.values_mut() {
@@ -217,6 +218,24 @@ impl<S: Session> PoolMachine<S> {
                 token,
                 message: "the workspace was closed".into(),
             });
+        }
+        let own = PoolKey::Own(ws);
+        if let Some(device) = self.devices.get_mut(&own) {
+            let message = format!("{} was shut down with its workspace", device.name);
+            let other = device.leases.holder().copied().filter(|h| *h != ws);
+            for token in device.leases.take_waiting() {
+                self.push(Command::FailLease {
+                    token,
+                    message: message.clone(),
+                });
+            }
+            if let Some(other) = other {
+                self.drop_holder(&own, other, now);
+                self.push(Command::Revoked {
+                    holder: other,
+                    key: own,
+                });
+            }
         }
         self.release_reservation(ws, now);
         if self.focused == Some(ws) {
@@ -278,6 +297,7 @@ impl<S: Session> PoolMachine<S> {
     /// returns its assignment, if known.
     pub fn forget(&mut self, ws: WorkspaceId) -> Option<Assignment> {
         self.remove_device(&PoolKey::Own(ws));
+        self.bindings.remove(&ws);
         self.workspaces.remove(&ws);
         self.assignments.remove(&ws)
     }

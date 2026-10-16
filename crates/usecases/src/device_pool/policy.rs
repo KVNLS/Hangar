@@ -266,6 +266,25 @@ pub fn reservation_due<W>(holder: &Holder<W>, waiting: bool, now: Instant) -> Du
     }
 }
 
+/// How long the reservation may last at most from `now`: until it expires idle, or is revoked
+/// while others wait. `None` while a call is in flight and nobody waits (no end in sight).
+pub fn reservation_left<W>(holder: &Holder<W>, waiting: bool, now: Instant) -> Option<Duration> {
+    let idle = (holder.holds == 0).then(|| {
+        RESERVATION_IDLE.saturating_sub(now.saturating_duration_since(holder.last_activity))
+    });
+    let revoke = waiting.then(|| {
+        let at = match holder.warned {
+            Some(at) => at + REVOKE_GRACE,
+            None => holder.since + MAX_HOLD + REVOKE_GRACE,
+        };
+        at.saturating_duration_since(now)
+    });
+    match (idle, revoke) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
 /// A device's lease: one holder at a time (re-entrant: several runs and calls of the same
 /// workspace share it), others wait first come, first served. The holder keeps the lease
 /// between its calls (a reservation) until [`LeaseQueue::end`].
@@ -407,6 +426,16 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
         self.grant_next(now)
     }
 
+    /// Takes the lease from `who` at once, whatever it has in flight (its device changed): its
+    /// later releases here do nothing. Returns the payloads granted now.
+    pub fn drop_holder(&mut self, who: &W, now: Instant) -> Vec<Grant<T>> {
+        if self.holder() != Some(who) {
+            return Vec::new();
+        }
+        self.holder = None;
+        self.grant_next(now)
+    }
+
     fn grant_next(&mut self, now: Instant) -> Vec<Grant<T>> {
         if self.holder.is_some() {
             return Vec::new();
@@ -482,6 +511,15 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
             self.waiting.drain(..).partition(|w| &w.holder == who);
         self.waiting = rest;
         cancelled.into_iter().map(|w| w.payload).collect()
+    }
+
+    /// Removes every waiter of `who` to queue them elsewhere: payloads with whether each is a
+    /// call.
+    pub fn take(&mut self, who: &W) -> Vec<(T, bool)> {
+        let (taken, rest): (VecDeque<_>, VecDeque<_>) =
+            self.waiting.drain(..).partition(|w| &w.holder == who);
+        self.waiting = rest;
+        taken.into_iter().map(|w| (w.payload, w.hold)).collect()
     }
 
     /// Removes every waiter (the device leaves the pool).

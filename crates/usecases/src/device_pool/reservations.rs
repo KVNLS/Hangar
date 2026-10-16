@@ -23,15 +23,6 @@ use super::policy::{MAX_HOLD, RESERVATION_IDLE, REVOKE_GRACE};
 use super::{Command, PoolKey, PoolMachine, Session};
 
 impl<S: Session> PoolMachine<S> {
-    /// Reserves the workspace's device without a call: queued like a call, but nothing is
-    /// released afterwards; the reservation lasts until it expires, is released or revoked.
-    pub fn reserve(&mut self, ws: WorkspaceId, now: Instant) -> Result<LeaseStart, String> {
-        let key = self
-            .key_for(ws)
-            .ok_or_else(|| "no device assigned to this workspace".to_owned())?;
-        self.queue_for(&key, ws, now, false)
-    }
-
     /// Ends the workspace's reservations now (or, with a call in flight, when it ends). Whether
     /// anyone was waiting for the device.
     pub fn release_reservation(&mut self, ws: WorkspaceId, now: Instant) -> bool {
@@ -51,6 +42,7 @@ impl<S: Session> PoolMachine<S> {
             tracing::info!(target: "device_pool", workspace = %ws, ?key, "reservation released");
             self.push_grants(&key, granted);
         }
+        self.prune_bindings();
         self.enforce_limit();
         waited
     }
@@ -68,13 +60,17 @@ impl<S: Session> PoolMachine<S> {
     /// The user gives `key` to `ws` now: `ws` goes first in line (with a reservation) and the
     /// holder's reservation is revoked without waiting for [`MAX_HOLD`]. A call of the old holder
     /// in flight is not cut: `ws` gets the device when it ends, and the old holder's next calls
-    /// queue behind.
+    /// queue behind. Refused when `ws` uses another device: release that one first.
     pub fn take_over(
         &mut self,
         key: &PoolKey,
         ws: WorkspaceId,
         now: Instant,
     ) -> Result<LeaseStart, String> {
+        if let Some(bound) = self.bindings.get(&ws).filter(|k| *k != key) {
+            let name = self.name_of(bound).unwrap_or("another device");
+            return Err(format!("this workspace uses {name}; release it first"));
+        }
         let token = self.token();
         let device = self
             .entry(key)
@@ -97,6 +93,8 @@ impl<S: Session> PoolMachine<S> {
             }
             self.push_grants(key, granted);
         }
+        self.bindings.insert(ws, key.clone());
+        self.prune_bindings();
         self.mark_used(key);
         Ok(start)
     }
@@ -108,6 +106,7 @@ impl<S: Session> PoolMachine<S> {
         for key in keys {
             self.review(&key, now);
         }
+        self.prune_bindings();
     }
 
     /// Applies the reservation rules to the holder of `key`.

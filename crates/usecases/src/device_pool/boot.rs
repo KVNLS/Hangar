@@ -205,7 +205,8 @@ impl<S: Session> PoolMachine<S> {
         );
     }
 
-    /// Takes a slot within the cap, shutting an idle device down or waiting for one.
+    /// Takes a slot within the cap, shutting an idle device down or waiting for one; while it
+    /// waits, those who wait for this device move to a compatible running one when there is.
     pub(super) fn claim(&mut self, key: &PoolKey, attempt: u64, now: Instant) {
         loop {
             let Some(Phase::Claiming { since, .. }) =
@@ -244,6 +245,9 @@ impl<S: Session> PoolMachine<S> {
                     }
                 }
                 Capacity::Full => {
+                    if self.reroute(key, now) {
+                        return;
+                    }
                     if now.duration_since(since) > LEASE_TIMEOUT {
                         self.waiting_slot.remove(key);
                         self.finish_open(
