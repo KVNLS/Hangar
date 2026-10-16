@@ -83,7 +83,7 @@ impl DevicePool {
 
     /// The workspace is archived: its waiters give up and its own device shuts down.
     pub fn archive(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) -> Task<anyhow::Result<()>> {
-        let known = self.machine.archive(ws);
+        let known = self.machine.archive(ws, Instant::now());
         self.run(cx);
         cx.notify();
         let store = self.store.clone();

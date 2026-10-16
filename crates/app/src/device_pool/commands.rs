@@ -5,14 +5,15 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use gpui_kit::*;
+use hangar_core::WorkspaceId;
 use hangar_core::ports::PortError;
-use hangar_usecases::device_pool::{Command, MONITOR_TICK, Save};
+use hangar_usecases::device_pool::{Command, MAX_HOLD, MONITOR_TICK, Save};
 use hangar_usecases::settings::SettingsExt as _;
 
 use crate::device_panel::Platform;
 use crate::{adapters, setting_keys};
 
-use super::{DevicePool, Lease, PoolEvent, backend};
+use super::{DevicePool, Lease, NoticeLevel, PoolEvent, PoolKey, backend};
 
 /// A port error with its sources, as the pool shows and logs it.
 pub(super) fn chain(err: PortError) -> String {
@@ -46,7 +47,11 @@ impl DevicePool {
                     let _ = waiter.send(result);
                 }
             }
-            Command::GrantLease { token, key, holder } => {
+            // Every waiter here is a call (`hold`); the app has not installed builds on
+            // shared devices yet, so `stale_app` is not shown.
+            Command::GrantLease {
+                token, key, holder, ..
+            } => {
                 let lease = Lease {
                     key,
                     holder,
@@ -62,11 +67,50 @@ impl DevicePool {
                     let _ = waiter.send(Err(anyhow!(message)));
                 }
             }
+            Command::WarnHolder {
+                holder,
+                key,
+                ends_in,
+            } => {
+                let device = self.device_label(&key);
+                let name = self.workspace_label(holder);
+                cx.emit(PoolEvent::Notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "{name} has held {device} for {} minutes while other workspaces wait: \
+                         it goes to the next one in {} s, once no call of {name} is running.",
+                        MAX_HOLD.as_secs() / 60,
+                        ends_in.as_secs()
+                    ),
+                ));
+            }
+            Command::Revoked { holder, key } => {
+                let device = self.device_label(&key);
+                let name = self.workspace_label(holder);
+                cx.emit(PoolEvent::Notice(
+                    NoticeLevel::Info,
+                    format!("{name} no longer holds {device}: it went to the next workspace."),
+                ));
+            }
             Command::Notice(level, message) => cx.emit(PoolEvent::Notice(level, message)),
             Command::Save(save) => self.save_setting(save, cx),
             Command::DetectHost { android_base } => self.detect_host(android_base, cx),
             Command::ScanRunning => self.scan_running(cx),
         }
+    }
+
+    fn device_label(&self, key: &PoolKey) -> String {
+        self.machine
+            .name_of(key)
+            .unwrap_or("a shared device")
+            .to_owned()
+    }
+
+    fn workspace_label(&self, ws: WorkspaceId) -> String {
+        self.machine
+            .workspace_name(ws)
+            .unwrap_or("A workspace")
+            .to_owned()
     }
 
     fn save_setting(&self, save: Save, cx: &mut Context<Self>) {

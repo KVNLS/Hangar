@@ -88,7 +88,7 @@ impl<S: Session> PoolMachine<S> {
             phase: Phase::Probing,
         });
         let target = device.target.clone();
-        self.touch(key);
+        self.mark_used(key);
         self.bring_up(key, token, Step::Probe(target));
         OpenStart::Wait(token)
     }

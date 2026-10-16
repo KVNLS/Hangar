@@ -25,6 +25,11 @@ impl<S: Session> PoolMachine<S> {
         self.last_target.as_ref()
     }
 
+    /// The name of a tracked workspace.
+    pub fn workspace_name(&self, ws: WorkspaceId) -> Option<&str> {
+        self.workspaces.get(&ws).map(|w| w.name.as_str())
+    }
+
     /// The worktree of a tracked workspace.
     pub fn workspace_root(&self, ws: WorkspaceId) -> Option<PathBuf> {
         self.workspaces.get(&ws).map(|w| w.root.clone())
@@ -166,7 +171,7 @@ impl<S: Session> PoolMachine<S> {
         })
     }
 
-    pub(super) fn touch(&mut self, key: &PoolKey) {
+    pub(super) fn mark_used(&mut self, key: &PoolKey) {
         self.tick += 1;
         let tick = self.tick;
         if let Some(d) = self.devices.get_mut(key) {
@@ -190,7 +195,7 @@ impl<S: Session> PoolMachine<S> {
 
     fn refocus(&mut self) {
         if let Some(key) = self.focused.and_then(|ws| self.key_for(ws)) {
-            self.touch(&key);
+            self.mark_used(&key);
         }
     }
 

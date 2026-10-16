@@ -8,6 +8,8 @@
 //! Every run and tool call holds a lease on the device it uses (FIFO, re-entrant per
 //! workspace), which marks the device busy: at the cap, and under critical memory pressure, only
 //! idle devices (no lease, not shown in the panel) are shut down, least recently used first.
+//! The holder keeps the device between its calls (a reservation, see [`reservations`]) so that
+//! another workspace cannot slip in between a screenshot and a tap.
 //!
 //! [`PoolMachine`] takes calls and I/O results together with the current [`Instant`] and queues
 //! [`Command`]s (boot this, open that, shut it down, answer a waiter, save a setting); the
@@ -19,6 +21,7 @@ mod boot;
 mod host;
 mod leases;
 pub mod policy;
+mod reservations;
 mod shutdown;
 mod status;
 #[cfg(test)]
@@ -36,7 +39,7 @@ use policy::{Assignment, LeaseQueue, Limit};
 
 pub use boot::{BootFailed, OpenStart, StepDone};
 pub use leases::LeaseStart;
-pub use policy::LEASE_TIMEOUT;
+pub use policy::{LEASE_TIMEOUT, MAX_HOLD, RESERVATION_IDLE, REVOKE_GRACE};
 pub use shutdown::{OwnShutdown, Replaced};
 pub use status::{DeviceRow, DeviceStatus};
 
@@ -173,10 +176,28 @@ pub enum Command<S> {
         token: Token,
         key: PoolKey,
         holder: WorkspaceId,
+        /// The waiter is a call: release its hold with [`PoolMachine::release_lease`] when it
+        /// ends. A bare reservation ([`PoolMachine::reserve`]) has nothing to release.
+        hold: bool,
+        /// Name of the workspace that installed the app now on the device, when not `holder`.
+        stale_app: Option<String>,
     },
     FailLease {
         token: Token,
         message: String,
+    },
+    /// `holder` has held `key` for [`MAX_HOLD`] while others wait: its reservation is revoked
+    /// in `ends_in` (once no call of it is in flight).
+    WarnHolder {
+        holder: WorkspaceId,
+        key: PoolKey,
+        ends_in: Duration,
+    },
+    /// `holder` lost its reservation on `key` (held too long, or taken over by the user); its
+    /// next call queues.
+    Revoked {
+        holder: WorkspaceId,
+        key: PoolKey,
     },
     Notice(NoticeLevel, String),
     Save(Save),
@@ -254,6 +275,9 @@ struct PoolDevice<S> {
 }
 
 impl<S: Session> PoolDevice<S> {
+    /// In use or about to be: a lease held (an idle reservation too, until it expires) or
+    /// awaited, or a bring-up or shutdown in flight. Busy devices are never shut down to make
+    /// room, so a reservation keeps the device booted for its holder.
     fn busy(&self) -> bool {
         !self.leases.is_idle() || !matches!(self.state, State::Closed | State::Open { .. })
     }

@@ -5,7 +5,7 @@ use std::time::Instant;
 use hangar_core::WorkspaceId;
 use hangar_core::device::Platform;
 
-use super::policy::{Acquire, LEASE_TIMEOUT};
+use super::policy::{Acquire, Grant, LEASE_TIMEOUT};
 use super::{Command, PoolKey, PoolMachine, Session, State, Token};
 
 /// Result of [`PoolMachine::request_lease`].
@@ -17,21 +17,33 @@ pub enum LeaseStart {
 }
 
 impl<S: Session> PoolMachine<S> {
-    /// Asks for the lease on `key` for `ws` (granted at once when free or already `ws`'s).
+    /// Asks for the lease on `key` for a call of `ws` (granted at once when free or already
+    /// `ws`'s). Release it with [`Self::release_lease`] when the call ends.
     pub fn request_lease(
         &mut self,
         key: &PoolKey,
         ws: WorkspaceId,
         now: Instant,
     ) -> Result<LeaseStart, String> {
+        self.queue_for(key, ws, now, true)
+    }
+
+    /// Joins the lease queue of `key`: a call (`hold`) or a bare reservation.
+    pub(super) fn queue_for(
+        &mut self,
+        key: &PoolKey,
+        ws: WorkspaceId,
+        now: Instant,
+        hold: bool,
+    ) -> Result<LeaseStart, String> {
         let token = self.token();
         let device = self
             .entry(key)
             .ok_or_else(|| "no device assigned to this workspace".to_owned())?;
         let name = device.name.clone();
-        match device.leases.acquire(ws, now, token) {
+        match device.leases.acquire(ws, now, token, hold) {
             Acquire::Granted(_) => {
-                self.touch(key);
+                self.mark_used(key);
                 Ok(LeaseStart::Granted)
             }
             Acquire::Queued { position } => {
@@ -41,25 +53,52 @@ impl<S: Session> PoolMachine<S> {
         }
     }
 
-    /// `holder` dropped its lease on `key`; the next waiter gets it.
+    /// A call of `holder` on `key` ended. The holder keeps the device as an idle reservation
+    /// ([`super::RESERVATION_IDLE`]), except when the device is off: there is no state to keep
+    /// between calls, so the next waiter gets it at once.
     pub fn release_lease(&mut self, key: &PoolKey, holder: WorkspaceId, now: Instant) {
         let Some(device) = self.devices.get_mut(key) else {
             return;
         };
-        let granted = device.leases.release(&holder, now);
-        let next = device.leases.holder().copied();
-        if let Some(next) = next {
-            for token in granted {
-                self.push(Command::GrantLease {
-                    token,
-                    key: key.clone(),
-                    holder: next,
-                });
-            }
-            tracing::info!(target: "device_pool", workspace = %next, ?key, "device lease granted");
+        let mut granted = device.leases.release(&holder, now);
+        let off = matches!(device.state, State::Closed) && !device.running;
+        if off
+            && device
+                .leases
+                .holding()
+                .is_some_and(|h| h.who == holder && h.holds == 0)
+        {
+            granted.extend(device.leases.end(&holder, now));
         }
-        self.touch(key);
+        self.push_grants(key, granted);
+        self.review(key, now);
+        self.mark_used(key);
         self.enforce_limit();
+    }
+
+    /// Answers the waiters granted the lease on `key`.
+    pub(super) fn push_grants(&mut self, key: &PoolKey, granted: Vec<Grant<Token>>) {
+        if granted.is_empty() {
+            return;
+        }
+        let Some(holder) = self
+            .devices
+            .get(key)
+            .and_then(|d| d.leases.holder())
+            .copied()
+        else {
+            return;
+        };
+        for grant in granted {
+            self.push(Command::GrantLease {
+                token: grant.payload,
+                key: key.clone(),
+                holder,
+                hold: grant.hold,
+                stale_app: None,
+            });
+        }
+        tracing::info!(target: "device_pool", workspace = %holder, ?key, "device lease granted");
     }
 
     /// Waiters not seen (queued or polled) for [`LEASE_TIMEOUT`] give up.

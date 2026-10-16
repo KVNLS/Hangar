@@ -111,9 +111,9 @@ impl<S: Session> PoolMachine<S> {
         }
     }
 
-    /// The periodic check ([`super::MONITOR_TICK`]): lease timeouts, memory pressure (`Err` when
-    /// unreadable), the cap, and `booted` simulators (read when [`Self::open_simulators`] was
-    /// not empty).
+    /// The periodic check ([`super::MONITOR_TICK`]): lease timeouts, reservations, memory
+    /// pressure (`Err` when unreadable), the cap, and `booted` simulators (read when
+    /// [`Self::open_simulators`] was not empty).
     pub fn monitor(
         &mut self,
         now: Instant,
@@ -121,6 +121,7 @@ impl<S: Session> PoolMachine<S> {
         booted: Option<Result<Vec<String>, String>>,
     ) {
         self.expire_leases(now);
+        self.expire_reservations(now);
         match pressure {
             Ok(pressure) => {
                 if self.pressure != Some(pressure) {
@@ -203,9 +204,10 @@ impl<S: Session> PoolMachine<S> {
         }
     }
 
-    /// The workspace is archived: its waiters give up. Whether its assignment is known; the
-    /// caller reads an unknown one ([`Self::adopt_assignment`]) before [`Self::shutdown_own`].
-    pub fn archive(&mut self, ws: WorkspaceId) -> bool {
+    /// The workspace is archived: its waiters give up and its reservations end. Whether its
+    /// assignment is known; the caller reads an unknown one ([`Self::adopt_assignment`]) before
+    /// [`Self::shutdown_own`].
+    pub fn archive(&mut self, ws: WorkspaceId, now: Instant) -> bool {
         let mut cancelled = Vec::new();
         for device in self.devices.values_mut() {
             cancelled.extend(device.leases.cancel(&ws));
@@ -216,6 +218,7 @@ impl<S: Session> PoolMachine<S> {
                 message: "the workspace was closed".into(),
             });
         }
+        self.release_reservation(ws, now);
         if self.focused == Some(ws) {
             self.focused = None;
         }
