@@ -13,7 +13,7 @@ use hangar_usecases::settings::SettingsExt as _;
 use crate::device_panel::Platform;
 use crate::{adapters, setting_keys};
 
-use super::{DevicePool, Lease, NoticeLevel, PoolEvent, PoolKey, backend};
+use super::{DevicePool, Granted, NoticeLevel, PoolEvent, PoolKey, backend, sharing};
 
 /// A port error with its sources, as the pool shows and logs it.
 pub(super) fn chain(err: PortError) -> String {
@@ -47,19 +47,21 @@ impl DevicePool {
                     let _ = waiter.send(result);
                 }
             }
-            // Every waiter here is a call (`hold`); the app has not installed builds on
-            // shared devices yet, so `stale_app` is not shown.
             Command::GrantLease {
-                token, key, holder, ..
+                token,
+                key,
+                holder,
+                hold,
+                stale_app,
             } => {
-                let lease = Lease {
-                    key,
-                    holder,
-                    release: self.release.clone(),
+                let granted = Granted {
+                    lease: self.lease(key, holder, hold),
+                    stale_app,
                 };
-                // A waiter that gave up returns the lease, which releases it again.
+                // A waiter that gave up returns the lease, which releases its hold: the
+                // workspace keeps the device as a reservation.
                 if let Some(waiter) = self.lease_waiters.remove(&token) {
-                    let _ = waiter.send(Ok(lease));
+                    let _ = waiter.send(Ok(granted));
                 }
             }
             Command::FailLease { token, message } => {
@@ -83,6 +85,16 @@ impl DevicePool {
                         ends_in.as_secs()
                     ),
                 ));
+                let waiting = self
+                    .machine
+                    .sharing(holder, Instant::now())
+                    .filter(|s| s.key == key)
+                    .map(|s| s.queue.into_iter().map(|m| m.name).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                cx.emit(PoolEvent::AgentNotice {
+                    ws: holder,
+                    message: sharing::warn_notice(&device, &waiting, ends_in),
+                });
             }
             Command::Revoked { holder, key } => {
                 let device = self.device_label(&key);
@@ -91,6 +103,16 @@ impl DevicePool {
                     NoticeLevel::Info,
                     format!("{name} no longer holds {device}: it went to the next workspace."),
                 ));
+                let next = self
+                    .machine
+                    .rows()
+                    .into_iter()
+                    .find(|r| r.key == key)
+                    .and_then(|r| r.holder);
+                cx.emit(PoolEvent::AgentNotice {
+                    ws: holder,
+                    message: sharing::revoked_notice(&device, next.as_deref()),
+                });
             }
             Command::Notice(level, message) => cx.emit(PoolEvent::Notice(level, message)),
             Command::Save(save) => self.save_setting(save, cx),

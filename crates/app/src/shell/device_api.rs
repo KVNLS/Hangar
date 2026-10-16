@@ -54,7 +54,7 @@ impl HangarApp {
         self.track_workspace(ws, cx);
         self.devices
             .pool
-            .update(cx, |pool, cx| pool.acquire(ws, cx))
+            .update(cx, |pool, cx| pool.acquire(ws, None, cx))
     }
 
     /// The workspace's device: platform, name, id, whether it is open, screen size in points

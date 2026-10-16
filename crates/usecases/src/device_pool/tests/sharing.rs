@@ -561,3 +561,32 @@ fn archiving_drops_the_binding_and_fails_each_ticket_once() {
     assert_eq!(m.key_for(ws[3].id), Some(PoolKey::Own(ws[3].id)));
     assert!(grants(&commands).is_empty());
 }
+
+#[test]
+fn a_grant_returned_by_a_caller_that_gave_up_keeps_a_reservation() {
+    let (mut m, [a, b, c], x, t) = shared_base();
+    assert_eq!(
+        m.request_device(a.id, t).unwrap().lease,
+        LeaseStart::Granted
+    );
+    // `b`'s call stops waiting on its side: its ticket stays in line, ahead of `c`.
+    let for_b = match m.request_device(b.id, t).unwrap().lease {
+        LeaseStart::Queued(token) => token,
+        other => panic!("not queued: {other:?}"),
+    };
+    let for_c = queued(m.request_lease(&x, c.id, t + secs(1)));
+    m.release_lease(&x, a.id, t + secs(2));
+    assert!(m.release_reservation(a.id, t + secs(3)));
+    assert_eq!(grants(&m.take_commands()), [(for_b, b.id, true)]);
+    // Nobody takes the grant: the lease comes back, `b` keeps the device between calls.
+    m.release_lease(&x, b.id, t + secs(3));
+    assert!(grants(&m.take_commands()).is_empty());
+    assert_eq!(m.held_by_other(c.id).map(|(ws, _)| ws), Some(b.id));
+    let next = m.request_device(b.id, t + secs(20)).unwrap();
+    assert_eq!((next.key, next.lease), (x.clone(), LeaseStart::Granted));
+    m.release_lease(&x, b.id, t + secs(21));
+    assert_eq!(
+        grants(&tick(&mut m, t + secs(21) + RESERVATION_IDLE)),
+        [(for_c, c.id, true)]
+    );
+}

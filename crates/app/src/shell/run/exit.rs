@@ -43,7 +43,7 @@ impl HangarApp {
             } else {
                 // The JS CLIs install and launch themselves.
                 let summary = format!("{} launched the app on {}", run.stack, run.device);
-                self.finish_run(id, Ok(summary));
+                self.finish_run(id, Ok(summary), cx);
             }
         } else {
             let tail = terminal_lines(&view, cx);
@@ -53,7 +53,7 @@ impl HangarApp {
                 SessionStatus::Failed { message } => message,
                 other => format!("{other:?}"),
             };
-            self.finish_run(id, Err(anyhow!("{title} failed ({what}):\n{tail}")));
+            self.finish_run(id, Err(anyhow!("{title} failed ({what}):\n{tail}")), cx);
         }
     }
 
@@ -82,6 +82,7 @@ impl HangarApp {
             self.finish_run(
                 id,
                 Err(anyhow!("the device was released before the install")),
+                cx,
             );
             return;
         };
@@ -121,12 +122,12 @@ impl HangarApp {
                         tracing::info!(?apps, %device, "run: launched");
                         let summary = format!("Launched {} on {device}", apps.join(", "));
                         this.show_toast(ToastKind::Success, summary.clone(), cx);
-                        this.finish_run(id, Ok(summary));
+                        this.finish_run(id, Ok(summary), cx);
                     }
                     Err(err) => {
                         tracing::warn!(%err, "run: install/launch failed");
                         this.report(&err, window, cx);
-                        this.finish_run(id, Err(err));
+                        this.finish_run(id, Err(err), cx);
                     }
                 }
                 cx.notify();

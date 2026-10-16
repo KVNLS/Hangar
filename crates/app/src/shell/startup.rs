@@ -61,6 +61,9 @@ impl HangarApp {
                     };
                     window.push_notification(notification, cx);
                 }
+                PoolEvent::AgentNotice { ws, message } => {
+                    tracing::info!(workspace = %ws, "agent notice: {message}");
+                }
             },
         );
         let pool_observer = cx.observe(&device_pool, |_, _, cx| cx.notify());
