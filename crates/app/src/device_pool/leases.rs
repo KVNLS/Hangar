@@ -39,7 +39,7 @@ impl DevicePool {
                     .key_for(ws)
                     .unwrap_or_else(|| pool.machine.key_of(ws, &a))
             })?;
-            Self::open(this, key, None, cx)
+            Self::open(this, key, None, None, cx)
                 .await
                 .map_err(|e| anyhow!(e.message().to_owned()))
         })
@@ -50,8 +50,9 @@ impl DevicePool {
     /// for it. A refused boot moves the call to a running device of its class; a boot that
     /// waits for a slot may move it too, even before the call opened it. `deadline`: until when
     /// the call may wait in line, counted from the call's start (the MCP host's timer starts
-    /// then, not after the assignment and the host are known); past it the call fails with
-    /// [`StillQueued`] and keeps its place.
+    /// then, not after the assignment and the host are known); past it in line the call fails
+    /// with [`StillQueued`] and keeps its place, and past it while the device opens the call
+    /// fails and drops its lease (the bring-up goes on for the others).
     pub fn acquire(
         &mut self,
         ws: WorkspaceId,
@@ -71,7 +72,7 @@ impl DevicePool {
                 let Granted { lease, stale_app } = Self::granted(ws, pending, deadline, cx)
                     .await?;
                 let key = lease.key().clone();
-                let refused = match Self::open(this.clone(), key.clone(), Some(ws), cx).await {
+                let refused = match Self::open(this.clone(), key.clone(), Some(ws), deadline, cx).await {
                     Ok(session) => {
                         let (borrowed, shared_with) = this.update(cx, |pool, cx| {
                             pool.tell_stale(ws, &key, stale_app.as_deref(), cx);
