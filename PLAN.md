@@ -138,8 +138,11 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   picker).
 - **Device sharing:** the 30 s MCP call timeout still applies to slow boots (the wait budget covers only
   waiting in line); an Expo build that never prints its launched line holds its lease until
-  its build tab exits or the run is replaced; agents poll with `wait_s` (no push on grant); `mcp_host.rs`
-  is near the 800-line split threshold (773 lines).
+  its build tab exits or the run is replaced; agents poll with `wait_s` (no push on grant); holds are
+  counted per workspace, not per call: after a base change replaces a workspace's own device, a stale
+  release from an old call can lower the new device's hold count (needs per-call lease identity); on a
+  base change the old device's pending shutdown result can overwrite a new bring-up of the same key;
+  `mcp_host.rs` is near the 800-line split threshold (773 lines).
 - **Run loop:** no parsed build progress or crash overlay; `expo run` prebuild
   output lands in the worktree; Expo picks Android devices by AVD name (ambiguous with pool instances);
   React Native CLI unit-tested only; the JDK/Gradle setup is the user's.
