@@ -8,13 +8,15 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
 
-use crate::device_pool::DeviceStatus;
+use crate::device_pool::{DeviceStatus, copy};
 use crate::device_view::DeviceView;
 use crate::ui::components::{EmptyState, UiButton};
 use crate::ui::{ActiveTokens as _, TypeScale as _};
 
 use super::platform::{BackendReason, Platform, PlatformUi as _};
-use super::{Connection, DevicePanel, DeviceState, KEY_CONTEXT, PressHome, Screenshot};
+use super::{
+    Connection, DevicePanel, DevicePanelEvent, DeviceState, KEY_CONTEXT, PressHome, Screenshot,
+};
 
 impl DevicePanel {
     /// The shown device's state for the header, when there is one to tell.
@@ -401,7 +403,8 @@ impl DevicePanel {
         let t = cx.tokens();
         let pool = self.pool.read(cx);
         let (_, holder) = pool.held_by_other(ws)?;
-        let text = format!("“{holder}” is running on this device.");
+        let holder = holder.to_owned();
+        let sharing = pool.sharing(ws);
         let assignment = pool.assignment(ws)?;
         let platform = assignment.platform;
         let alternative = pool
@@ -417,6 +420,39 @@ impl DevicePanel {
             })
             .flatten()
             .map(|e| (e.key.clone(), e.info.name.clone()));
+        let mut lines: Vec<String> = Vec::new();
+        let mut take_key = None;
+        if let Some(sharing) = &sharing {
+            lines.push(match sharing.reservation_left {
+                Some(left) => format!("Frees in {}", copy::approx(left)),
+                None => "Until it is released".to_owned(),
+            });
+            if !sharing.queue.is_empty() {
+                lines.push(format!("Queue: {}", copy::queue_line(&sharing.queue, ws)));
+            }
+            if let (Some(position), Some(wait)) = (sharing.position, sharing.estimated_wait) {
+                lines.push(format!(
+                    "You are {} in line, {}",
+                    copy::ordinal(position + 1),
+                    copy::approx(wait)
+                ));
+            }
+            take_key = Some(sharing.key.clone());
+        }
+        let take_over = take_key.map(|key| {
+            UiButton::new("device-take-over")
+                .label("Take over")
+                .primary()
+                .full_width()
+                .tooltip("Ends the other workspace's reservation and puts you first. A call already running finishes.")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let key = key.clone();
+                    let result = this
+                        .pool
+                        .update(cx, |pool, cx| pool.take_over(&key, ws, cx));
+                    cx.emit(DevicePanelEvent::TookOver(result));
+                }))
+        });
         let switch = alternative.map(|(key, name)| {
             UiButton::new("device-use-other")
                 .label(format!("Use {name} instead"))
@@ -459,7 +495,20 @@ impl DevicePanel {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("In use by another workspace"),
                 )
-                .child(div().text_color(t.tx2).line_height(rems(1.4)).child(text))
+                .child(
+                    div()
+                        .text_color(t.tx2)
+                        .line_height(rems(1.4))
+                        .child(format!("“{holder}” is using this device.")),
+                )
+                .children(
+                    lines
+                        .into_iter()
+                        .map(|line| div().text_color(t.tx3).line_height(rems(1.4)).child(line)),
+                )
+                .when_some(take_over, |this, take_over| {
+                    this.child(div().w_full().max_w(px(280.)).mt_1().child(take_over))
+                })
                 .when_some(switch, |this, switch| {
                     this.child(div().w_full().max_w(px(280.)).mt_1().child(switch))
                 })

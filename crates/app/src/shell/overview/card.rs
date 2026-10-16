@@ -181,6 +181,10 @@ impl HangarApp {
         let last = queued
             .map(|ahead| super::queue::queued_label(ahead).into())
             .or_else(|| {
+                let label = self.device_wait_label(id, cx)?;
+                Some(format!("{}{}", label[..1].to_uppercase(), &label[1..]).into())
+            })
+            .or_else(|| {
                 request
                     .as_ref()
                     .map(|r| format!("Permission: {}", r.title).into())
