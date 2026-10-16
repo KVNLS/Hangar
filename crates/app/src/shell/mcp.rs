@@ -59,6 +59,7 @@ fn status(info: DeviceStatusInfo) -> hangar_mcp::DeviceStatus {
         screen_pt: info.screen_pt,
         scale: info.scale,
         orientation: info.orientation,
+        sharing: None,
     }
 }
 

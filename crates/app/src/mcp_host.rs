@@ -494,6 +494,14 @@ impl ToolHost for McpHost {
                 })?;
                 Ok(ToolOutput::text(summary))
             }
+            // TODO(device-sharing): wired by the app integration step
+            Tool::DeviceAcquire { .. } => Err(ToolError::Unsupported(
+                "device_acquire is not wired yet".into(),
+            )),
+            // TODO(device-sharing): wired by the app integration step
+            Tool::DeviceRelease => Err(ToolError::Unsupported(
+                "device_release is not wired yet".into(),
+            )),
             Tool::LaunchApp { app_id } => {
                 let label = app_id.clone();
                 self.ask("launch_app", call, |reply| McpRequest::Launch {

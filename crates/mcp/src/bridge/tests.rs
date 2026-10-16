@@ -67,7 +67,7 @@ fn end_to_end_through_socket() {
     let r = responses(&output);
     assert_eq!(r.len(), 5, "{r:?}");
     assert_eq!(r["1"]["result"]["protocolVersion"], "2025-03-26");
-    assert_eq!(r["2"]["result"]["tools"].as_array().map(Vec::len), Some(10));
+    assert_eq!(r["2"]["result"]["tools"].as_array().map(Vec::len), Some(12));
     assert_eq!(r["3"]["result"]["content"][0]["text"], "ok tap");
     assert_eq!(r["4"]["result"]["content"][0]["data"], "Zm9v");
     assert_eq!(r["5"]["result"]["isError"], true);

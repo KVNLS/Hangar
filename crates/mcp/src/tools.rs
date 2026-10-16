@@ -7,14 +7,18 @@ mod args;
 mod output;
 mod parse;
 mod schema;
+mod sharing;
 
 use args::ORCHESTRATION_TOOLS;
 
 pub use output::{Answer, Content, DeviceStatus, ToolError, ToolOutput};
 pub use schema::definitions;
+pub use sharing::{Sharing, queued_message};
 
 pub const DEFAULT_SWIPE_MS: u64 = 300;
 pub const MAX_SWIPE_MS: u64 = 10_000;
+/// Longest `device_acquire` long-poll, in seconds.
+pub const MAX_ACQUIRE_WAIT_S: u64 = 25;
 pub const DEFAULT_LOG_LINES: usize = 200;
 pub const MAX_LOG_LINES: usize = 2000;
 pub const DEFAULT_TRANSCRIPT_MESSAGES: usize = 10;
@@ -62,6 +66,12 @@ pub enum Tool {
     LaunchApp {
         app_id: String,
     },
+    /// Reserves the device for a sequence of calls, or keeps the caller's place in line.
+    DeviceAcquire {
+        /// 0..=[`MAX_ACQUIRE_WAIT_S`]: how long to wait for the device.
+        wait_s: u64,
+    },
+    DeviceRelease,
     /// Asks the user a question and waits for the answer.
     AskUser {
         question: String,
@@ -169,6 +179,8 @@ impl Tool {
             Self::Logs { .. } => "logs",
             Self::BuildAndRun => "build_and_run",
             Self::LaunchApp { .. } => "launch_app",
+            Self::DeviceAcquire { .. } => "device_acquire",
+            Self::DeviceRelease => "device_release",
             Self::AskUser { .. } => "ask_user",
             Self::WorkspacesList => "workspaces_list",
             Self::WorkspaceCreate { .. } => "workspace_create",

@@ -62,6 +62,7 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                         screen_pt: Some((402.0, 874.0)),
                         scale: Some(3.0),
                         orientation: None,
+                        sharing: None,
                     }));
                 }
                 McpRequest::Frame { reply, .. } => {

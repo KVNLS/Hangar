@@ -23,7 +23,7 @@ fn orchestration_tools_are_listed_only_when_on() {
             .map(|d| d["name"].as_str().unwrap().to_owned())
             .collect()
     };
-    assert_eq!(names(false), TOOL_NAMES[..10]);
+    assert_eq!(names(false), TOOL_NAMES[..12]);
     assert_eq!(names(true), TOOL_NAMES);
     for name in TOOL_NAMES {
         assert_eq!(

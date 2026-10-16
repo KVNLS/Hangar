@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-pub(super) const TOOL_NAMES: [&str; 14] = [
+pub(super) const TOOL_NAMES: [&str; 16] = [
     "device_info",
     "screenshot",
     "tap",
@@ -10,6 +10,8 @@ pub(super) const TOOL_NAMES: [&str; 14] = [
     "logs",
     "build_and_run",
     "launch_app",
+    "device_acquire",
+    "device_release",
     "ask_user",
     "workspaces_list",
     "workspace_create",
@@ -32,6 +34,7 @@ pub(super) fn allowed_args(tool: &str) -> &'static [&'static str] {
         "press" => &["button", "key"],
         "logs" => &["lines", "level", "process"],
         "launch_app" => &["app_id"],
+        "device_acquire" => &["wait_s"],
         "ask_user" => &["question", "choices"],
         "workspace_create" => &["task", "name", "agent"],
         "agent_prompt" => &["workspace", "text"],

@@ -50,8 +50,8 @@ pub use screenshot::{MAX_SIDE, Screenshot, ScreenshotError, encode_screenshot};
 pub use server::{bind, handle_envelope, serve, serve_connection};
 pub use tools::{
     Answer, Button, Content, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES,
-    DeviceStatus, MAX_LOG_LINES, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES, ParseError, Press, Tool,
-    ToolError, ToolOutput, definitions,
+    DeviceStatus, MAX_ACQUIRE_WAIT_S, MAX_LOG_LINES, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES,
+    ParseError, Press, Sharing, Tool, ToolError, ToolOutput, definitions, queued_message,
 };
 
 /// Environment variable carrying the workspace's session secret to the bridge.

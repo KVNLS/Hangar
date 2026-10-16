@@ -268,6 +268,8 @@ fn tools_list_shape() {
             "logs",
             "build_and_run",
             "launch_app",
+            "device_acquire",
+            "device_release",
             "ask_user"
         ]
     );
