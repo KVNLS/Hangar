@@ -62,9 +62,10 @@ impl HangarApp {
             || crate::mcp_host::Timeouts::default().acquire_budget(),
             crate::mcp_host::McpHandle::acquire_budget,
         );
+        let deadline = std::time::Instant::now() + budget;
         let acquire = self.devices.pool.update(cx, |pool, cx| {
             pool.touch(ws, cx);
-            pool.acquire(ws, Some(budget), cx)
+            pool.acquire(ws, Some(deadline), cx)
         });
         let pool = self.devices.pool.downgrade();
         cx.spawn(async move |_, cx| match acquire.await {

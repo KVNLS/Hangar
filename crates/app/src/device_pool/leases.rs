@@ -1,6 +1,6 @@
 //! Opening a workspace's device for the panel, or under a lease for a run or tool call.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::anyhow;
 use gpui_kit::*;
@@ -48,19 +48,20 @@ impl DevicePool {
     /// Opens a device for a call of the workspace under a lease: the machine picks it (its own
     /// device, or at the cap a compatible running one it shares) and the call waits in line
     /// for it. A refused boot moves the call to a running device of its class; a boot that
-    /// waits for a slot may move it too, even before the call opened it. `budget`: how long the call may wait in line, after
-    /// which it fails with [`StillQueued`] and keeps its place.
+    /// waits for a slot may move it too, even before the call opened it. `deadline`: until when
+    /// the call may wait in line, counted from the call's start (the MCP host's timer starts
+    /// then, not after the assignment and the host are known); past it the call fails with
+    /// [`StillQueued`] and keeps its place.
     pub fn acquire(
         &mut self,
         ws: WorkspaceId,
-        budget: Option<Duration>,
+        deadline: Option<Instant>,
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<Acquired>> {
         let assignment = self.resolve_assignment(ws, cx);
         cx.spawn(async move |this, cx| {
             let a = assignment.await?;
             Self::wait_host(&this, cx).await;
-            let deadline = budget.map(|b| Instant::now() + b);
             let avd = (a.platform == Platform::Android).then(|| a.base.clone());
             let mut pending = this.update(cx, |pool, cx| {
                 let start = pool.machine.request_device(ws, Instant::now());
