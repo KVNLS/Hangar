@@ -3,20 +3,9 @@
 use std::time::Duration;
 
 use hangar_core::WorkspaceId;
+pub use hangar_mcp::ordinal;
 
 use super::Member;
-
-/// "1st", "2nd", "11th" for a 1-based place.
-pub fn ordinal(n: usize) -> String {
-    let suffix = match (n % 100, n % 10) {
-        (11..=13, _) => "th",
-        (_, 1) => "st",
-        (_, 2) => "nd",
-        (_, 3) => "rd",
-        _ => "th",
-    };
-    format!("{n}{suffix}")
-}
 
 /// "~30 s" or "~2 min", rounding minutes up.
 pub fn approx(d: Duration) -> String {
@@ -33,14 +22,6 @@ pub fn waiting_label(position: Option<usize>) -> String {
     match position {
         Some(p) => format!("waiting for device ({})", ordinal(p + 1)),
         None => "waiting for device".to_owned(),
-    }
-}
-
-/// How long the holder keeps the device.
-pub fn frees_line(left: Option<Duration>) -> String {
-    match left {
-        Some(d) => format!("frees in {}", approx(d)),
-        None => "until it is released".to_owned(),
     }
 }
 
@@ -70,17 +51,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ordinals_handle_the_teens() {
-        let got: Vec<_> = [1, 2, 3, 4, 11, 12, 13, 21, 22].map(ordinal).into();
-        assert_eq!(
-            got,
-            [
-                "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd"
-            ]
-        );
-    }
-
-    #[test]
     fn durations_switch_to_minutes_rounding_up() {
         assert_eq!(approx(Duration::from_secs(30)), "~30 s");
         assert_eq!(approx(Duration::from_secs(60)), "~1 min");
@@ -93,8 +63,6 @@ mod tests {
         assert_eq!(waiting_label(None), "waiting for device");
         assert_eq!(holder_line("ws-b", 0), "in use by ws-b");
         assert_eq!(holder_line("ws-b", 2), "in use by ws-b · 2 waiting");
-        assert_eq!(frees_line(None), "until it is released");
-        assert_eq!(frees_line(Some(Duration::from_secs(70))), "frees in ~2 min");
     }
 
     #[test]

@@ -51,7 +51,7 @@ pub use server::{bind, handle_envelope, serve, serve_connection};
 pub use tools::{
     Answer, Button, Content, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES,
     DeviceStatus, MAX_ACQUIRE_WAIT_S, MAX_LOG_LINES, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES,
-    ParseError, Press, Sharing, Tool, ToolError, ToolOutput, definitions, queued_message,
+    ParseError, Press, Sharing, Tool, ToolError, ToolOutput, definitions, ordinal, queued_message,
 };
 
 /// Environment variable carrying the workspace's session secret to the bridge.

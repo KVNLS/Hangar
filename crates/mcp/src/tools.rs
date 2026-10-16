@@ -13,7 +13,7 @@ use args::ORCHESTRATION_TOOLS;
 
 pub use output::{Answer, Content, DeviceStatus, ToolError, ToolOutput};
 pub use schema::definitions;
-pub use sharing::{Sharing, queued_message};
+pub use sharing::{Sharing, ordinal, queued_message};
 
 pub const DEFAULT_SWIPE_MS: u64 = 300;
 pub const MAX_SWIPE_MS: u64 = 10_000;

@@ -594,14 +594,15 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
 - Reservations keep a device between a workspace's calls: idle expiry after 90 s. With others waiting, the
   holder is warned after 5 min and loses the device 60 s later, never during a call. The user can take a
   device over. Waiting tickets expire 10 min after the agent's last poll, not after its first request.
-- A run gives its device back at launch; the workspace keeps an ordinary reservation. A finished run records
-  the app it installed, so the next workspace granted the device gets `stale_app`.
+- A run gives its device back at launch; the workspace keeps an ordinary reservation. The launch records the
+  app it installed, so the next workspace granted the device gets `stale_app`.
 - MCP: `device_acquire { wait_s }` (0 to 25 s), `device_release`, a `sharing` block in `device_info`. A device
   tool that waits past its budget (call timeout minus 3 s) fails with the place in line and the holder.
   Notices for warned or revoked holders ride on the next tool reply. Server instructions ask agents to
   acquire before a sequence of device calls.
-- UI pass: in-use overlay with the queue and Take over, waiting position in the sidebar, holder and queue in
-  Settings › Devices.
+- UI: the in-use overlay shows the holder, "Frees in ~N min", the queue ("1. ws-a, 2. ws-b (you)") and a
+  Take over button; "waiting for device (2nd)" on sidebar rows (hourglass tooltip), overview cards, the pane
+  tab bar and the status bar; Settings › Devices rows read "in use by ws-b · 2 waiting".
 - Checked: unit tests in `usecases` (machine and `device_pool/tests/sharing.rs`) and `mcp` (sharing tools,
   parsing); `mcp_bridge` test with two agents on one device through the bridge binary (A granted, B queued
   at position 0, B granted on A's release). Not yet seen on screen (PLAN M10 checklist).

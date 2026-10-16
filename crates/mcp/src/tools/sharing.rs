@@ -26,7 +26,8 @@ pub struct Sharing {
     pub notice: Option<String>,
 }
 
-fn ordinal(n: usize) -> String {
+/// "1st", "2nd", "11th" for a 1-based place.
+pub fn ordinal(n: usize) -> String {
     let suffix = match (n % 100, n % 10) {
         (11..=13, _) => "th",
         (_, 1) => "st",
