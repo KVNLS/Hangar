@@ -618,6 +618,65 @@ fn releasing_while_queued_leaves_the_line() {
     assert_eq!(grants(&m.take_commands()), [(for_c, c.id, true)]);
 }
 
+#[test]
+fn a_call_moved_before_it_opened_asks_again() {
+    let ws = workspaces(&["c1", "c2", "b2", "b4"]);
+    let mut left = ios("B");
+    left.own = Some("LEFT".into());
+    let mut m = pool(
+        Limit::Manual(2),
+        &[
+            (&ws[0], ios("C")),
+            (&ws[1], ios("C")),
+            (&ws[2], ios("B")),
+            (&ws[3], left),
+        ],
+    );
+    let t = Instant::now();
+    for w in &ws[..2] {
+        let start = m.request_device(w.id, t).unwrap();
+        open_running(&mut m, &start.key, &w.slug, t);
+    }
+    let (k2, k4) = (PoolKey::Own(ws[2].id), PoolKey::Own(ws[3].id));
+    // Two calls of B2 hold its device; the first one's boot waits for a slot.
+    assert_eq!(m.request_device(ws[2].id, t).unwrap().key, k2);
+    let first = wait(m.open_held(&k2, ws[2].id, t));
+    let probe = step(&m.take_commands());
+    m.step_done(&k2, probe.attempt, StepDone::Probed(Ok(None)), t);
+    assert_eq!(step(&m.take_commands()).step, Step::Wait(SLOT_POLL));
+    let second = m.request_device(ws[2].id, t).unwrap();
+    assert_eq!((&second.key, second.lease), (&k2, LeaseStart::Granted));
+    assert!(m.holds(ws[2].id, &k2));
+    // A device of class B runs: the boot stops and B2 no longer holds its own device.
+    m.set_focused(Some(ws[3].id));
+    let mut running = RunningSet::default();
+    running.add(
+        Platform::Ios,
+        vec![RunningInstance {
+            id: "LEFT".into(),
+            base: None,
+        }],
+    );
+    m.running_scanned(&running);
+    m.step_done(&k2, probe.attempt, StepDone::Waited, t + SLOT_POLL);
+    let commands = m.take_commands();
+    assert!(matches!(
+        replies(&commands).as_slice(),
+        [(token, Err(OpenError::Moved { .. }))] if *token == first
+    ));
+    assert!(!m.holds(ws[2].id, &k2));
+    // The second call, granted before the move, opens only now: it is told to ask again
+    // instead of booting a device it no longer holds.
+    assert!(matches!(
+        m.open_held(&k2, ws[2].id, t + SLOT_POLL),
+        OpenStart::Ready(Err(OpenError::Moved { .. }))
+    ));
+    let commands = m.take_commands();
+    assert!(steps(&commands).is_empty(), "{commands:?}");
+    let again = m.request_device(ws[2].id, t + SLOT_POLL).unwrap();
+    assert_eq!((&again.key, again.shared), (&k4, true));
+}
+
 fn android_base(id: &str) -> PoolKey {
     PoolKey::Base(DeviceKey {
         platform: Platform::Android,

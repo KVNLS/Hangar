@@ -39,7 +39,7 @@ impl DevicePool {
                     .key_for(ws)
                     .unwrap_or_else(|| pool.machine.key_of(ws, &a))
             })?;
-            Self::open(this, key, cx)
+            Self::open(this, key, None, cx)
                 .await
                 .map_err(|e| anyhow!(e.message().to_owned()))
         })
@@ -48,7 +48,7 @@ impl DevicePool {
     /// Opens a device for a call of the workspace under a lease: the machine picks it (its own
     /// device, or at the cap a compatible running one it shares) and the call waits in line
     /// for it. A refused boot moves the call to a running device of its class; a boot that
-    /// waits for a slot may move it too. `budget`: how long the call may wait in line, after
+    /// waits for a slot may move it too, even before the call opened it. `budget`: how long the call may wait in line, after
     /// which it fails with [`StillQueued`] and keeps its place.
     pub fn acquire(
         &mut self,
@@ -70,7 +70,7 @@ impl DevicePool {
                 let Granted { lease, stale_app } = Self::granted(ws, pending, deadline, cx)
                     .await?;
                 let key = lease.key().clone();
-                let refused = match Self::open(this.clone(), key.clone(), cx).await {
+                let refused = match Self::open(this.clone(), key.clone(), Some(ws), cx).await {
                     Ok(session) => {
                         let (borrowed, shared_with) = this.update(cx, |pool, cx| {
                             pool.tell_stale(ws, &key, stale_app.as_deref(), cx);

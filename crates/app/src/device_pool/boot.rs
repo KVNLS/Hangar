@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::*;
+use hangar_core::WorkspaceId;
 use hangar_core::device::Conflict;
 use hangar_usecases::device_pool::{BootFailed, BringUp, OpenStart, Step, StepDone};
 use tokio::sync::oneshot;
@@ -18,11 +19,22 @@ fn stopped() -> OpenError {
 }
 
 impl DevicePool {
-    /// Opens the device `key` (booting it if needed), or waits for the boot in progress.
-    pub(super) async fn open(this: WeakEntity<Self>, key: PoolKey, cx: &mut AsyncApp) -> Opened {
+    /// Opens the device `key` (booting it if needed), or waits for the boot in progress. A call
+    /// of `held_by` holding its lease gets [`OpenError::Moved`] once the lease was taken back.
+    pub(super) async fn open(
+        this: WeakEntity<Self>,
+        key: PoolKey,
+        held_by: Option<WorkspaceId>,
+        cx: &mut AsyncApp,
+    ) -> Opened {
         let started = this
             .update(cx, |pool, cx| {
-                let started = match pool.machine.open(&key, Instant::now()) {
+                let now = Instant::now();
+                let start = match held_by {
+                    Some(ws) => pool.machine.open_held(&key, ws, now),
+                    None => pool.machine.open(&key, now),
+                };
+                let started = match start {
                     OpenStart::Ready(result) => Ok(result),
                     OpenStart::Wait(token) => {
                         let (tx, rx) = oneshot::channel();

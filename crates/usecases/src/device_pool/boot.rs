@@ -93,6 +93,32 @@ impl<S: Session> PoolMachine<S> {
         OpenStart::Wait(token)
     }
 
+    /// Like [`Self::open`], for a call of `ws` granted the lease on `key`. A grant can be taken
+    /// back before its call opens (the bring-up it would join moved its waiters elsewhere,
+    /// [`Self::reroute`]): then [`OpenError::Moved`], so that the call asks again rather than
+    /// boot a device it does not hold.
+    pub fn open_held(&mut self, key: &PoolKey, ws: WorkspaceId, now: Instant) -> OpenStart<S> {
+        if self.holds(ws, key) {
+            return self.open(key, now);
+        }
+        let name = self.name_of(key).unwrap_or("the device").to_owned();
+        tracing::info!(target: "device_pool", workspace = %ws, ?key, "the call's lease was taken back before it opened");
+        OpenStart::Ready(Err(OpenError::Moved {
+            to: self.key_for(ws).unwrap_or_else(|| key.clone()),
+            message: format!(
+                "{name} was taken back from this call before it opened: request the device again"
+            ),
+        }))
+    }
+
+    /// Whether a call of `ws` holds the lease on `key`.
+    pub fn holds(&self, ws: WorkspaceId, key: &PoolKey) -> bool {
+        self.devices
+            .get(key)
+            .and_then(|d| d.leases.holding())
+            .is_some_and(|h| h.who == ws && h.holds > 0)
+    }
+
     fn bring_up(&mut self, key: &PoolKey, attempt: u64, step: Step) {
         self.push(Command::BringUp(BringUp {
             key: key.clone(),
