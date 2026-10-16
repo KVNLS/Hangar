@@ -586,6 +586,26 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   Launch Services. Fonts and icons are embedded, and Finder launches get the login-shell PATH (`login_env`).
 
 
+## Device sharing (2026-10-16, branch `device-sharing`)
+- Several agents share a limited pool inside one Hangar. `PoolMachine` binds each workspace to the device it
+  uses now, apart from its saved assignment. At the cap a workspace shares a running device of its class
+  (platform and base) and queues FIFO, instead of waiting for a slot of its own. A refused boot shares
+  inside the machine; the app-side fallback is gone.
+- Reservations keep a device between a workspace's calls: idle expiry after 90 s. With others waiting, the
+  holder is warned after 5 min and loses the device 60 s later, never during a call. The user can take a
+  device over. Waiting tickets expire 10 min after the agent's last poll, not after its first request.
+- A run gives its device back at launch; the workspace keeps an ordinary reservation. A finished run records
+  the app it installed, so the next workspace granted the device gets `stale_app`.
+- MCP: `device_acquire { wait_s }` (0 to 25 s), `device_release`, a `sharing` block in `device_info`. A device
+  tool that waits past its budget (call timeout minus 3 s) fails with the place in line and the holder.
+  Notices for warned or revoked holders ride on the next tool reply. Server instructions ask agents to
+  acquire before a sequence of device calls.
+- UI pass: in-use overlay with the queue and Take over, waiting position in the sidebar, holder and queue in
+  Settings › Devices.
+- Checked: unit tests in `usecases` (machine and `device_pool/tests/sharing.rs`) and `mcp` (sharing tools,
+  parsing); `mcp_bridge` test with two agents on one device through the bridge binary (A granted, B queued
+  at position 0, B granted on A's release). Not yet seen on screen (PLAN M10 checklist).
+
 ## Resolved questions (moved from PLAN.md, 2026-10-14)
 2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (docs/notes/spike-b-notes.md).
    Keep `sim_probe` to re-check each Xcode release.

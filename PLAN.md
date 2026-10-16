@@ -16,7 +16,7 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 | crate    | owns                                                                             | depends on     |
 |----------|----------------------------------------------------------------------------------|----------------|
 | core     | domain: Project / Workspace / Session, AgentState, device, changes, review; ports | —              |
-| usecases | application services: workspaces, sessions, settings, review; pure policies: agent queue and attention, batch / best-of-N, orchestration guard rails, history | core |
+| usecases | application services: workspaces, sessions, settings, review; pure policies: agent queue and attention, batch / best-of-N, orchestration guard rails, history; device pool state machine with binding, reservations and device sharing | core |
 | store-sqlite | SQLite Store (projects, workspaces, sessions with history and cost, usage ledger, settings; schema v9) | core  |
 | worktree | git/gh CLI wrapper; `GitCli` and `Gh` implement the git and code-host ports      | core           |
 | agents   | AgentAdapter trait, PtyAdapter (a `Launch`); ACP client (`acp`); Ollama; Claude Code transcripts | — |
@@ -24,7 +24,7 @@ Git worktree, with live diffs and an embedded iOS simulator / Android emulator. 
 | files    | file watching (notify, debounced, git-ignore aware), LiveDiff over `Changes`     | core           |
 | devices  | Device trait and capabilities; iOS (private + simctl fallback), Android          | core           |
 | runner   | build/run per stack: Xcode, Gradle, React Native, Expo                           | core           |
-| mcp      | MCP server for agents: protocol engine, socket server, stdio bridge; device, orchestration and `ask_user` tools; Claude Code hook mapping (`Hangar notify`) | core |
+| mcp      | MCP server for agents: protocol engine, socket server, stdio bridge; device tools (`device_acquire` / `device_release` for sharing), orchestration and `ask_user` tools; Claude Code hook mapping (`Hangar notify`) | core |
 | app      | GPUI shell, all views (terminal, chat, diff, device), wiring                     | all            |
 
 Views live in `app`; library crates expose plain data and input enums. Syntax highlighting uses
@@ -92,6 +92,8 @@ Numbers are stable; resolved questions moved to docs/HISTORY.md ("Resolved quest
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
   `Lock`/volume buttons (private backend only); iOS `AppSwitch`/`Back`; text beyond printable ASCII +
   `\n`/`\t` on the private backend.
+- `mcp` device sharing: a push notification when a device grant arrives (no server-initiated MCP messages;
+  agents poll `device_acquire` with `wait_s`).
 - `agents::ollama`: `https://` Ollama hosts (`OllamaError::Unsupported`); the app shows the error.
 
 ## Not yet seen on screen (M10 checklist)
@@ -101,7 +103,9 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - Terminal: right-click menu, middle-click paste, Option-drag block selection.
 - Review: "Pull and rebase" after a rejected push; merge dialog pushing the base.
 - Devices: Android boot stage text and Rotate (Pixel_10_Pro shut down first, or a second AVD); logs height
-  drag and sideways scroll.
+  drag and sideways scroll; device sharing with two or three workspaces, `HANGAR_DEV_DEVICE_LIMIT=2` and
+  `HANGAR_DEV_AGENT=claude-acp`: queue in the in-use overlay, waiting position in the sidebar, hand-over
+  after idle expiry, Take over, the stale-app hint; the same with an Android AVD.
 - Agents: Claude Code Resume click; Claude Code mode chip and slash list; Ollama settings and model chip;
   overview subagent rows and subagent chat; Input from `elicitation_dialog`; terminal transcripts read by a
   lead; ACP watchdog after a Hangar crash.
@@ -110,7 +114,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   Tools and Xcode-missing states.
 - MCP: Codex and Gemini wiring; OpenCode's MCP permission default; a real agent session using the device
   tools; Gradle/Expo builds on a pool Android instance; `ask_user` waits over a minute on agents other than
-  Claude Code.
+  Claude Code; `device_acquire` / `device_release` and `wait_s` polling from a real agent, including the
+  "you are 2nd in line" error and the pending notices.
 
 ## Known gaps
 - **QA sweep 2026-10, not fixed yet** (reports kept outside the repo, in the owner's notes):
@@ -127,10 +132,15 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - **Devices:** simctl and Android frames still copied into the atlas (PLAN question 3 in docs/HISTORY.md); log lines from several
   processes can arrive a few ms out of order; logs: no multi-line merging, level filter client-side (low lines still fill the ring buffer),
   follow-tail ignores scrollbar drags (no scrollbar); emulators started outside Hangar keep Gboard's stylus
-  sheet; iOS `logs` tool only returns a ~1.5 s capture; `AvdCost` can understate RAM; no queue position in
-  single-device mode; `HANGAR_DEVICE_ID`/`ANDROID_SERIAL` empty when the agent starts before its device;
+  sheet; iOS `logs` tool only returns a ~1.5 s capture; `AvdCost` can understate RAM;
+  `HANGAR_DEVICE_ID`/`ANDROID_SERIAL` empty when the agent starts before its device;
   the `backend: …` line is not in the mockup (design call: hide unless fallback, or name the clone in the
   picker).
+- **Device sharing:** `device_release` while still queued does not cancel the ticket (it expires after
+  `LEASE_TIMEOUT` unless polled); the 30 s MCP call timeout still applies to slow boots (the wait budget
+  covers only waiting in line); an Expo build that never prints its launched line holds its lease until
+  its build tab exits or the run is replaced; agents poll with `wait_s` (no push on grant); `mcp_host.rs`
+  is near the 800-line split threshold (770 lines).
 - **Run loop:** no parsed build progress or crash overlay; `expo run` prebuild
   output lands in the worktree; Expo picks Android devices by AVD name (ambiguous with pool instances);
   React Native CLI unit-tested only; the JDK/Gradle setup is the user's.
@@ -154,9 +164,9 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   argv (visible to the same user in `ps`).
 - **Ollama:** OpenCode only (Codex `--oss`, Claude Code `ANTHROPIC_BASE_URL` not done); models without tool
   calling are not filtered.
-- **Shell / design (still open):** custom agent commands; recording keybindings; Clone / Take over in the
-  in-use overlay; phone bezel and flash ring; project kind; Clone repository; agent memory and system RAM in
-  the status bar; "Sandbox: worktree only" not shown (agents are not sandboxed); ⌘⏎ missing from the
+- **Shell / design (still open):** custom agent commands; recording keybindings; Clone in the in-use
+  overlay (Take over is done); phone bezel and flash ring; project kind; Clone repository; agent memory and
+  system RAM in the status bar; "Sandbox: worktree only" not shown (agents are not sandboxed); ⌘⏎ missing from the
   keybinding table; the toast covers the device panel's Shut down button for 2.8 s; queued starts not shown
   in the sidebar.
 - **Notifications:** clicking one does not open its workspace; unbundled macOS builds (`cargo run`; the
@@ -187,6 +197,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
 - `agent_prompt` only reaches children whose agent reports its waits (`reports_waits` in `PROFILES`):
   terminal Claude Code (hooks) and the ACP presets; never terminal Codex/OpenCode/Gemini or a shell
   (2026-10-12).
+- (2026-10-14) Device sharing: inside Hangar only; reservation with idle expiry; at the cap, a workspace
+  shares a compatible running device rather than wait for one of its own.
 
 ## Next
 1. Split the files over 800 lines (docs/ARCHITECTURE.md "Done when").

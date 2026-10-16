@@ -111,6 +111,9 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
      `DevicePool` entity keeps its API and only feeds it and runs its commands through
      `DeviceCatalog` and `HostMonitor` on the background executor. To check on macOS with the dev
      hooks and real simulators/emulators before merging.
+   - Done (device sharing, branch `device-sharing`): the same machine also owns the binding (which device a
+     workspace uses now), reservations (idle expiry, warn and revoke, take over) and sharing at the cap.
+     Tested in `device_pool/tests/sharing.rs`. `DevicePool::acquire` in `app` only follows its choice.
    - Done (M10, shell side): views do no store or process I/O. Run configs, the saved chat, session
      cost, the usage ledger and settings and the co-author trailer are `app::ops` functions
      (`ops/run_config.rs`, `ops/chats.rs`, tested in `ops/tests/`) run on the background executor
