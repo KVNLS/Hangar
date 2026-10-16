@@ -23,6 +23,9 @@ const RUNNING: u8 = 2;
 /// Also devices about to boot for a call.
 const STARTING: u8 = 3;
 
+/// Why a waiter of a refused boot shares another device ([`PoolMachine::boot_refused`]).
+const REFUSED_WAIT: &str = "waited for a device that could not boot";
+
 /// Result of [`PoolMachine::request_device`]: the device to open (with
 /// [`PoolMachine::open`]) once the lease is granted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,14 +199,16 @@ impl<S: Session> PoolMachine<S> {
         let to = self
             .class_base(key)
             .and_then(|base| self.shareable(platform, base, key, RUNNING));
-        self.drop_holder(key, ws, now);
         let Some(to) = to else {
+            self.drop_holder(key, ws, now);
             self.prune_bindings();
             return Ok(None);
         };
+        // Before the lease is dropped, or the refused device would be granted to the first one.
         for other in waiters {
-            self.move_tickets(other, key, &to, now);
+            self.move_tickets(other, key, &to, now, Some(REFUSED_WAIT));
         }
+        self.drop_holder(key, ws, now);
         let lease = self.queue_for(&to, ws, now, true)?;
         self.notice_shared(ws, &to, Some("could not boot its own device"));
         self.prune_bindings();
@@ -242,7 +247,7 @@ impl<S: Session> PoolMachine<S> {
             return false;
         };
         for ws in waiters {
-            self.move_tickets(ws, key, &to, now);
+            self.move_tickets(ws, key, &to, now, None);
         }
         let Some(holder) = holder else {
             self.prune_bindings();
@@ -281,11 +286,24 @@ impl<S: Session> PoolMachine<S> {
         }
     }
 
-    /// Moves the waiting tickets of `ws` from `from` to `to`, granted there at once if free.
-    fn move_tickets(&mut self, ws: WorkspaceId, from: &PoolKey, to: &PoolKey, now: Instant) {
-        let Some(tickets) = self.devices.get_mut(from).map(|d| d.leases.take(&ws)) else {
+    /// Moves the waiting tickets of `ws` from `from` to `to`, granted there at once if free;
+    /// `why` goes into the notice.
+    fn move_tickets(
+        &mut self,
+        ws: WorkspaceId,
+        from: &PoolKey,
+        to: &PoolKey,
+        now: Instant,
+        why: Option<&str>,
+    ) {
+        let tickets = self
+            .devices
+            .get_mut(from)
+            .map(|d| d.leases.take(&ws))
+            .unwrap_or_default();
+        if tickets.is_empty() {
             return;
-        };
+        }
         let Some(device) = self.entry(to) else {
             for (token, _) in tickets {
                 self.push(Command::FailLease {
@@ -304,7 +322,7 @@ impl<S: Session> PoolMachine<S> {
         self.bindings.insert(ws, to.clone());
         self.push_grants(to, granted);
         tracing::info!(target: "device_pool", workspace = %ws, ?from, ?to, "waiting for a running device instead");
-        self.notice_shared(ws, to, None);
+        self.notice_shared(ws, to, why);
     }
 
     /// Tells the user `ws` now shares `key`, and with whom.

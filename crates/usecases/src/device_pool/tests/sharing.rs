@@ -590,3 +590,57 @@ fn a_grant_returned_by_a_caller_that_gave_up_keeps_a_reservation() {
         [(for_c, c.id, true)]
     );
 }
+
+/// Every holder whose reservation is not ending is bound to the device it holds, and every
+/// waiter to the device it waits for.
+fn assert_bound_to_held(m: &Machine) {
+    for (key, d) in &m.devices {
+        if let Some(h) = d.leases.holding().filter(|h| !h.ending) {
+            assert_eq!(m.bindings.get(&h.who), Some(key), "holder of {key:?}");
+        }
+        for ws in d.leases.waiters() {
+            assert_eq!(m.bindings.get(ws), Some(key), "waiter of {key:?}");
+        }
+    }
+}
+
+#[test]
+fn a_refused_boot_moves_its_waiters_before_the_lease_is_dropped() {
+    let ws = workspaces(&["w1", "w2", "w3"]);
+    let assigned: Vec<(&WorkspaceRef, Assignment)> = ws.iter().map(|w| (w, ios("B"))).collect();
+    let mut m = pool(Limit::Auto, &assigned);
+    let t = Instant::now();
+    let (k1, k2) = (PoolKey::Own(ws[0].id), PoolKey::Own(ws[1].id));
+    m.request_device(ws[0].id, t).unwrap();
+    open_running(&mut m, &k1, "D1", t);
+    assert_eq!(m.request_device(ws[1].id, t).unwrap().key, k2);
+    let for_w3 = queued(m.request_lease(&k2, ws[2].id, t));
+    wait(m.open(&k2, t));
+    let probe = step(&m.take_commands());
+    m.step_done(&k2, probe.attempt, StepDone::Probed(Ok(None)), t);
+    m.take_commands();
+    m.step_done(
+        &k2,
+        probe.attempt,
+        StepDone::HostChecked(Ok(host(Pressure::Warn))),
+        t,
+    );
+    m.take_commands();
+    let moved = m.boot_refused(ws[1].id, &k2, t).unwrap().unwrap();
+    assert_eq!(moved.key, k1);
+    let commands = m.take_commands();
+    assert!(grants(&commands).is_empty(), "{commands:?}");
+    assert_eq!(
+        notices(&commands),
+        [
+            "W3 waited for a device that could not boot: it shares D1 with W1 and takes turns.",
+            "W2 could not boot its own device: it shares D1 with W1, W3 and takes turns.",
+        ]
+    );
+    assert_eq!(m.key_for(ws[2].id), Some(k1.clone()));
+    assert_bound_to_held(&m);
+    m.release_lease(&k1, ws[0].id, t);
+    m.release_reservation(ws[0].id, t);
+    assert_eq!(grants(&m.take_commands()), [(for_w3, ws[2].id, true)]);
+    assert_bound_to_held(&m);
+}
