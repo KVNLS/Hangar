@@ -83,6 +83,21 @@ impl HangarApp {
                     this.layout.device.stats = *stats;
                     this.save_device_layout(window, cx);
                 }
+                DevicePanelEvent::TookOver(result) => match result {
+                    Ok(true) => {
+                        this.show_toast(toast::ToastKind::Success, "You have the device", cx)
+                    }
+                    Ok(false) => this.show_toast(
+                        toast::ToastKind::Info,
+                        "You are next: a call in progress finishes first",
+                        cx,
+                    ),
+                    Err(err) => this.show_toast(
+                        toast::ToastKind::Info,
+                        format!("Could not take over: {err}"),
+                        cx,
+                    ),
+                },
                 DevicePanelEvent::Logs(logs) => {
                     this.layout.device.logs = logs.open;
                     this.layout.device.log_level = Some(logs.min_level.as_str().to_owned());

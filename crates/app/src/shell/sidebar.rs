@@ -23,6 +23,8 @@ pub(super) struct WorkspaceRow {
     pub mark: Option<&'static str>,
     pub counts: Option<DiffCounts>,
     pub active: bool,
+    /// "waiting for device (2nd)" while the workspace queues for its device.
+    pub device_wait: Option<String>,
     /// An archive/delete/restore is in flight: no further actions.
     pub busy: bool,
 }
@@ -98,6 +100,7 @@ impl HangarApp {
             mark: live.map(|l| l.session.agent.monogram()),
             counts: self.diff_counts(ws.id, cx),
             active: focused == Some(ws.id),
+            device_wait: self.device_wait_label(ws.id, cx),
             busy: self.work.busy.contains(&ws.id),
         }
     }
@@ -172,6 +175,13 @@ impl HangarApp {
                     .child(div().min_w_0().truncate().child(base))
                     .children(number.map(|n| div().flex_none().child(n)))
             })
+            .children(row.device_wait.map(|label| {
+                div()
+                    .id(SharedString::from(format!("ws-wait-{id}")))
+                    .flex_none()
+                    .child(Icon::new(Lucide::Hourglass).size(px(12.)).text_color(t.amb))
+                    .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+            }))
             .children(row.mark.map(AgentMark::new))
             .child(trailing)
             .when(!busy, |this| {

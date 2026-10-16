@@ -41,6 +41,8 @@ pub enum DevicePanelEvent {
     Stats(bool),
     /// The logs pane was opened/closed or its level changed (save it).
     Logs(LogsSettings),
+    /// "Take over" was pressed: whether the device was granted now, or why not.
+    TookOver(Result<bool, String>),
 }
 
 #[derive(Clone, Debug, PartialEq)]

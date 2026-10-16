@@ -59,7 +59,7 @@ impl HangarApp {
                 )
             })
             .collect();
-        let waiting = workspace_id.is_some_and(|id| self.devices.pool.read(cx).is_waiting(id));
+        let waiting = workspace_id.and_then(|id| self.device_wait_label(id, cx));
         let run_button = workspace.map(|ws| {
             let ws_id = ws.id;
             UiButton::new(("run", pane))
@@ -124,14 +124,14 @@ impl HangarApp {
             .border_color(t.line)
             .child(tab)
             .children(run_tabs)
-            .when(waiting, |this| {
+            .when_some(waiting, |this, label| {
                 this.child(
                     div()
                         .px_2()
                         .font_mono()
                         .text_size(px(11.))
                         .text_color(t.amb)
-                        .child("Waiting for the device"),
+                        .child(label),
                 )
             })
             .child(div().flex_1())

@@ -10,6 +10,7 @@ mod assignments;
 pub mod backend;
 mod boot;
 mod commands;
+pub mod copy;
 mod leases;
 pub mod orphans;
 mod sharing;

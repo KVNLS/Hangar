@@ -142,10 +142,14 @@ impl HangarApp {
                                     .child(format!(
                                         "{} · {}",
                                         row.platform.label(),
-                                        if row.workspaces.is_empty() {
-                                            "no workspace".to_owned()
-                                        } else {
-                                            row.workspaces.join(", ")
+                                        match &row.holder {
+                                            Some(holder) => crate::device_pool::copy::holder_line(
+                                                holder,
+                                                row.queue_len
+                                            ),
+                                            None if row.workspaces.is_empty() =>
+                                                "no workspace".to_owned(),
+                                            None => row.workspaces.join(", "),
                                         }
                                     )),
                             ),
