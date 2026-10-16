@@ -395,7 +395,7 @@ fn leases_queue_hand_over_and_time_out() {
         panic!("c should wait");
     };
     assert_eq!(m.held_by_other(b.id).map(|(ws, _)| ws), Some(a.id));
-    m.release_lease(&x, a.id);
+    m.release_lease(&x, a.id, now);
     let commands = m.take_commands();
     assert!(matches!(
         commands.as_slice(),

@@ -130,7 +130,7 @@ impl DevicePool {
         holder: WorkspaceId,
         cx: &mut Context<Self>,
     ) {
-        self.machine.release_lease(key, holder);
+        self.machine.release_lease(key, holder, Instant::now());
         self.run(cx);
         cx.notify();
     }

@@ -145,17 +145,17 @@ fn lease_is_fifo_and_reentrant() {
     assert_eq!(q.acquire("c", t, 4), Acquire::Queued { position: 1 });
     assert_eq!(q.acquire("b", t, 5), Acquire::Queued { position: 2 });
     assert!(q.is_waiting(&"b"));
-    assert_eq!(q.release(&"a"), Vec::<u32>::new());
+    assert_eq!(q.release(&"a", t), Vec::<u32>::new());
     // `b` was first in line: both of its waiters are granted together, `c` keeps waiting.
-    assert_eq!(q.release(&"a"), [3, 5]);
+    assert_eq!(q.release(&"a", t), [3, 5]);
     assert_eq!(q.holder(), Some(&"b"));
     assert_eq!(q.waiting_len(), 1);
     // Releasing what is not held changes nothing.
-    assert_eq!(q.release(&"c"), Vec::<u32>::new());
-    assert_eq!(q.release(&"b"), Vec::<u32>::new());
-    assert_eq!(q.release(&"b"), [4]);
+    assert_eq!(q.release(&"c", t), Vec::<u32>::new());
+    assert_eq!(q.release(&"b", t), Vec::<u32>::new());
+    assert_eq!(q.release(&"b", t), [4]);
     assert_eq!(q.holder(), Some(&"c"));
-    assert_eq!(q.release(&"c"), Vec::<u32>::new());
+    assert_eq!(q.release(&"c", t), Vec::<u32>::new());
     assert!(q.is_idle());
 }
 
@@ -166,7 +166,7 @@ fn a_free_lease_is_not_taken_past_waiters() {
     q.acquire("a", t, 1);
     q.acquire("b", t, 2);
     // `a` gives up its hold while `b` waits: `b` gets it, a newcomer queues behind.
-    assert_eq!(q.release(&"a"), [2]);
+    assert_eq!(q.release(&"a", t), [2]);
     assert_eq!(q.acquire("c", t, 3), Acquire::Queued { position: 0 });
 }
 
@@ -182,5 +182,49 @@ fn lease_waiters_time_out_and_cancel() {
     assert_eq!(expired, [("b", 2)]);
     assert_eq!(q.cancel(&"d"), [4]);
     assert_eq!(q.waiting_len(), 1);
-    assert_eq!(q.release(&"a"), [3]);
+    assert_eq!(q.release(&"a", t), [3]);
+}
+
+#[test]
+fn the_holder_records_when_it_got_and_last_used_the_lease() {
+    let t = Instant::now();
+    let s = |n| t + Duration::from_secs(n);
+    let mut q: LeaseQueue<&str, u32> = LeaseQueue::default();
+    q.acquire("a", t, 1);
+    q.acquire("a", s(3), 2);
+    q.acquire("b", s(4), 3);
+    q.acquire("c", s(5), 4);
+    q.acquire("b", s(6), 5);
+    let h = q.holding().unwrap();
+    assert_eq!(
+        (h.who, h.holds, h.since, h.last_activity),
+        ("a", 2, t, s(3))
+    );
+    assert_eq!(q.waiters(), [&"b", &"c"]);
+    q.release(&"a", s(7));
+    assert_eq!(q.holding().map(|h| h.last_activity), Some(s(7)));
+    assert_eq!(q.release(&"a", s(8)), [3, 5]);
+    let h = q.holding().unwrap();
+    assert_eq!(
+        (h.who, h.holds, h.since, h.last_activity),
+        ("b", 2, s(8), s(8))
+    );
+}
+
+#[test]
+fn a_polled_waiter_stays_in_line() {
+    let t = Instant::now();
+    let timeout = Duration::from_secs(10);
+    let mut q: LeaseQueue<&str, u32> = LeaseQueue::default();
+    q.acquire("a", t, 1);
+    q.acquire("b", t, 2);
+    q.acquire("c", t, 3);
+    assert!(q.poll(&"b", t + Duration::from_secs(8)));
+    assert!(
+        !q.poll(&"a", t + Duration::from_secs(8)),
+        "holders do not wait"
+    );
+    assert_eq!(q.expire(t + timeout, timeout), [("c", 3)]);
+    assert!(q.expire(t + Duration::from_secs(17), timeout).is_empty());
+    assert_eq!(q.expire(t + Duration::from_secs(18), timeout), [("b", 2)]);
 }

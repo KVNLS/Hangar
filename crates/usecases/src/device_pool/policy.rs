@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use hangar_core::device::Platform;
 
-/// How long a run or tool call waits in a device's lease queue before giving up.
+/// How long a run or tool call waits in a device's lease queue, after it queued or last polled,
+/// before giving up.
 pub const LEASE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// A workspace's device, saved under `device:<workspace id>`.
@@ -172,10 +173,23 @@ pub enum Acquire<T> {
     Queued { position: usize },
 }
 
+/// Who holds a lease, since when, and when it was last used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Holder<W> {
+    pub who: W,
+    /// Re-entrant holds: one per run or tool call in flight.
+    pub holds: usize,
+    /// When the lease was granted.
+    pub since: Instant,
+    /// The last acquire, release or poll of the holder.
+    pub last_activity: Instant,
+}
+
 #[derive(Debug)]
 struct Waiter<W, T> {
     holder: W,
-    since: Instant,
+    /// When the waiter queued or last polled; it gives up [`LEASE_TIMEOUT`] after.
+    last_seen: Instant,
     payload: T,
 }
 
@@ -183,7 +197,7 @@ struct Waiter<W, T> {
 /// workspace share it), others wait first come, first served.
 #[derive(Debug)]
 pub struct LeaseQueue<W, T> {
-    holder: Option<(W, usize)>,
+    holder: Option<Holder<W>>,
     waiting: VecDeque<Waiter<W, T>>,
 }
 
@@ -198,7 +212,12 @@ impl<W, T> Default for LeaseQueue<W, T> {
 
 impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
     pub fn holder(&self) -> Option<&W> {
-        self.holder.as_ref().map(|(w, _)| w)
+        self.holder.as_ref().map(|h| &h.who)
+    }
+
+    /// The holder with its hold count and times.
+    pub fn holding(&self) -> Option<&Holder<W>> {
+        self.holder.as_ref()
     }
 
     pub fn is_idle(&self) -> bool {
@@ -209,26 +228,44 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
         self.waiting.iter().any(|w| &w.holder == who)
     }
 
+    /// Waiting tickets (a workspace may have several).
     pub fn waiting_len(&self) -> usize {
         self.waiting.len()
+    }
+
+    /// The waiting workspaces in turn order, each once.
+    pub fn waiters(&self) -> Vec<&W> {
+        let mut out: Vec<&W> = Vec::new();
+        for w in &self.waiting {
+            if !out.contains(&&w.holder) {
+                out.push(&w.holder);
+            }
+        }
+        out
     }
 
     /// Granted at once when free or already held by `who` (and nobody else waits for a free
     /// lease), else queued with `payload`, handed back by [`Self::release`] once it is `who`'s turn.
     pub fn acquire(&mut self, who: W, now: Instant, payload: T) -> Acquire<T> {
         match &mut self.holder {
-            Some((holder, count)) if *holder == who => {
-                *count += 1;
+            Some(h) if h.who == who => {
+                h.holds += 1;
+                h.last_activity = now;
                 Acquire::Granted(payload)
             }
             None if self.waiting.is_empty() => {
-                self.holder = Some((who, 1));
+                self.holder = Some(Holder {
+                    who,
+                    holds: 1,
+                    since: now,
+                    last_activity: now,
+                });
                 Acquire::Granted(payload)
             }
             _ => {
                 self.waiting.push_back(Waiter {
                     holder: who,
-                    since: now,
+                    last_seen: now,
                     payload,
                 });
                 Acquire::Queued {
@@ -240,21 +277,22 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
 
     /// Releases one hold of `who`. When the lease becomes free, the next waiter gets it together
     /// with every other waiter of the same holder; their payloads are returned.
-    pub fn release(&mut self, who: &W) -> Vec<T> {
+    pub fn release(&mut self, who: &W, now: Instant) -> Vec<T> {
         match &mut self.holder {
-            Some((holder, count)) if holder == who => {
-                *count -= 1;
-                if *count > 0 {
+            Some(h) if &h.who == who => {
+                h.holds = h.holds.saturating_sub(1);
+                h.last_activity = now;
+                if h.holds > 0 {
                     return Vec::new();
                 }
                 self.holder = None;
             }
             _ => return Vec::new(),
         }
-        self.grant_next()
+        self.grant_next(now)
     }
 
-    fn grant_next(&mut self) -> Vec<T> {
+    fn grant_next(&mut self, now: Instant) -> Vec<T> {
         if self.holder.is_some() {
             return Vec::new();
         }
@@ -264,16 +302,32 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
         let (granted, rest): (VecDeque<_>, VecDeque<_>) =
             self.waiting.drain(..).partition(|w| w.holder == next);
         self.waiting = rest;
-        self.holder = Some((next, granted.len()));
+        self.holder = Some(Holder {
+            who: next,
+            holds: granted.len(),
+            since: now,
+            last_activity: now,
+        });
         granted.into_iter().map(|w| w.payload).collect()
     }
 
-    /// Removes waiters queued for longer than `timeout`.
+    /// `who` is still there: its waiting tickets stay in line [`LEASE_TIMEOUT`] longer. Whether
+    /// it waits here.
+    pub fn poll(&mut self, who: &W, now: Instant) -> bool {
+        let mut found = false;
+        for w in self.waiting.iter_mut().filter(|w| &w.holder == who) {
+            w.last_seen = now;
+            found = true;
+        }
+        found
+    }
+
+    /// Removes waiters not seen (queued or polled) for `timeout`.
     pub fn expire(&mut self, now: Instant, timeout: Duration) -> Vec<(W, T)> {
         let (expired, rest): (VecDeque<_>, VecDeque<_>) = self
             .waiting
             .drain(..)
-            .partition(|w| now.duration_since(w.since) >= timeout);
+            .partition(|w| now.duration_since(w.last_seen) >= timeout);
         self.waiting = rest;
         expired.into_iter().map(|w| (w.holder, w.payload)).collect()
     }

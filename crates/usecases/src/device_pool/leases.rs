@@ -42,11 +42,11 @@ impl<S: Session> PoolMachine<S> {
     }
 
     /// `holder` dropped its lease on `key`; the next waiter gets it.
-    pub fn release_lease(&mut self, key: &PoolKey, holder: WorkspaceId) {
+    pub fn release_lease(&mut self, key: &PoolKey, holder: WorkspaceId, now: Instant) {
         let Some(device) = self.devices.get_mut(key) else {
             return;
         };
-        let granted = device.leases.release(&holder);
+        let granted = device.leases.release(&holder, now);
         let next = device.leases.holder().copied();
         if let Some(next) = next {
             for token in granted {
@@ -62,7 +62,7 @@ impl<S: Session> PoolMachine<S> {
         self.enforce_limit();
     }
 
-    /// Waiters queued longer than [`LEASE_TIMEOUT`] give up.
+    /// Waiters not seen (queued or polled) for [`LEASE_TIMEOUT`] give up.
     pub(super) fn expire_leases(&mut self, now: Instant) {
         let mut expired = Vec::new();
         for device in self.devices.values_mut() {
