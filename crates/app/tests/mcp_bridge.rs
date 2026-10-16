@@ -8,9 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hangar_app::mcp_host::{
-    Acquisition, McpRequest, Released, ScreenFrame, Timeouts, agent_sharing, start_with,
-};
+use hangar_app::mcp_host::{McpRequest, ScreenFrame, Timeouts, acquisition, released, start_with};
 use hangar_core::WorkspaceId;
 use hangar_core::device::capacity::{DeviceCost, HostResources, Pressure};
 use hangar_core::device::{DeviceInfo, Platform};
@@ -280,12 +278,10 @@ fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool
                                 m.touch(ws, Instant::now());
                                 m.sharing(ws, Instant::now()).unwrap()
                             };
-                            let granted = sharing.holder.as_ref().is_some_and(|h| h.id == ws);
-                            if granted || Instant::now() >= deadline {
-                                let _ = reply.send(Ok(Acquisition {
-                                    granted,
-                                    sharing: agent_sharing(&sharing, ws),
-                                }));
+                            if let Some(answer) =
+                                acquisition(&sharing, ws, Instant::now() >= deadline)
+                            {
+                                let _ = reply.send(Ok(answer));
                                 return;
                             }
                             std::thread::sleep(Duration::from_millis(50));
@@ -296,18 +292,9 @@ fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool
                     let mut m = pool.lock().unwrap();
                     let now = Instant::now();
                     let sharing = m.sharing(ws, now);
-                    let left_line = sharing.as_ref().is_some_and(|s| s.position.is_some());
-                    let next = sharing
-                        .filter(|s| s.holder.as_ref().is_some_and(|h| h.id == ws))
-                        .and_then(|s| s.queue.into_iter().find(|w| w.id != ws))
-                        .map(|w| w.name);
                     let had_waiters = m.release_reservation(ws, now);
                     m.take_commands();
-                    let _ = reply.send(Ok(Released {
-                        had_waiters,
-                        next: next.filter(|_| had_waiters),
-                        left_line,
-                    }));
+                    let _ = reply.send(Ok(released(sharing.as_ref(), ws, had_waiters)));
                 }
                 other => drop(other),
             }

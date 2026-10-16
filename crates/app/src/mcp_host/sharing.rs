@@ -4,6 +4,37 @@ use hangar_core::WorkspaceId;
 use hangar_mcp::ToolError;
 use hangar_usecases::device_pool::{RESERVATION_IDLE, Sharing};
 
+use super::{Acquisition, Released};
+
+/// Whether `ws` holds the device (a call or a reservation).
+pub fn holds(s: &Sharing, ws: WorkspaceId) -> bool {
+    s.holder.as_ref().is_some_and(|h| h.id == ws)
+}
+
+/// What `device_acquire` answers at one look at the pool: `None` while the workspace still
+/// waits in line within its `wait`; the answer once it holds the device or `expired`.
+pub fn acquisition(s: &Sharing, ws: WorkspaceId, expired: bool) -> Option<Acquisition> {
+    let granted = holds(s, ws);
+    (granted || expired).then(|| Acquisition {
+        granted,
+        sharing: agent_sharing(s, ws),
+    })
+}
+
+/// What `device_release` answers: `before` is the workspace's turn read just before the pool
+/// released it, `had_waiters` what the release returned.
+pub fn released(before: Option<&Sharing>, ws: WorkspaceId, had_waiters: bool) -> Released {
+    let next = before
+        .filter(|s| holds(s, ws))
+        .and_then(|s| s.queue.iter().find(|m| m.id != ws))
+        .map(|m| m.name.clone());
+    Released {
+        had_waiters,
+        next: next.filter(|_| had_waiters),
+        left_line: before.is_some_and(|s| s.position.is_some()),
+    }
+}
+
 /// The pool's view of `ws`'s turn on its device, as agents see it.
 pub fn agent_sharing(s: &Sharing, ws: WorkspaceId) -> hangar_mcp::Sharing {
     hangar_mcp::Sharing {

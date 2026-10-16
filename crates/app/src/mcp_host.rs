@@ -24,7 +24,7 @@ mod notices;
 mod sharing;
 
 pub use notices::Notices;
-pub use sharing::{agent_sharing, still_queued};
+pub use sharing::{acquisition, agent_sharing, holds, released, still_queued};
 
 pub type Reply<T> = oneshot::Sender<anyhow::Result<T>>;
 

@@ -4,8 +4,7 @@
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::device_pool::Sharing;
-use crate::mcp_host::{Acquisition, Released, agent_sharing};
+use crate::mcp_host::{Acquisition, Released, acquisition, released};
 
 /// How often `device_acquire` looks again while it waits for its turn.
 const ACQUIRE_POLL: Duration = Duration::from_millis(250);
@@ -38,13 +37,9 @@ impl HangarApp {
                         pool.sharing(ws)
                     })?
                     .ok_or_else(|| anyhow!("the pool does not know this workspace's device"))?;
-                let granted = holds(&sharing, ws);
                 let now = Instant::now();
-                if granted || now >= deadline {
-                    return Ok(Acquisition {
-                        granted,
-                        sharing: agent_sharing(&sharing, ws),
-                    });
+                if let Some(answer) = acquisition(&sharing, ws, now >= deadline) {
+                    return Ok(answer);
                 }
                 cx.background_executor()
                     .timer(ACQUIRE_POLL.min(deadline - now))
@@ -64,23 +59,9 @@ impl HangarApp {
             return Err(anyhow!("unknown or archived workspace"));
         }
         Ok(self.devices.pool.update(cx, |pool, cx| {
-            let sharing = pool.sharing(ws);
-            let left_line = sharing.as_ref().is_some_and(|s| s.position.is_some());
-            let next = sharing
-                .filter(|s| holds(s, ws))
-                .and_then(|s| s.queue.into_iter().find(|m| m.id != ws))
-                .map(|m| m.name);
+            let before = pool.sharing(ws);
             let had_waiters = pool.release_reservation(ws, cx);
-            Released {
-                had_waiters,
-                next: next.filter(|_| had_waiters),
-                left_line,
-            }
+            released(before.as_ref(), ws, had_waiters)
         }))
     }
-}
-
-/// Whether `ws` holds the device (a call or a reservation).
-fn holds(s: &Sharing, ws: WorkspaceId) -> bool {
-    s.holder.as_ref().is_some_and(|h| h.id == ws)
 }
