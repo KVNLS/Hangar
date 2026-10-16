@@ -249,7 +249,7 @@ impl HangarApp {
     }
 
     /// Resolves the run's completion and releases its device lease (the workspace keeps a
-    /// reservation); a launched app is recorded as this workspace's build on the device.
+    /// reservation); an installed app is recorded as this workspace's build on the device.
     pub(super) fn finish_run(
         &mut self,
         id: WorkspaceId,
@@ -269,11 +269,26 @@ impl HangarApp {
             Err(err) => tracing::info!(workspace = %id, "run failed: {err:#}"),
         }
         if result.is_ok() {
-            let key = completion.lease.key().clone();
-            self.devices
-                .pool
-                .update(cx, |pool, _| pool.app_installed(&key, id));
+            self.record_install(id, cx);
         }
         let _ = completion.done.send(result);
+    }
+
+    /// Records workspace `id`'s build as the one on its leased device. Native stacks call this
+    /// as soon as the install succeeds, so a failed launch still replaces the previous app;
+    /// the JS CLIs build, install and launch in one command and are recorded on success.
+    pub(super) fn record_install(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
+        let Some(key) = self
+            .live
+            .runs
+            .get(&id)
+            .and_then(|r| r.completion.as_ref())
+            .map(|c| c.lease.key().clone())
+        else {
+            return;
+        };
+        self.devices
+            .pool
+            .update(cx, |pool, _| pool.app_installed(&key, id));
     }
 }
