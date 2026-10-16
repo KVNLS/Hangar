@@ -2,7 +2,11 @@
 //! the GPUI thread; each returns a task that resolves off it. Every call that touches the device
 //! holds its lease while it runs (in single-device mode it waits for its turn, up to
 //! [`crate::device_pool::policy::LEASE_TIMEOUT`]) and boots/opens the device when needed.
-//! [`HangarApp::device_status`] only reports and never boots.
+//! [`HangarApp::device_status`] only reports and never boots. A call that waits in line longer
+//! than [`crate::mcp_host::Timeouts::acquire_budget`] fails with its place in line, which it
+//! keeps (`sharing.rs`).
+
+mod sharing;
 
 use std::time::Duration;
 
@@ -31,6 +35,8 @@ pub struct DeviceStatusInfo {
     pub screen_pt: Option<(f64, f64)>,
     pub scale: Option<f64>,
     pub orientation: Option<Orientation>,
+    /// Who else uses the device and the workspace's turn, once the pool knows the device.
+    pub sharing: Option<hangar_mcp::Sharing>,
 }
 
 /// One frame (captured bytes, never a live surface) and the point size of the screen it shows
@@ -52,9 +58,22 @@ impl HangarApp {
             return Task::ready(Err(anyhow!("unknown or archived workspace")));
         }
         self.track_workspace(ws, cx);
-        self.devices
-            .pool
-            .update(cx, |pool, cx| pool.acquire(ws, None, cx))
+        let budget = self.mcp.as_ref().map_or_else(
+            || crate::mcp_host::Timeouts::default().acquire_budget(),
+            crate::mcp_host::McpHandle::acquire_budget,
+        );
+        let acquire = self.devices.pool.update(cx, |pool, cx| {
+            pool.touch(ws, cx);
+            pool.acquire(ws, Some(budget), cx)
+        });
+        let pool = self.devices.pool.downgrade();
+        cx.spawn(async move |_, cx| match acquire.await {
+            Err(err) if err.is::<crate::device_pool::StillQueued>() => {
+                let sharing = pool.read_with(cx, |pool, _| pool.sharing(ws))?;
+                Err(crate::mcp_host::still_queued(sharing.as_ref(), ws).into())
+            }
+            acquired => acquired,
+        })
     }
 
     /// The workspace's device: platform, name, id, whether it is open, screen size in points
@@ -75,10 +94,12 @@ impl HangarApp {
         let pool = self.devices.pool.downgrade();
         cx.spawn(async move |_, cx| {
             let a = assignment.await?;
-            let (session, name) = pool.read_with(cx, |pool, _| {
+            let (session, name, sharing) = pool.read_with(cx, |pool, _| {
                 (
                     pool.session(ws).cloned(),
                     pool.device_name(ws).map(str::to_owned),
+                    pool.sharing(ws)
+                        .map(|s| crate::mcp_host::agent_sharing(&s, ws)),
                 )
             })?;
             let Some(session) = session else {
@@ -90,6 +111,7 @@ impl HangarApp {
                     screen_pt: None,
                     scale: None,
                     orientation: None,
+                    sharing,
                 });
             };
             let info = session.info().clone();
@@ -126,6 +148,7 @@ impl HangarApp {
                     .or_else(|| crate::device_view::geometry::screen_points(None, frame_shape)),
                 scale: screen.map(|s| s.scale),
                 orientation,
+                sharing,
             })
         })
     }

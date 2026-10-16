@@ -15,10 +15,16 @@ use anyhow::Context as _;
 use hangar_core::device::{Frame, Input, LogLevel};
 use hangar_core::{AgentSignal, WorkspaceId};
 use hangar_mcp::{
-    Answer, ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Tool, ToolError, ToolHost,
-    ToolOutput, TranscriptEntry, encode_screenshot, new_session_secret,
+    Answer, ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Sharing, Tool, ToolError,
+    ToolHost, ToolOutput, TranscriptEntry, encode_screenshot, new_session_secret,
 };
 use tokio::sync::{mpsc, oneshot};
+
+mod notices;
+mod sharing;
+
+pub use notices::Notices;
+pub use sharing::{agent_sharing, still_queued};
 
 pub type Reply<T> = oneshot::Sender<anyhow::Result<T>>;
 
@@ -74,6 +80,18 @@ pub enum McpRequest {
         app_id: String,
         reply: Reply<()>,
     },
+    /// `device_acquire`: reserves the workspace's device, or keeps its place in line and waits
+    /// up to `wait` for its turn (touching the reservation while it waits). Never boots.
+    Acquire {
+        ws: WorkspaceId,
+        wait: Duration,
+        reply: Reply<Acquisition>,
+    },
+    /// `device_release`: ends the workspace's reservation.
+    Release {
+        ws: WorkspaceId,
+        reply: Reply<Released>,
+    },
     /// `ask_user`: shows the question and replies with the user's answer.
     Ask {
         ws: WorkspaceId,
@@ -127,6 +145,8 @@ impl McpRequest {
             | Self::Logs { ws, .. }
             | Self::BuildAndRun { ws, .. }
             | Self::Launch { ws, .. }
+            | Self::Acquire { ws, .. }
+            | Self::Release { ws, .. }
             | Self::Signal { ws, .. }
             | Self::Children { ws, .. }
             | Self::CreateChild { ws, .. }
@@ -135,6 +155,23 @@ impl McpRequest {
             | Self::Ask { ws, .. } => *ws,
         }
     }
+}
+
+/// What `device_acquire` got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Acquisition {
+    /// The workspace holds the device (else it waits in line).
+    pub granted: bool,
+    pub sharing: Sharing,
+}
+
+/// What `device_release` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Released {
+    /// Another workspace was waiting for the device.
+    pub had_waiters: bool,
+    /// The workspace next in line.
+    pub next: Option<String>,
 }
 
 /// `raw` when it is a `.jsonl` file inside `root` (Claude Code's projects directory) once links
@@ -155,6 +192,22 @@ pub struct Timeouts {
     pub create: Duration,
     /// `ask_user`: how long a question waits for the user.
     pub ask: Duration,
+}
+
+/// Kept from a call's timeout for the work after the device is granted, so that a call that
+/// waits in line ends with where it stands rather than a bare timeout.
+const ACQUIRE_MARGIN: Duration = Duration::from_secs(3);
+
+impl Timeouts {
+    /// How long a device tool may wait in line for the device before it reports its place in
+    /// line ([`hangar_mcp::queued_message`]).
+    pub fn acquire_budget(&self) -> Duration {
+        if self.call > ACQUIRE_MARGIN * 2 {
+            self.call - ACQUIRE_MARGIN
+        } else {
+            self.call / 2
+        }
+    }
 }
 
 impl Default for Timeouts {
@@ -291,6 +344,7 @@ pub struct McpHost {
     timeouts: Timeouts,
     /// "Let agents create and drive workspaces", set from the GPUI side.
     orchestration: Arc<AtomicBool>,
+    notices: Notices,
     // Only drives the reply timeouts: worker threads block on it, never on the UI thread.
     timer: tokio::runtime::Runtime,
 }
@@ -301,6 +355,7 @@ impl McpHost {
         requests: mpsc::UnboundedSender<McpRequest>,
         timeouts: Timeouts,
         orchestration: Arc<AtomicBool>,
+        notices: Notices,
     ) -> anyhow::Result<Self> {
         let timer = tokio::runtime::Builder::new_current_thread()
             .enable_time()
@@ -311,6 +366,7 @@ impl McpHost {
             requests,
             timeouts,
             orchestration,
+            notices,
             timer,
         })
     }
@@ -420,18 +476,36 @@ impl ToolHost for McpHost {
             .sessions
             .resolve(session)
             .ok_or(ToolError::UnknownSession)?;
-        let call = self.timeouts.call;
         if Tool::is_orchestration_name(tool.name()) && !self.orchestration.load(Ordering::Relaxed) {
             return Err(ToolError::Failed(
                 "orchestration tools are off in Hangar's settings".into(),
             ));
         }
+        if !notices::carries_notices(&tool) {
+            return self.run(ws, tool);
+        }
+        let result = self.run(ws, tool);
+        notices::deliver(result, self.notices.take(ws))
+    }
+}
+
+impl McpHost {
+    /// Puts the workspace's pending notices in `sharing` (`device_info`, `device_acquire`).
+    fn sharing_notice(&self, ws: WorkspaceId, sharing: Option<&mut Sharing>) {
+        if let Some(sharing) = sharing {
+            sharing.notice = self.notices.take(ws);
+        }
+    }
+
+    fn run(&self, ws: WorkspaceId, tool: Tool) -> Result<ToolOutput, ToolError> {
+        let call = self.timeouts.call;
         match tool {
             Tool::DeviceInfo => {
-                let status = self.ask("device_info", call, |reply| McpRequest::Status {
+                let mut status = self.ask("device_info", call, |reply| McpRequest::Status {
                     ws,
                     reply,
                 })?;
+                self.sharing_notice(ws, status.sharing.as_mut());
                 Ok(ToolOutput::device_status(&status))
             }
             Tool::Screenshot => {
@@ -494,14 +568,24 @@ impl ToolHost for McpHost {
                 })?;
                 Ok(ToolOutput::text(summary))
             }
-            // TODO(device-sharing): wired by the app integration step
-            Tool::DeviceAcquire { .. } => Err(ToolError::Unsupported(
-                "device_acquire is not wired yet".into(),
-            )),
-            // TODO(device-sharing): wired by the app integration step
-            Tool::DeviceRelease => Err(ToolError::Unsupported(
-                "device_release is not wired yet".into(),
-            )),
+            Tool::DeviceAcquire { wait_s } => {
+                let wait = Duration::from_secs(wait_s);
+                let mut got = self.ask("device_acquire", call + wait, |reply| {
+                    McpRequest::Acquire { ws, wait, reply }
+                })?;
+                self.sharing_notice(ws, Some(&mut got.sharing));
+                Ok(ToolOutput::device_acquired(got.granted, &got.sharing))
+            }
+            Tool::DeviceRelease => {
+                let released = self.ask("device_release", call, |reply| McpRequest::Release {
+                    ws,
+                    reply,
+                })?;
+                Ok(ToolOutput::device_released(
+                    released.had_waiters,
+                    released.next.as_deref(),
+                ))
+            }
             Tool::LaunchApp { app_id } => {
                 let label = app_id.clone();
                 self.ask("launch_app", call, |reply| McpRequest::Launch {
@@ -592,6 +676,8 @@ pub struct McpHandle {
     socket: PathBuf,
     sessions: Sessions,
     orchestration: Arc<AtomicBool>,
+    notices: Notices,
+    timeouts: Timeouts,
 }
 
 impl McpHandle {
@@ -604,6 +690,17 @@ impl McpHandle {
     /// Revokes the workspace's secret: its agent's calls fail with an unknown-session error.
     pub fn unregister(&self, ws: WorkspaceId) {
         self.sessions.unregister(ws);
+        self.notices.forget(ws);
+    }
+
+    /// Tells the workspace's agent `message` with its next device tool result.
+    pub fn notify(&self, ws: WorkspaceId, message: String) {
+        self.notices.push(ws, message);
+    }
+
+    /// How long a device tool waits in line before it reports its place instead.
+    pub fn acquire_budget(&self) -> Duration {
+        self.timeouts.acquire_budget()
     }
 
     /// Lists and allows the orchestration tools for every agent ("Let agents create and drive
@@ -621,6 +718,7 @@ impl McpHandle {
 impl Drop for McpHandle {
     fn drop(&mut self) {
         self.sessions.clear();
+        self.notices.clear();
         if let Err(e) = std::fs::remove_file(&self.socket)
             && e.kind() != std::io::ErrorKind::NotFound
         {
@@ -644,17 +742,21 @@ pub fn start_with(
     let (tx, rx) = mpsc::unbounded_channel();
     let sessions = Sessions::default();
     let orchestration = Arc::new(AtomicBool::new(false));
+    let notices = Notices::default();
     let host: Arc<dyn ToolHost> = Arc::new(McpHost::new(
         sessions.clone(),
         tx,
         timeouts,
         Arc::clone(&orchestration),
+        notices.clone(),
     )?);
     // The handle owns the socket file from here on, so a failed spawn still removes it.
     let handle = McpHandle {
         socket: socket.to_owned(),
         sessions,
         orchestration,
+        notices,
+        timeouts,
     };
     std::thread::Builder::new()
         .name("mcp-serve".into())

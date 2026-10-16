@@ -59,7 +59,7 @@ fn status(info: DeviceStatusInfo) -> hangar_mcp::DeviceStatus {
         screen_pt: info.screen_pt,
         scale: info.scale,
         orientation: info.orientation,
-        sharing: None,
+        sharing: info.sharing,
     }
 }
 
@@ -140,6 +140,13 @@ impl HangarApp {
             McpRequest::Launch { ws, app_id, reply } => {
                 let task = self.launch_app(ws, app_id, cx);
                 answer(task, reply, |()| (), cx);
+            }
+            McpRequest::Acquire { ws, wait, reply } => {
+                let task = self.device_acquire(ws, wait, cx);
+                answer(task, reply, |got| got, cx);
+            }
+            McpRequest::Release { ws, reply } => {
+                let _ = reply.send(self.device_release(ws, cx));
             }
             McpRequest::BuildAndRun { ws, reply } => {
                 let task = self.run_workspace(ws, window, cx);

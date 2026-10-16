@@ -62,7 +62,9 @@ impl HangarApp {
                     window.push_notification(notification, cx);
                 }
                 PoolEvent::AgentNotice { ws, message } => {
-                    tracing::info!(workspace = %ws, "agent notice: {message}");
+                    if let Some(mcp) = &this.mcp {
+                        mcp.notify(*ws, message.clone());
+                    }
                 }
             },
         );
