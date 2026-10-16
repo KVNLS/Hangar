@@ -79,8 +79,8 @@ impl DevicePool {
                 cx.emit(PoolEvent::Notice(
                     NoticeLevel::Warning,
                     format!(
-                        "{name} has held {device} for {} minutes while other workspaces wait: \
-                         it goes to the next one in {} s, once no call of {name} is running.",
+                        "Other workspaces have waited {} minutes for {device}, which {name} \
+                         keeps: it goes to the next one in {} s, once no call of {name} is running.",
                         MAX_HOLD.as_secs() / 60,
                         ends_in.as_secs()
                     ),

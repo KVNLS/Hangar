@@ -17,10 +17,11 @@ pub const LEASE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// A workspace keeps the device it used between its calls: with no call in flight, its
 /// reservation ends this long after its last activity, and the next in line gets the device.
 pub const RESERVATION_IDLE: Duration = Duration::from_secs(90);
-/// How long a workspace may hold a device others wait for before it is warned, and
-/// [`REVOKE_GRACE`] later loses it.
+/// How long a workspace may keep a device after another one started waiting for it before it is
+/// warned, and [`REVOKE_GRACE`] later loses it. Counted from the first waiter, not from the
+/// grant: a workspace alone on its device for a long time still gets the full limit.
 pub const MAX_HOLD: Duration = Duration::from_secs(5 * 60);
-/// Between the warning and the revocation of a reservation held past [`MAX_HOLD`]. A call in
+/// Between the warning and the revocation of a reservation kept past [`MAX_HOLD`]. A call in
 /// flight is never cut: the revocation waits for it to end.
 pub const REVOKE_GRACE: Duration = Duration::from_secs(60);
 
@@ -194,6 +195,9 @@ pub struct Holder<W> {
     pub since: Instant,
     /// The last acquire, release or touch of the holder.
     pub last_activity: Instant,
+    /// Since when others have waited behind this holder without a break: [`MAX_HOLD`] counts
+    /// from here.
+    pub waited_since: Option<Instant>,
     /// When the holder was warned that its reservation will be revoked.
     pub warned: Option<Instant>,
     /// The reservation was ended while calls were in flight: the lease passes on when the last
@@ -208,6 +212,7 @@ impl<W> Holder<W> {
             holds,
             since: now,
             last_activity: now,
+            waited_since: None,
             warned: None,
             ending: false,
         }
@@ -238,7 +243,7 @@ pub enum Due {
     Keep,
     /// Idle for [`RESERVATION_IDLE`]: the next in line gets the device.
     Expire,
-    /// Held past [`MAX_HOLD`] while others wait: tell the holder.
+    /// Kept [`MAX_HOLD`] since others started waiting: tell the holder.
     Warn {
         ends_in: Duration,
     },
@@ -246,13 +251,17 @@ pub enum Due {
     Revoke,
 }
 
-/// The reservation rules: idle expiry always, the hold limit only while someone waits.
+/// The reservation rules: idle expiry always, the hold limit only while someone waits, counted
+/// from the first waiter ([`Holder::waited_since`]).
 pub fn reservation_due<W>(holder: &Holder<W>, waiting: bool, now: Instant) -> Due {
     let idle = now.saturating_duration_since(holder.last_activity);
     if holder.holds == 0 && idle >= RESERVATION_IDLE {
         return Due::Expire;
     }
-    if !waiting || now.saturating_duration_since(holder.since) < MAX_HOLD {
+    let Some(waited_since) = holder.waited_since.filter(|_| waiting) else {
+        return Due::Keep;
+    };
+    if now.saturating_duration_since(waited_since) < MAX_HOLD {
         return Due::Keep;
     }
     match holder.warned {
@@ -275,7 +284,7 @@ pub fn reservation_left<W>(holder: &Holder<W>, waiting: bool, now: Instant) -> O
     let revoke = waiting.then(|| {
         let at = match holder.warned {
             Some(at) => at + REVOKE_GRACE,
-            None => holder.since + MAX_HOLD + REVOKE_GRACE,
+            None => holder.waited_since.unwrap_or(now) + MAX_HOLD + REVOKE_GRACE,
         };
         at.saturating_duration_since(now)
     });
@@ -358,6 +367,7 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
                     hold,
                     payload,
                 });
+                self.someone_waits(now);
                 Acquire::Queued {
                     position: self.waiting.len() - 1,
                 }
@@ -389,7 +399,25 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
         });
         first.extend(rest);
         self.waiting = first;
+        self.someone_waits(now);
         Acquire::Queued { position: 0 }
+    }
+
+    /// The holder has someone behind it from `now`, unless it had already.
+    fn someone_waits(&mut self, now: Instant) {
+        if let Some(h) = &mut self.holder {
+            h.waited_since.get_or_insert(now);
+        }
+    }
+
+    /// Nobody waits any more: the hold limit and its warning start over with the next waiter.
+    fn maybe_nobody_waits(&mut self) {
+        if let Some(h) = &mut self.holder
+            && self.waiting.is_empty()
+        {
+            h.waited_since = None;
+            h.warned = None;
+        }
     }
 
     /// Releases one hold of `who`. The holder keeps the lease as an idle reservation, unless it
@@ -447,7 +475,9 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
             self.waiting.drain(..).partition(|w| w.holder == next);
         self.waiting = rest;
         let holds = granted.iter().filter(|w| w.hold).count();
-        self.holder = Some(Holder::new(next, holds, now));
+        let mut holder = Holder::new(next, holds, now);
+        holder.waited_since = (!self.waiting.is_empty()).then_some(now);
+        self.holder = Some(holder);
         granted
             .into_iter()
             .map(|w| Grant {
@@ -477,13 +507,6 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
         }
     }
 
-    /// Nobody waits any more: a later wait warns again.
-    pub fn clear_warning(&mut self) {
-        if let Some(h) = &mut self.holder {
-            h.warned = None;
-        }
-    }
-
     /// `who` is still there: its waiting tickets stay in line [`LEASE_TIMEOUT`] longer. Whether
     /// it waits here.
     pub fn poll(&mut self, who: &W, now: Instant) -> bool {
@@ -502,6 +525,7 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
             .drain(..)
             .partition(|w| now.duration_since(w.last_seen) >= timeout);
         self.waiting = rest;
+        self.maybe_nobody_waits();
         expired.into_iter().map(|w| (w.holder, w.payload)).collect()
     }
 
@@ -510,6 +534,7 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
         let (cancelled, rest): (VecDeque<_>, VecDeque<_>) =
             self.waiting.drain(..).partition(|w| &w.holder == who);
         self.waiting = rest;
+        self.maybe_nobody_waits();
         cancelled.into_iter().map(|w| w.payload).collect()
     }
 
@@ -519,12 +544,15 @@ impl<W: Clone + PartialEq, T> LeaseQueue<W, T> {
         let (taken, rest): (VecDeque<_>, VecDeque<_>) =
             self.waiting.drain(..).partition(|w| &w.holder == who);
         self.waiting = rest;
+        self.maybe_nobody_waits();
         taken.into_iter().map(|w| (w.payload, w.hold)).collect()
     }
 
     /// Removes every waiter (the device leaves the pool).
     pub fn take_waiting(&mut self) -> Vec<T> {
-        self.waiting.drain(..).map(|w| w.payload).collect()
+        let taken = self.waiting.drain(..).map(|w| w.payload).collect();
+        self.maybe_nobody_waits();
+        taken
     }
 }
 

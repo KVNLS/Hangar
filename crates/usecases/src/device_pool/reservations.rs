@@ -5,7 +5,7 @@
 //! - the holder has no call in flight for [`RESERVATION_IDLE`] after its last activity
 //!   (acquire, release, [`PoolMachine::touch`]);
 //! - the holder releases it ([`PoolMachine::release_reservation`]);
-//! - it is revoked: held for [`MAX_HOLD`] while others wait, the holder is warned
+//! - it is revoked: kept [`MAX_HOLD`] after another workspace started waiting, the holder is warned
 //!   ([`Command::WarnHolder`]) and loses it [`REVOKE_GRACE`] later, never during a call; or the
 //!   user takes the device over ([`PoolMachine::take_over`]).
 //!
@@ -121,7 +121,7 @@ impl<S: Session> PoolMachine<S> {
         Ok(start)
     }
 
-    /// Ends the reservations that expired and warns or revokes those held too long
+    /// Ends the reservations that expired and warns or revokes those kept too long
     /// ([`super::MONITOR_TICK`]).
     pub(super) fn expire_reservations(&mut self, now: Instant) {
         let keys: Vec<PoolKey> = self.devices.keys().cloned().collect();
@@ -137,9 +137,6 @@ impl<S: Session> PoolMachine<S> {
             return;
         };
         let waiting = device.leases.waiting_len() > 0;
-        if !waiting {
-            device.leases.clear_warning();
-        }
         let Some(holder) = device.leases.holding() else {
             return;
         };
@@ -153,7 +150,7 @@ impl<S: Session> PoolMachine<S> {
             }
             Due::Warn { ends_in } => {
                 device.leases.warn(now);
-                tracing::info!(target: "device_pool", workspace = %who, ?key, "held too long while others wait: warned");
+                tracing::info!(target: "device_pool", workspace = %who, ?key, "others waited too long: warned");
                 self.push(Command::WarnHolder {
                     holder: who,
                     key: key.clone(),

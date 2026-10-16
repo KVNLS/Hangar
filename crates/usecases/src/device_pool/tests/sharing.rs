@@ -123,19 +123,20 @@ fn the_hold_limit_warns_once_and_revokes_between_calls() {
     m.request_lease(&x, a.id, t).unwrap();
     // Nobody waits: no limit.
     assert!(tick(&mut m, t + MAX_HOLD + secs(10)).is_empty());
-    let for_b = queued(m.request_lease(&x, b.id, t + MAX_HOLD + secs(10)));
-    let commands = tick(&mut m, t + MAX_HOLD + secs(20));
+    let queued_at = t + MAX_HOLD + secs(10);
+    let for_b = queued(m.request_lease(&x, b.id, queued_at));
+    let commands = tick(&mut m, queued_at + MAX_HOLD);
     assert!(matches!(
         commands.as_slice(),
         [Command::WarnHolder { holder, key, ends_in }]
             if *holder == a.id && *key == x && *ends_in == REVOKE_GRACE
     ));
     assert!(
-        tick(&mut m, t + MAX_HOLD + secs(30)).is_empty(),
+        tick(&mut m, queued_at + MAX_HOLD + secs(10)).is_empty(),
         "warned once"
     );
     // The grace is over, but a call is in flight: it is not cut.
-    let after_grace = t + MAX_HOLD + secs(20) + REVOKE_GRACE;
+    let after_grace = queued_at + MAX_HOLD + REVOKE_GRACE;
     assert!(tick(&mut m, after_grace).is_empty());
     m.release_lease(&x, a.id, after_grace + secs(5));
     let commands = m.take_commands();
@@ -144,6 +145,26 @@ fn the_hold_limit_warns_once_and_revokes_between_calls() {
         Some(Command::Revoked { holder, key }) if *holder == a.id && *key == x
     ));
     assert_eq!(grants(&commands), [(for_b, b.id, true)]);
+}
+
+#[test]
+fn the_hold_limit_counts_from_the_first_waiter() {
+    let (mut m, [a, b, _], x, t) = shared_base();
+    m.request_lease(&x, a.id, t).unwrap();
+    // Alone on the device for ten minutes, then someone queues.
+    let queued_at = t + secs(600);
+    assert!(tick(&mut m, queued_at).is_empty());
+    queued(m.request_lease(&x, b.id, queued_at));
+    let sharing = m.sharing(b.id, queued_at).unwrap();
+    assert_eq!(sharing.reservation_left, Some(MAX_HOLD + REVOKE_GRACE));
+    assert_eq!(sharing.estimated_wait, Some(MAX_HOLD + REVOKE_GRACE));
+    let commands = tick(&mut m, queued_at + secs(10));
+    assert!(commands.is_empty(), "not warned at once: {commands:?}");
+    assert!(tick(&mut m, queued_at + MAX_HOLD - secs(10)).is_empty());
+    assert!(matches!(
+        tick(&mut m, queued_at + MAX_HOLD).as_slice(),
+        [Command::WarnHolder { holder, .. }] if *holder == a.id
+    ));
 }
 
 #[test]

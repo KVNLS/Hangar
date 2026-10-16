@@ -196,8 +196,8 @@ pub enum Command<S> {
         token: Token,
         message: String,
     },
-    /// `holder` has held `key` for [`MAX_HOLD`] while others wait: its reservation is revoked
-    /// in `ends_in` (once no call of it is in flight).
+    /// Others have waited [`MAX_HOLD`] for `key`, which `holder` keeps: its reservation is
+    /// revoked in `ends_in` (once no call of it is in flight).
     WarnHolder {
         holder: WorkspaceId,
         key: PoolKey,

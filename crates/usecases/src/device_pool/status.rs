@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use hangar_core::WorkspaceId;
 use hangar_core::device::{BackendReason, DeviceKey, Platform, Target, clone_name};
 
-use super::policy::{self, MAX_HOLD};
+use super::policy::{self, MAX_HOLD, REVOKE_GRACE};
 use super::{PoolKey, PoolMachine, Session, State};
 
 /// What the device panel shows for a workspace.
@@ -75,8 +75,9 @@ pub struct Sharing {
     /// Until the holder's reservation ends at the latest (idle expiry or revocation); `None`
     /// while a call is in flight and nobody waits.
     pub reservation_left: Option<Duration>,
-    /// A rough wait for the workspace's turn: what the holder may still keep it, plus
-    /// [`MAX_HOLD`] for each workspace ahead.
+    /// A rough wait for the workspace's turn: what the holder may still keep it (its
+    /// reservation left, the hold limit counting from the first waiter), plus [`MAX_HOLD`] for
+    /// each workspace ahead.
     pub estimated_wait: Option<Duration>,
     /// The workspace whose build was installed last, when not this one.
     pub stale_app_from: Option<String>,
@@ -99,11 +100,10 @@ impl<S: Session> PoolMachine<S> {
         let reservation_left =
             holding.and_then(|h| policy::reservation_left(h, !queue.is_empty(), now));
         let estimated_wait = position.map(|ahead| {
-            let holder_left = holding.map_or(Duration::ZERO, |h| {
-                reservation_left.unwrap_or_else(|| {
-                    MAX_HOLD.saturating_sub(now.saturating_duration_since(h.since))
-                })
-            });
+            let holder_left = match holding {
+                Some(_) => reservation_left.unwrap_or(MAX_HOLD + REVOKE_GRACE),
+                None => Duration::ZERO,
+            };
             holder_left + MAX_HOLD * ahead as u32
         });
         Some(Sharing {

@@ -321,11 +321,13 @@ fn jumping_the_line_moves_the_workspace_first() {
 #[test]
 fn reservations_expire_idle_and_are_revoked_after_the_hold_limit() {
     let t = Instant::now();
+    // Others wait from `t`; the lease was granted long before.
     let holder = |holds, last: Duration, warned: Option<Duration>| Holder {
         who: "a",
         holds,
-        since: t,
+        since: t.checked_sub(Duration::from_secs(3600)).unwrap_or(t),
         last_activity: t + last,
+        waited_since: Some(t),
         warned: warned.map(|w| t + w),
         ending: false,
     };
@@ -364,4 +366,44 @@ fn reservations_expire_idle_and_are_revoked_after_the_hold_limit() {
         reservation_due(&calling, true, at(MAX_HOLD + REVOKE_GRACE)),
         Due::Keep
     );
+    // The limit counts from the first waiter, not from the grant.
+    let busy_waited = holder(1, secs(0), None);
+    assert_eq!(
+        reservation_due(&busy_waited, true, at(MAX_HOLD - secs(1))),
+        Due::Keep
+    );
+    assert_eq!(
+        reservation_left(&busy_waited, true, t),
+        Some(MAX_HOLD + REVOKE_GRACE)
+    );
+}
+
+#[test]
+fn the_wait_behind_a_holder_starts_with_its_first_waiter() {
+    let t = Instant::now();
+    let s = |n| t + Duration::from_secs(n);
+    let waited = |q: &LeaseQueue<&str, u32>| q.holding().and_then(|h| h.waited_since);
+    let mut q: LeaseQueue<&str, u32> = LeaseQueue::default();
+    q.acquire("a", t, 1, true);
+    assert_eq!(waited(&q), None);
+    q.acquire("b", s(600), 2, true);
+    q.acquire("c", s(700), 3, true);
+    assert_eq!(waited(&q), Some(s(600)));
+    q.warn(s(900));
+    // The line empties: the next waiter starts the count over, unwarned.
+    q.cancel(&"b");
+    q.expire(s(800), Duration::from_secs(100));
+    assert_eq!(waited(&q), None);
+    assert_eq!(q.holding().and_then(|h| h.warned), None);
+    q.acquire("d", s(1000), 4, true);
+    q.jump("e", s(1100), 5, false);
+    assert_eq!(waited(&q), Some(s(1000)));
+    // A new holder with others behind it is waited for from its grant.
+    q.release(&"a", s(1200));
+    q.end(&"a", s(1200));
+    assert_eq!(q.holder(), Some(&"e"));
+    assert_eq!(waited(&q), Some(s(1200)));
+    q.end(&"e", s(1300));
+    assert_eq!(q.holder(), Some(&"d"));
+    assert_eq!(waited(&q), None);
 }

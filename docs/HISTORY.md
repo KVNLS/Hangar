@@ -591,8 +591,9 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   uses now, apart from its saved assignment. At the cap a workspace shares a running device of its class
   (platform and base) and queues FIFO, instead of waiting for a slot of its own. A refused boot shares
   inside the machine; the app-side fallback is gone.
-- Reservations keep a device between a workspace's calls: idle expiry after 90 s. With others waiting, the
-  holder is warned after 5 min and loses the device 60 s later, never during a call. The user can take a
+- Reservations keep a device between a workspace's calls: idle expiry after 90 s. Once others wait, the
+  holder is warned 5 min after the first one queued (not after its grant) and loses the device 60 s later,
+  never during a call. The user can take a
   device over. Waiting tickets expire 10 min after the agent's last poll, not after its first request.
 - A run gives its device back at launch; the workspace keeps an ordinary reservation. The launch records the
   app it installed, so the next workspace granted the device gets `stale_app`.
