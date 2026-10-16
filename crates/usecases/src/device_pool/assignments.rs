@@ -25,6 +25,11 @@ impl<S: Session> PoolMachine<S> {
         self.last_target.as_ref()
     }
 
+    /// The name of a tracked workspace.
+    pub fn workspace_name(&self, ws: WorkspaceId) -> Option<&str> {
+        self.workspaces.get(&ws).map(|w| w.name.as_str())
+    }
+
     /// The worktree of a tracked workspace.
     pub fn workspace_root(&self, ws: WorkspaceId) -> Option<PathBuf> {
         self.workspaces.get(&ws).map(|w| w.root.clone())
@@ -95,12 +100,17 @@ impl<S: Session> PoolMachine<S> {
         self.devices.get(key).map(|d| d.name.as_str())
     }
 
-    /// Which device the workspace uses now.
+    /// Which device the workspace uses now: the one it is bound to (possibly another
+    /// workspace's), else its own.
     pub fn key_for(&self, ws: WorkspaceId) -> Option<PoolKey> {
+        if let Some(key) = self.bindings.get(&ws) {
+            return Some(key.clone());
+        }
         let a = self.assignments.get(&ws)?;
         Some(self.key_of(ws, a))
     }
 
+    /// The workspace's own device given its assignment (the base device in single-device mode).
     pub fn key_of(&self, ws: WorkspaceId, a: &Assignment) -> PoolKey {
         if self.single_device(a.platform) {
             PoolKey::Base(DeviceKey {
@@ -163,10 +173,11 @@ impl<S: Session> PoolMachine<S> {
             leases: LeaseQueue::default(),
             error: None,
             conflict: None,
+            installed_by: None,
         })
     }
 
-    pub(super) fn touch(&mut self, key: &PoolKey) {
+    pub(super) fn mark_used(&mut self, key: &PoolKey) {
         self.tick += 1;
         let tick = self.tick;
         if let Some(d) = self.devices.get_mut(key) {
@@ -190,7 +201,7 @@ impl<S: Session> PoolMachine<S> {
 
     fn refocus(&mut self) {
         if let Some(key) = self.focused.and_then(|ws| self.key_for(ws)) {
-            self.touch(&key);
+            self.mark_used(&key);
         }
     }
 

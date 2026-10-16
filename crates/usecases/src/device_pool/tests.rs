@@ -395,7 +395,7 @@ fn leases_queue_hand_over_and_time_out() {
         panic!("c should wait");
     };
     assert_eq!(m.held_by_other(b.id).map(|(ws, _)| ws), Some(a.id));
-    m.release_lease(&x, a.id);
+    m.release_lease(&x, a.id, now);
     let commands = m.take_commands();
     assert!(matches!(
         commands.as_slice(),
@@ -421,7 +421,7 @@ fn archiving_cancels_the_workspace_waiters() {
     let Ok(LeaseStart::Queued(token)) = m.request_lease(&x, b.id, now) else {
         panic!("b should wait");
     };
-    assert!(m.archive(b.id));
+    assert!(m.archive(b.id, now));
     assert!(matches!(
         m.take_commands().as_slice(),
         [Command::FailLease { token: t, message }] if *t == token && message == "the workspace was closed"
@@ -664,3 +664,5 @@ fn deleting_a_clone_needs_one() {
     assert_eq!(m.forget(a.id).map(|a| a.base), Some("B".into()));
     assert!(m.assignment(a.id).is_none());
 }
+
+mod sharing;

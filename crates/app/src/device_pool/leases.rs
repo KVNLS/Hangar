@@ -57,11 +57,12 @@ impl DevicePool {
                     });
                 }
                 Err(OpenError::Failed(err)) => return Err(anyhow!(err)),
+                Err(err @ OpenError::Moved { .. }) => return Err(anyhow!(err.message().to_owned())),
                 Err(OpenError::Refused(why)) => why,
             };
             drop(lease);
             let fallback = this.update(cx, |pool, cx| {
-                let other = pool.machine.borrowable(a.platform, &key)?;
+                let other = pool.machine.borrowable(a.platform, &a.base, &key)?;
                 let name = pool.machine.name_of(&other).map(str::to_owned);
                 cx.emit(PoolEvent::Notice(
                     NoticeLevel::Warning,
@@ -130,7 +131,7 @@ impl DevicePool {
         holder: WorkspaceId,
         cx: &mut Context<Self>,
     ) {
-        self.machine.release_lease(key, holder);
+        self.machine.release_lease(key, holder, Instant::now());
         self.run(cx);
         cx.notify();
     }
