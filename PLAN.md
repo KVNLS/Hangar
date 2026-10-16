@@ -136,11 +136,10 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   `HANGAR_DEVICE_ID`/`ANDROID_SERIAL` empty when the agent starts before its device;
   the `backend: …` line is not in the mockup (design call: hide unless fallback, or name the clone in the
   picker).
-- **Device sharing:** `device_release` while still queued does not cancel the ticket (it expires after
-  `LEASE_TIMEOUT` unless polled); the 30 s MCP call timeout still applies to slow boots (the wait budget
-  covers only waiting in line); an Expo build that never prints its launched line holds its lease until
+- **Device sharing:** the 30 s MCP call timeout still applies to slow boots (the wait budget covers only
+  waiting in line); an Expo build that never prints its launched line holds its lease until
   its build tab exits or the run is replaced; agents poll with `wait_s` (no push on grant); `mcp_host.rs`
-  is near the 800-line split threshold (770 lines).
+  is near the 800-line split threshold (773 lines).
 - **Run loop:** no parsed build progress or crash overlay; `expo run` prebuild
   output lands in the worktree; Expo picks Android devices by AVD name (ambiguous with pool instances);
   React Native CLI unit-tested only; the JDK/Gradle setup is the user's.

@@ -98,9 +98,10 @@ fn acquired_json_shape() {
 
 #[test]
 fn released_text() {
-    assert!(text(&ToolOutput::device_released(true, Some("ws-c"))).contains("ws-c is next"));
-    assert!(text(&ToolOutput::device_released(true, None)).contains("next workspace"));
-    assert!(text(&ToolOutput::device_released(false, None)).contains("nobody"));
+    assert!(text(&ToolOutput::device_released(true, Some("ws-c"), false)).contains("ws-c is next"));
+    assert!(text(&ToolOutput::device_released(true, None, false)).contains("next workspace"));
+    assert!(text(&ToolOutput::device_released(false, None, false)).contains("nobody"));
+    assert!(text(&ToolOutput::device_released(false, None, true)).contains("left the line"));
 }
 
 #[test]

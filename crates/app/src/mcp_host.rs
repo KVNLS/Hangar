@@ -172,6 +172,8 @@ pub struct Released {
     pub had_waiters: bool,
     /// The workspace next in line.
     pub next: Option<String>,
+    /// The workspace was itself waiting for the device: its waiting calls were cancelled.
+    pub left_line: bool,
 }
 
 /// `raw` when it is a `.jsonl` file inside `root` (Claude Code's projects directory) once links
@@ -584,6 +586,7 @@ impl McpHost {
                 Ok(ToolOutput::device_released(
                     released.had_waiters,
                     released.next.as_deref(),
+                    released.left_line,
                 ))
             }
             Tool::LaunchApp { app_id } => {

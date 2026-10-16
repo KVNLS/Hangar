@@ -210,8 +210,8 @@ pub(super) fn device_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_release",
-            "description": "End the device reservation now so the next workspace in line gets the device. \
-                Call it when you are done verifying.",
+            "description": "End the device reservation now so the next workspace in line gets the device \
+                (or leave the line, if you are still waiting for it). Call it when you are done verifying.",
             "inputSchema": no_args,
         }),
     ]

@@ -89,12 +89,16 @@ impl ToolOutput {
         Self::text(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
     }
 
-    /// The `device_release` result.
-    pub fn device_released(had_waiters: bool, next: Option<&str>) -> Self {
-        Self::text(match (had_waiters, next) {
-            (_, Some(next)) => format!("Device released; {next} is next in line."),
-            (true, None) => "Device released; the next workspace in line gets it.".to_owned(),
-            (false, None) => "Device released; nobody was waiting.".to_owned(),
+    /// The `device_release` result: whether others waited for the device the workspace held,
+    /// who is next, and whether the workspace itself was waiting (it left the line).
+    pub fn device_released(had_waiters: bool, next: Option<&str>, left_line: bool) -> Self {
+        Self::text(match (had_waiters, next, left_line) {
+            (_, Some(next), _) => format!("Device released; {next} is next in line."),
+            (true, None, _) => "Device released; the next workspace in line gets it.".to_owned(),
+            (false, None, true) => {
+                "You left the line for the device; your waiting calls were cancelled.".to_owned()
+            }
+            (false, None, false) => "Device released; nobody was waiting.".to_owned(),
         })
     }
 

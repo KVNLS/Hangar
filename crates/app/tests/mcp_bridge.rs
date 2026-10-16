@@ -295,8 +295,9 @@ fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool
                 McpRequest::Release { ws, reply } => {
                     let mut m = pool.lock().unwrap();
                     let now = Instant::now();
-                    let next = m
-                        .sharing(ws, now)
+                    let sharing = m.sharing(ws, now);
+                    let left_line = sharing.as_ref().is_some_and(|s| s.position.is_some());
+                    let next = sharing
                         .filter(|s| s.holder.as_ref().is_some_and(|h| h.id == ws))
                         .and_then(|s| s.queue.into_iter().find(|w| w.id != ws))
                         .map(|w| w.name);
@@ -305,6 +306,7 @@ fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool
                     let _ = reply.send(Ok(Released {
                         had_waiters,
                         next: next.filter(|_| had_waiters),
+                        left_line,
                     }));
                 }
                 other => drop(other),

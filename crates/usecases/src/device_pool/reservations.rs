@@ -22,10 +22,25 @@ use super::policy::{self, Acquire, Due};
 use super::policy::{MAX_HOLD, RESERVATION_IDLE, REVOKE_GRACE};
 use super::{Command, PoolKey, PoolMachine, Session};
 
+/// What a waiting ticket gets when its workspace releases the device.
+const RELEASED: &str = "the device was released by this workspace (device_release) while this \
+                        call waited for it";
+
 impl<S: Session> PoolMachine<S> {
-    /// Ends the workspace's reservations now (or, with a call in flight, when it ends). Whether
-    /// anyone was waiting for the device.
+    /// Ends the workspace's reservations now (or, with a call in flight, when it ends) and takes
+    /// it out of line: its waiting tickets fail. Whether another workspace was waiting for a
+    /// device it held.
     pub fn release_reservation(&mut self, ws: WorkspaceId, now: Instant) -> bool {
+        let mut cancelled = Vec::new();
+        for device in self.devices.values_mut() {
+            cancelled.extend(device.leases.cancel(&ws));
+        }
+        for token in cancelled {
+            self.push(Command::FailLease {
+                token,
+                message: RELEASED.into(),
+            });
+        }
         let held: Vec<PoolKey> = self
             .devices
             .iter()

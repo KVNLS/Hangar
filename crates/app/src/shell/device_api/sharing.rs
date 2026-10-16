@@ -53,7 +53,8 @@ impl HangarApp {
         })
     }
 
-    /// Ends the workspace's reservation (once its call in flight ends, if any).
+    /// Ends the workspace's reservation (once its call in flight ends, if any) and takes it out
+    /// of line (its waiting calls fail).
     pub fn device_release(
         &mut self,
         ws: WorkspaceId,
@@ -63,8 +64,9 @@ impl HangarApp {
             return Err(anyhow!("unknown or archived workspace"));
         }
         Ok(self.devices.pool.update(cx, |pool, cx| {
-            let next = pool
-                .sharing(ws)
+            let sharing = pool.sharing(ws);
+            let left_line = sharing.as_ref().is_some_and(|s| s.position.is_some());
+            let next = sharing
                 .filter(|s| holds(s, ws))
                 .and_then(|s| s.queue.into_iter().find(|m| m.id != ws))
                 .map(|m| m.name);
@@ -72,6 +74,7 @@ impl HangarApp {
             Released {
                 had_waiters,
                 next: next.filter(|_| had_waiters),
+                left_line,
             }
         }))
     }

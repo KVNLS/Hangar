@@ -591,6 +591,33 @@ fn a_grant_returned_by_a_caller_that_gave_up_keeps_a_reservation() {
     );
 }
 
+#[test]
+fn releasing_while_queued_leaves_the_line() {
+    let (mut m, [a, b, c], x, t) = shared_base();
+    m.request_lease(&x, a.id, t).unwrap();
+    let reserved = queued(m.reserve(b.id, t).map(|s| s.lease));
+    // A call whose budget ran out keeps its ticket on the app side.
+    let call = queued(m.request_device(b.id, t).map(|s| s.lease));
+    let for_c = queued(m.request_lease(&x, c.id, t + secs(1)));
+    m.take_commands();
+    assert!(
+        !m.release_reservation(b.id, t + secs(2)),
+        "b held nothing anyone waited for"
+    );
+    let commands = m.take_commands();
+    assert_eq!(failed(&commands), [reserved, call]);
+    assert!(commands.iter().all(|c| match c {
+        Command::FailLease { message, .. } => message.contains("released"),
+        _ => true,
+    }));
+    assert!(!m.is_waiting(b.id));
+    assert!(!m.bindings.contains_key(&b.id));
+    assert_eq!(m.sharing(c.id, t).and_then(|s| s.position), Some(0));
+    m.release_lease(&x, a.id, t + secs(3));
+    assert!(m.release_reservation(a.id, t + secs(3)));
+    assert_eq!(grants(&m.take_commands()), [(for_c, c.id, true)]);
+}
+
 /// Every holder whose reservation is not ending is bound to the device it holds, and every
 /// waiter to the device it waits for.
 fn assert_bound_to_held(m: &Machine) {

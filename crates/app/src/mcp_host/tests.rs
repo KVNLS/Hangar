@@ -130,6 +130,7 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                     let _ = reply.send(Ok(Released {
                         had_waiters: true,
                         next: Some("ws-b".into()),
+                        left_line: false,
                     }));
                 }
                 McpRequest::Logs {
