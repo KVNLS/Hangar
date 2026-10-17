@@ -21,6 +21,8 @@
 mod assignments;
 mod binding;
 mod boot;
+#[cfg(test)]
+mod fixtures;
 mod host;
 mod leases;
 pub mod policy;
@@ -28,8 +30,6 @@ mod reservations;
 mod shutdown;
 mod status;
 mod switch;
-#[cfg(test)]
-mod tests;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;

@@ -46,7 +46,7 @@ keeps the product roadmap.
 | Enum vs trait (OCP) | Closed sets we own (agent presets, platforms, MCP wiring) are data tables and enums; open sets (backends chosen at runtime) are traits | Exhaustive `match` is a feature for closed sets; one table row per agent is the extension point. |
 | Liskov on `Device` | Keep one trait; add `capabilities()`; methods keep returning `Unsupported` as a safety net | Callers stop probing by calling. `devices::contract::violations` checks that an undeclared capability answers `Unsupported`; it only exercises absent capabilities, so it is safe on a real device (checking declared ones would boot, rotate or shut it down). Splitting into five role traits does not pay with four implementations whose consumers hold the whole device. |
 | Errors | `thiserror` enums per library crate or service; adapter errors wrapped as opaque sources; `anyhow` + `.context()` only in `app` | Foreign types (`rusqlite::Error`, git output) stay out of public APIs. User-facing wording stays in the UI. |
-| Test doubles | Hand-written in-memory doubles under `#[cfg(test)]` (`usecases::fakes`) for service tests; each adapter tested through its port against the real thing (temp git repos, SQLite in memory) | No `mockall` (new dependency, brittle interaction tests). Production code never fakes behaviour. |
+| Test doubles | Hand-written in-memory doubles under `#[cfg(test)]` (`usecases::fakes`) for service tests; each adapter tested through its port against the real thing (temp git repos, SQLite in memory); `app` tests only what it decides itself, and the use cases wired to real adapters run in `crates/app/tests/` | No `mockall` (new dependency, brittle interaction tests). Production code never fakes behaviour. |
 | Composition root | `app::adapters` returns the adapter behind each port; services are small borrowing structs (`Workspaces::new(&store, &git)`) built where they are used | No DI framework and no GPUI global used as a service locator. Building a service costs two pointers. |
 | Agents and PTYs | `agents` describes a start (`Launch`: program, args, cwd, env); `app::pty` runs it in a `TerminalSession` | Removes the `agents → terminal` edge without a launcher port; `usecases::sessions` is generic over the running agent. |
 | Device frames | `Frame.pixels` is `FramePixels::Bgra` (captured bytes) or `FramePixels::Live` (a `core::device::LiveSurface` the backend keeps drawing into); the app downcasts the iOS one to `devices::ios::LiveFramebuffer` and paints its IOSurface with `paint_surface` | Zero-copy display while `core` stays platform-free. Readers that need bytes call `Frame::snapshot`; a live surface is "now", so diffs compare snapshots. |
@@ -113,13 +113,13 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
      hooks and real simulators/emulators before merging.
    - Done (device sharing, branch `device-sharing`): the same machine also owns the binding (which device a
      workspace uses now), reservations (idle expiry, warn and revoke, take over) and sharing at the cap.
-     Tested in `device_pool/tests/sharing.rs`. `DevicePool::acquire` in `app` only follows its choice.
+     Tested in `device_pool/binding/tests.rs` and `device_pool/reservations/tests.rs`. `DevicePool::acquire` in `app` only follows its choice.
    - Done (platform switch, branch `platform-switch`): own devices are keyed by workspace and platform,
      so the two can never share a key. The other platform's assignment is parked, and `switch_platform`
-     releases the device through the queue. Tested in `device_pool/tests/sharing/switch.rs`.
+     releases the device through the queue. Tested in `device_pool/switch/tests.rs`.
    - Done (M10, shell side): views do no store or process I/O. Run configs, the saved chat, session
      cost, the usage ledger and settings and the co-author trailer are `app::ops` functions
-     (`ops/run_config.rs`, `ops/chats.rs`, tested in `ops/tests/`) run on the background executor
+     (`ops/run_config.rs`, `ops/chats.rs`, tested in `ops/tests.rs` and inline) run on the background executor
      (`HangarApp::persist` or a spawned task); agent `--version` is `adapters::program_version`.
      `architecture.rs` checks that views call no settings or ledger method. `HangarApp` has 14
      fields: the pool, the device panel and the dev device limit form `Devices` (it loads the pool

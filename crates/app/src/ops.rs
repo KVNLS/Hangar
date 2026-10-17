@@ -756,4 +756,6 @@ pub fn canonical(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+mod fixtures;
+#[cfg(test)]
 mod tests;

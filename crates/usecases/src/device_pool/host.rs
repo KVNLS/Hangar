@@ -251,3 +251,120 @@ impl<S: Session> PoolMachine<S> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::device_pool::fixtures::*;
+    use crate::device_pool::*;
+
+    #[test]
+    fn a_small_host_alerts_once() {
+        let mut m = Machine::new(DeviceCost::android(2048, 2), None);
+        m.loaded(Ok(Saved::default()), None);
+        m.take_commands();
+        let small = HostResources {
+            total_ram_mb: 8 * 1024,
+            ..host(Pressure::Normal)
+        };
+        m.host_detected(Ok(small), DeviceCost::android(2048, 2), Instant::now());
+        let commands = m.take_commands();
+        assert!(matches!(
+            commands.as_slice(),
+            [
+                Command::Notice(NoticeLevel::Warning, n),
+                Command::Save(Save::SingleDeviceAlertShown)
+            ] if n.starts_with("This Mac (8 GB RAM, 6 P + 12 E cores) can run one iOS or Android")
+        ));
+        assert!(m.single_device(Platform::Ios));
+        m.host_detected(Ok(small), DeviceCost::android(2048, 2), Instant::now());
+        assert!(m.take_commands().is_empty());
+    }
+
+    #[test]
+    fn switching_to_one_device_at_a_time_rebinds_the_workspaces() {
+        let ws = workspaces(&["w1", "w2", "w3"]);
+        let assigned: Vec<(&WorkspaceRef, Assignment)> = ws.iter().map(|w| (w, ios("B"))).collect();
+        let mut m = pool(Limit::Manual(2), &assigned);
+        let t = Instant::now();
+        let k1 = PoolKey::Own(ws[0].id, Platform::Ios);
+        m.request_device(ws[0].id, t).unwrap();
+        m.request_device(ws[1].id, t).unwrap();
+        let for_w3 = queued(m.request_device(ws[2].id, t).map(|s| s.lease));
+        assert_eq!(m.key_for(ws[2].id), Some(k1.clone()));
+        m.take_commands();
+        m.set_limit(Limit::Manual(1), t + secs(1));
+        let commands = m.take_commands();
+        assert_eq!(failed(&commands), [for_w3]);
+        assert!(grants(&commands).is_empty());
+        let b = base_key("B");
+        for w in &ws {
+            assert_eq!(m.key_for(w.id), Some(b.clone()), "{}", w.name);
+        }
+        assert_eq!(
+            m.request_device(ws[2].id, t + secs(1)).unwrap().lease,
+            LeaseStart::Granted
+        );
+        assert_bound_to_held(&m);
+        // W1's call still in flight on its own device finishes there.
+        m.release_lease(&k1, ws[0].id, t + secs(2));
+        assert!(grants(&m.take_commands()).is_empty());
+        assert_eq!(m.key_for(ws[0].id), Some(b));
+    }
+
+    #[test]
+    fn a_saved_parked_assignment_is_loaded() {
+        let a = workspace("a");
+        let mut m: PoolMachine<Sess> = PoolMachine::new(DeviceCost::android(2048, 2), None);
+        m.track(a.clone());
+        let saved = Saved {
+            assignments: [(a.id, android("P"))].into(),
+            parked: [(a.id, ios_own("B", "CLONE"))].into(),
+            ..Saved::default()
+        };
+        m.loaded(Ok(saved), None);
+        assert_eq!(m.parked(a.id), Some(&ios_own("B", "CLONE")));
+        assert_eq!(
+            m.assignment_of(a.id, Platform::Ios),
+            Some(&ios_own("B", "CLONE"))
+        );
+    }
+
+    #[test]
+    fn loading_keeps_what_is_known_and_drops_a_parked_assignment_of_the_active_platform() {
+        let ws = workspaces(&["a", "b", "c"]);
+        let [a, b, c] = [&ws[0], &ws[1], &ws[2]];
+        let mut m: PoolMachine<Sess> = PoolMachine::new(DeviceCost::android(2048, 2), None);
+        for w in &ws {
+            m.track(w.clone());
+        }
+        // Known before the settings were read.
+        m.resolved(a.id, ios("R"));
+        m.adopt(c.id, Some(ios("B")), Some(android("M")));
+        m.take_commands();
+        let saved = Saved {
+            assignments: [(a.id, android("P")), (b.id, android("P")), (c.id, ios("B"))].into(),
+            parked: [
+                (a.id, ios("OLD")),
+                (b.id, android("Q")),
+                (c.id, android("S")),
+            ]
+            .into(),
+            ..Saved::default()
+        };
+        m.loaded(Ok(saved), None);
+        let commands = m.take_commands();
+        let unparked: HashSet<WorkspaceId> = saves(&commands)
+            .into_iter()
+            .filter_map(|s| match s {
+                Save::Unparked(ws) => Some(*ws),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(unparked, HashSet::from([a.id, b.id]));
+        assert_eq!(m.assignment(a.id), Some(&ios("R")));
+        assert_eq!(m.parked(a.id), None);
+        assert_eq!(m.assignment(b.id), Some(&android("P")));
+        assert_eq!(m.parked(b.id), None);
+        assert_eq!(m.parked(c.id), Some(&android("M")));
+    }
+}

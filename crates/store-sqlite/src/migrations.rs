@@ -138,3 +138,6 @@ pub(super) fn migrate(conn: &mut Connection) -> Result<()> {
 pub(super) fn user_version(conn: &Connection) -> rusqlite::Result<u32> {
     conn.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
+
+#[cfg(test)]
+mod tests;

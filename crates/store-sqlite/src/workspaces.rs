@@ -86,3 +86,6 @@ impl Store {
         ensure_changed(changed, "workspace", id)
     }
 }
+
+#[cfg(test)]
+mod tests;

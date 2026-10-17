@@ -292,3 +292,6 @@ impl<S: Session> PoolMachine<S> {
         true
     }
 }
+
+#[cfg(test)]
+mod tests;
