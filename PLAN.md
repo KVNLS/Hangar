@@ -136,8 +136,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   `HANGAR_DEVICE_ID`/`ANDROID_SERIAL` empty when the agent starts before its device;
   the `backend: …` line is not in the mockup (design call: hide unless fallback, or name the clone in the
   picker).
-- **Device sharing:** the 30 s MCP call timeout still applies to slow boots (the wait budget covers only
-  waiting in line); an Expo build that never prints its launched line holds its lease until
+- **Device sharing:** a device tool call gives up after its budget (call timeout minus 3 s) while its device
+  still boots, so a cold boot needs a second call; an Expo build that never prints its launched line holds its lease until
   its build tab exits or the run is replaced; agents poll with `wait_s` (no push on grant); holds are
   counted per workspace, not per call: after a base change replaces a workspace's own device, a stale
   release from an old call can lower the new device's hold count (needs per-call lease identity); on a
