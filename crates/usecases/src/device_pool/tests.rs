@@ -675,7 +675,7 @@ fn deleting_a_clone_needs_one() {
     let (udid, shutdown) = m.delete_clone(&PoolKey::Own(a.id, Platform::Ios)).unwrap();
     assert_eq!((udid.as_str(), shutdown.is_none()), ("CLONE", true));
     assert_eq!(m.assignment(a.id).and_then(|a| a.own.clone()), None);
-    assert_eq!(m.forget(a.id).map(|a| a.base), Some("B".into()));
+    assert_eq!(m.forget(a.id).active.map(|a| a.base), Some("B".into()));
     assert!(m.assignment(a.id).is_none());
 }
 

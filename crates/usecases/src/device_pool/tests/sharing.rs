@@ -3,6 +3,7 @@
 use super::*;
 
 mod rebinding;
+mod switch;
 
 const fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
@@ -624,4 +625,17 @@ fn a_grant_returned_by_a_caller_that_gave_up_keeps_a_reservation() {
         grants(&tick(&mut m, t + secs(21) + RESERVATION_IDLE)),
         [(for_c, c.id, true)]
     );
+}
+
+/// Every holder whose reservation is not ending is bound to the device it holds, and every
+/// waiter to the device it waits for.
+fn assert_bound_to_held(m: &Machine) {
+    for (key, d) in &m.devices {
+        if let Some(h) = d.leases.holding().filter(|h| !h.ending) {
+            assert_eq!(m.bindings.get(&h.who), Some(key), "holder of {key:?}");
+        }
+        for ws in d.leases.waiters() {
+            assert_eq!(m.bindings.get(ws), Some(key), "waiter of {key:?}");
+        }
+    }
 }

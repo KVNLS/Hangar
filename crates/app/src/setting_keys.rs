@@ -80,6 +80,11 @@ pub fn device_assignment(id: WorkspaceId) -> Setting<Assignment> {
     Setting::scoped("device", id)
 }
 
+/// A workspace's assignment of the platform not attached now, kept for switching back.
+pub fn device_parked(id: WorkspaceId) -> Setting<Assignment> {
+    Setting::scoped("device_parked", id)
+}
+
 /// The base device new workspaces of `platform` get.
 pub fn device_base(platform: Platform) -> Setting<String> {
     Setting::scoped("device_pool:base", platform.id())
@@ -119,6 +124,7 @@ mod tests {
         assert_eq!(agent_config("codex").key(), "agent_config:codex");
         assert_eq!(run(ws).key(), format!("run:{ws}"));
         assert_eq!(device_assignment(ws).key(), format!("device:{ws}"));
+        assert_eq!(device_parked(ws).key(), format!("device_parked:{ws}"));
         assert_eq!(
             device_base(Platform::Android).key(),
             "device_pool:base:android"

@@ -136,11 +136,9 @@ impl<S: Session> PoolMachine<S> {
     fn class_base<'a>(&'a self, key: &'a PoolKey) -> Option<&'a str> {
         match key {
             PoolKey::Base(k) => Some(k.id.as_str()),
-            PoolKey::Own(ws, platform) => self
-                .assignments
-                .get(ws)
-                .filter(|a| a.platform == *platform)
-                .map(|a| a.base.as_str()),
+            PoolKey::Own(ws, platform) => {
+                self.assignment_of(*ws, *platform).map(|a| a.base.as_str())
+            }
         }
     }
 

@@ -21,8 +21,65 @@ impl<S: Session> PoolMachine<S> {
         self.workspaces.insert(ws.id, ws);
     }
 
+    /// The workspace's active assignment: the platform attached now.
     pub fn assignment(&self, ws: WorkspaceId) -> Option<&Assignment> {
         self.assignments.get(&ws)
+    }
+
+    /// The workspace's assignment of its other platform, kept for switching back.
+    pub fn parked(&self, ws: WorkspaceId) -> Option<&Assignment> {
+        let active = self.assignments.get(&ws).map(|a| a.platform);
+        self.parked.get(&ws).filter(|p| Some(p.platform) != active)
+    }
+
+    /// The workspace's assignment of `platform`: the active one, else the parked one.
+    pub fn assignment_of(&self, ws: WorkspaceId, platform: Platform) -> Option<&Assignment> {
+        self.assignments
+            .get(&ws)
+            .filter(|a| a.platform == platform)
+            .or_else(|| self.parked(ws).filter(|a| a.platform == platform))
+    }
+
+    /// Every assignment with an own device: active ones, then parked ones.
+    pub(super) fn own_assignments(&self) -> impl Iterator<Item = (WorkspaceId, &Assignment)> {
+        let parked = self
+            .parked
+            .keys()
+            .filter_map(|ws| self.parked(*ws).map(|a| (*ws, a)));
+        self.assignments
+            .iter()
+            .map(|(ws, a)| (*ws, a))
+            .chain(parked)
+    }
+
+    /// Changes the assignment of `ws` for `platform` (active or parked) and saves it if it
+    /// changed.
+    pub(super) fn edit_assignment(
+        &mut self,
+        ws: WorkspaceId,
+        platform: Platform,
+        edit: impl FnOnce(&mut Assignment),
+    ) {
+        let parked = self.assignment(ws).is_none_or(|a| a.platform != platform);
+        let map = if parked {
+            &mut self.parked
+        } else {
+            &mut self.assignments
+        };
+        let Some(a) = map.get_mut(&ws).filter(|a| a.platform == platform) else {
+            return;
+        };
+        let before = a.clone();
+        edit(a);
+        if *a == before {
+            return;
+        }
+        let a = a.clone();
+        self.save(if parked {
+            Save::Parked(ws, a)
+        } else {
+            Save::Assignment(ws, a)
+        });
     }
 
     /// The last platform and base chosen in the New workspace sheet.
@@ -47,8 +104,9 @@ impl<S: Session> PoolMachine<S> {
 
     /// Assigns a platform and base device to a workspace (New workspace sheet, device panel).
     /// A different base replaces the workspace's own device: it is shut down and, when it is a
-    /// simulator the pool created, deleted (returned for the caller to carry out). The
-    /// workspace leaves the device it used ([`Self::unbind`]).
+    /// simulator the pool created, deleted (returned for the caller to carry out). A parked
+    /// assignment of the new platform is taken back ([`Self::switch_platform`] keeps the old
+    /// one instead). The workspace leaves the device it used ([`Self::unbind`]).
     pub fn assign(
         &mut self,
         ws: WorkspaceId,
@@ -65,25 +123,19 @@ impl<S: Session> PoolMachine<S> {
         }
         tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), %base, "device assigned");
         self.unbind(ws, now, REASSIGNED);
-        let assignment = Assignment::new(platform, base.clone());
+        let mut assignment = Assignment::new(platform, base.clone());
+        let unparked = self.unpark(ws, &mut assignment);
         self.assignments.insert(ws, assignment.clone());
         self.save(Save::Assignment(ws, assignment));
         let last = DeviceKey { platform, id: base };
         self.last_target = Some(last.clone());
         self.save(Save::LastTarget(last));
-        let replaced = previous.map(|previous| {
-            let key = PoolKey::Own(ws, previous.platform);
-            let shutdown = self.shutdown(&key);
-            self.remove_device(&key);
-            Replaced {
-                shutdown,
-                clone: (previous.platform == Platform::Ios)
-                    .then_some(previous.own)
-                    .flatten(),
-            }
-        });
+        let replaced = previous.map(|previous| self.drop_own(ws, &previous));
         self.refocus();
-        replaced
+        match (replaced, unparked) {
+            (Some(a), Some(b)) => Some(self.merge_replaced(a, b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// The assignment resolved off the UI thread for `ws`; another call may have resolved it
@@ -153,10 +205,7 @@ impl<S: Session> PoolMachine<S> {
                 },
             ),
             PoolKey::Own(ws, platform) => {
-                let a = self
-                    .assignments
-                    .get(ws)
-                    .filter(|a| a.platform == *platform)?;
+                let a = self.assignment_of(*ws, *platform)?;
                 let w = self.workspaces.get(ws)?;
                 let name = clone_name(&w.project, &w.slug);
                 let target = match a.platform {
@@ -210,7 +259,7 @@ impl<S: Session> PoolMachine<S> {
         resolve
     }
 
-    fn refocus(&mut self) {
+    pub(super) fn refocus(&mut self) {
         if let Some(key) = self.focused.and_then(|ws| self.key_for(ws)) {
             self.mark_used(&key);
         }

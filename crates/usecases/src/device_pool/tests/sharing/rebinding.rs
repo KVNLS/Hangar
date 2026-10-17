@@ -166,19 +166,6 @@ fn switching_to_one_device_at_a_time_rebinds_the_workspaces() {
     assert_eq!(m.key_for(ws[0].id), Some(b));
 }
 
-/// Every holder whose reservation is not ending is bound to the device it holds, and every
-/// waiter to the device it waits for.
-fn assert_bound_to_held(m: &Machine) {
-    for (key, d) in &m.devices {
-        if let Some(h) = d.leases.holding().filter(|h| !h.ending) {
-            assert_eq!(m.bindings.get(&h.who), Some(key), "holder of {key:?}");
-        }
-        for ws in d.leases.waiters() {
-            assert_eq!(m.bindings.get(ws), Some(key), "waiter of {key:?}");
-        }
-    }
-}
-
 #[test]
 fn a_refused_boot_moves_its_waiters_before_the_lease_is_dropped() {
     let ws = workspaces(&["w1", "w2", "w3"]);

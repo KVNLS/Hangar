@@ -9,8 +9,8 @@ use hangar_core::device::{BackendReason, Conflict, Platform, Running, Target};
 
 use super::policy::{self, Capacity, LEASE_TIMEOUT, Slot};
 use super::{
-    BringUp, Command, OpenError, Opening, Phase, PoolKey, PoolMachine, SLOT_POLL, Save, Session,
-    State, Step, Token,
+    BringUp, Command, OpenError, Opening, Phase, PoolKey, PoolMachine, SLOT_POLL, Session, State,
+    Step, Token,
 };
 
 /// Result of [`PoolMachine::open`].
@@ -387,8 +387,8 @@ impl<S: Session> PoolMachine<S> {
         };
         if let (Some(udid), Target::IosOwn { udid: own, .. }) = (created, &mut device.target) {
             *own = Some(udid.clone());
-            if let PoolKey::Own(ws, _) = key {
-                self.record_own(*ws, Some(udid.clone()), udid);
+            if let PoolKey::Own(ws, platform) = key {
+                self.record_own(*ws, *platform, Some(udid.clone()), udid);
             }
         }
         let Some(target) = self.devices.get(key).map(|d| d.target.clone()) else {
@@ -433,8 +433,8 @@ impl<S: Session> PoolMachine<S> {
                     session: session.clone(),
                     reason,
                 };
-                if let PoolKey::Own(ws, _) = key {
-                    self.record_own(*ws, created, id);
+                if let PoolKey::Own(ws, platform) = key {
+                    self.record_own(*ws, *platform, created, id);
                 }
                 Ok(session)
             }
@@ -453,13 +453,16 @@ impl<S: Session> PoolMachine<S> {
         self.enforce_limit();
     }
 
-    /// Saves what the workspace's own device is now (created simulator, Android serial).
-    fn record_own(&mut self, ws: WorkspaceId, created: Option<String>, id: String) {
-        let Some(a) = self.assignments.get_mut(&ws) else {
-            return;
-        };
-        let before = a.clone();
-        match a.platform {
+    /// Saves what the workspace's own device of `platform` is now (created simulator, Android
+    /// serial), in its active or parked assignment.
+    fn record_own(
+        &mut self,
+        ws: WorkspaceId,
+        platform: Platform,
+        created: Option<String>,
+        id: String,
+    ) {
+        self.edit_assignment(ws, platform, |a| match a.platform {
             Platform::Ios => {
                 if let Some(udid) = created {
                     a.own = Some(udid);
@@ -469,10 +472,6 @@ impl<S: Session> PoolMachine<S> {
                 a.own = Some(a.base.clone());
                 a.serial = Some(id);
             }
-        }
-        if *a != before {
-            let a = a.clone();
-            self.save(Save::Assignment(ws, a));
-        }
+        });
     }
 }

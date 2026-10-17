@@ -138,6 +138,7 @@ impl DevicePool {
     fn save_setting(&self, save: Save, cx: &mut Context<Self>) {
         match save {
             Save::Assignment(ws, a) => self.save(setting_keys::device_assignment(ws), a, cx),
+            Save::Parked(ws, a) => self.save(setting_keys::device_parked(ws), a, cx),
             Save::Limit(limit) => self.save(setting_keys::DEVICE_LIMIT, limit, cx),
             Save::Base(platform, id) => self.save(setting_keys::device_base(platform), id, cx),
             Save::LastTarget(key) => self.save(setting_keys::LAST_DEVICE_TARGET, key, cx),

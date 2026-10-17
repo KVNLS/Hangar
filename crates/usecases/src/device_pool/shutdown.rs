@@ -8,13 +8,12 @@ use hangar_core::device::{Conflict, Platform, Pressure, RunningSet, Target};
 
 use super::policy::{self, Assignment};
 use super::{
-    Command, NoticeLevel, PoolKey, PoolMachine, Save, Session, ShutdownJob, ShutdownKind, State,
+    Command, NoticeLevel, PoolKey, PoolMachine, Session, ShutdownJob, ShutdownKind, State,
 };
 
 /// What shutting a workspace's own device down takes ([`PoolMachine::shutdown_own`]).
 #[derive(Debug)]
 pub enum OwnShutdown<S> {
-    Nothing,
     /// Not opened in this run: shut it down if it still runs from an earlier launch.
     IfRunning {
         platform: Platform,
@@ -29,6 +28,13 @@ pub enum OwnShutdown<S> {
 pub struct Replaced<S> {
     pub shutdown: Option<ShutdownJob<S>>,
     pub clone: Option<String>,
+}
+
+/// What [`PoolMachine::forget`] dropped: the workspace's assignments, if known.
+#[derive(Debug, Default, PartialEq)]
+pub struct Forgotten {
+    pub active: Option<Assignment>,
+    pub parked: Option<Assignment>,
 }
 
 impl<S: Session> PoolMachine<S> {
@@ -251,38 +257,43 @@ impl<S: Session> PoolMachine<S> {
         self.assignments.entry(ws).or_insert(assignment);
     }
 
-    /// Shuts the workspace's own device down.
-    pub fn shutdown_own(&mut self, ws: WorkspaceId) -> OwnShutdown<S> {
-        let Some(key) = self
-            .assignments
-            .get(&ws)
-            .map(|a| PoolKey::Own(ws, a.platform))
-        else {
-            return OwnShutdown::Nothing;
-        };
-        let Some(device) = self.entry(&key) else {
-            return OwnShutdown::Nothing;
-        };
+    /// A saved parked assignment read after launch; one already known wins.
+    pub fn adopt_parked(&mut self, ws: WorkspaceId, assignment: Assignment) {
+        self.parked.entry(ws).or_insert(assignment);
+    }
+
+    /// Shuts the workspace's own devices down (the active platform's and the parked one's).
+    pub fn shutdown_own(&mut self, ws: WorkspaceId) -> Vec<OwnShutdown<S>> {
+        let platforms: Vec<Platform> = [self.assignment(ws), self.parked(ws)]
+            .into_iter()
+            .flatten()
+            .map(|a| a.platform)
+            .collect();
+        platforms
+            .into_iter()
+            .filter_map(|platform| self.shutdown_own_of(ws, platform))
+            .collect()
+    }
+
+    fn shutdown_own_of(&mut self, ws: WorkspaceId, platform: Platform) -> Option<OwnShutdown<S>> {
+        let key = PoolKey::Own(ws, platform);
+        let device = self.entry(&key)?;
         if matches!(device.state, State::Closed) && !device.running {
             // Possibly still running from an earlier launch of Hangar.
-            return OwnShutdown::IfRunning {
-                platform: device.platform,
+            return Some(OwnShutdown::IfRunning {
+                platform,
                 target: device.target.clone(),
-            };
+            });
         }
-        match self.shutdown(&key) {
-            Some(job) => OwnShutdown::Job(job),
-            None => OwnShutdown::Nothing,
-        }
+        self.shutdown(&key).map(OwnShutdown::Job)
     }
 
     /// Marks the workspaces' own devices that still run (from an earlier launch) as running, so
     /// they count against the cap and can be shut down when idle.
     pub fn running_scanned(&mut self, running: &RunningSet) {
         let owned: Vec<(WorkspaceId, Platform)> = self
-            .assignments
-            .iter()
-            .map(|(ws, a)| (*ws, a.platform))
+            .own_assignments()
+            .map(|(ws, a)| (ws, a.platform))
             .collect();
         for (ws, platform) in owned {
             let key = PoolKey::Own(ws, platform);
@@ -306,14 +317,19 @@ impl<S: Session> PoolMachine<S> {
     }
 
     /// The workspace is deleted (after [`Self::archive`] and its shutdown): forgets it and
-    /// returns its assignment, if known.
-    pub fn forget(&mut self, ws: WorkspaceId) -> Option<Assignment> {
+    /// returns its assignments, active and parked, if known.
+    pub fn forget(&mut self, ws: WorkspaceId) -> Forgotten {
         for platform in Platform::ALL {
             self.remove_device(&PoolKey::Own(ws, platform));
         }
         self.bindings.remove(&ws);
         self.workspaces.remove(&ws);
-        self.assignments.remove(&ws)
+        let parked = self.parked(ws).is_some();
+        let parked = self.parked.remove(&ws).filter(|_| parked);
+        Forgotten {
+            active: self.assignments.remove(&ws),
+            parked,
+        }
     }
 
     /// Settings › Devices: forgets the simulator the pool created for a workspace. Returns its
@@ -328,20 +344,14 @@ impl<S: Session> PoolMachine<S> {
         };
         let ws = *ws;
         let Some(udid) = self
-            .assignments
-            .get(&ws)
-            .filter(|a| a.platform == Platform::Ios)
+            .assignment_of(ws, Platform::Ios)
             .and_then(|a| a.own.clone())
         else {
             return Err("no simulator was created for this workspace".into());
         };
         let shutdown = self.shutdown(key);
         self.remove_device(key);
-        if let Some(a) = self.assignments.get_mut(&ws) {
-            a.own = None;
-            let a = a.clone();
-            self.save(Save::Assignment(ws, a));
-        }
+        self.edit_assignment(ws, Platform::Ios, |a| a.own = None);
         Ok((udid, shutdown))
     }
 
