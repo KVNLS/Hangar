@@ -121,3 +121,6 @@ impl Store {
         ensure_changed(changed, "session", id)
     }
 }
+
+#[cfg(test)]
+mod tests;

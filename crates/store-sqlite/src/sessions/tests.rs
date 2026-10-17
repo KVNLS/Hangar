@@ -1,4 +1,67 @@
-use super::*;
+use hangar_core::changes::{Cost, DiffStat};
+use hangar_core::{AgentKind, Session, SessionId, SessionStatus, Timestamp, WorkspaceId};
+
+use crate::StoreError;
+use crate::fixtures::{project, store, workspace};
+
+#[test]
+fn session_crud_and_status_updates() {
+    let store = store();
+    let p = project("/repos/a");
+    store.insert_project(&p).unwrap();
+    let w = workspace(p.id, "task");
+    store.insert_workspace(&w).unwrap();
+
+    let mut s = Session::new(w.id, AgentKind::Custom("aider".into()));
+    s.args = vec!["--yes".into(), "--model".into(), "x".into()];
+    store.insert_session(&s).unwrap();
+    let shell = Session::new(w.id, AgentKind::Shell);
+    store.insert_session(&shell).unwrap();
+    assert_eq!(store.get_session(s.id).unwrap(), s);
+    assert_eq!(store.list_sessions(w.id).unwrap(), vec![s.clone(), shell]);
+
+    let running = store
+        .update_session_status(s.id, &SessionStatus::Running)
+        .unwrap();
+    assert_eq!(running.status, SessionStatus::Running);
+    assert_eq!(running.ended_at, None);
+
+    let exited = store
+        .update_session_status(s.id, &SessionStatus::Exited { code: 2 })
+        .unwrap();
+    assert_eq!(exited.status, SessionStatus::Exited { code: 2 });
+    let ended_at = exited.ended_at.unwrap();
+
+    let failed = store
+        .update_session_status(
+            s.id,
+            &SessionStatus::Failed {
+                message: "late".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(failed.ended_at, Some(ended_at));
+
+    assert!(matches!(
+        store.update_session_status(SessionId::new(), &SessionStatus::Running),
+        Err(StoreError::NotFound {
+            entity: "session",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn session_for_missing_workspace_is_not_found() {
+    let store = store();
+    assert!(matches!(
+        store.insert_session(&Session::new(WorkspaceId::new(), AgentKind::Claude)),
+        Err(StoreError::NotFound {
+            entity: "workspace",
+            ..
+        })
+    ));
+}
 
 #[test]
 fn a_session_keeps_its_prompt_and_the_diff_it_ended_with() {

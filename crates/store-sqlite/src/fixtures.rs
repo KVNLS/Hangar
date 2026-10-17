@@ -1,26 +1,20 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use super::*;
-use crate::migrations::MIGRATIONS;
-use hangar_core::Setting;
-use hangar_core::changes::{Cost, DiffStat, TokenCount, UsageEntry};
-use hangar_core::slugify;
 use hangar_core::{
-    AgentKind, Project, ProjectId, Session, SessionId, SessionStatus, Timestamp, Workspace,
-    WorkspaceGroupId, WorkspaceId, WorkspaceStatus,
+    Project, ProjectId, Timestamp, Workspace, WorkspaceId, WorkspaceStatus, slugify,
 };
-use rusqlite::params;
 
-pub(super) fn store() -> Store {
+use crate::Store;
+
+pub(crate) fn store() -> Store {
     Store::open_in_memory().unwrap()
 }
 
-pub(super) fn project(path: &str) -> Project {
+pub(crate) fn project(path: &str) -> Project {
     Project::new("Demo", path, "main")
 }
 
-pub(super) fn workspace(project_id: ProjectId, name: &str) -> Workspace {
+pub(crate) fn workspace(project_id: ProjectId, name: &str) -> Workspace {
     let slug = slugify(name);
     Workspace {
         id: WorkspaceId::new(),
@@ -37,9 +31,3 @@ pub(super) fn workspace(project_id: ProjectId, name: &str) -> Workspace {
         parent: None,
     }
 }
-
-mod crud;
-mod history;
-mod open;
-mod settings;
-mod usage;

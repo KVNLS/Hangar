@@ -1,29 +1,12 @@
-use super::*;
+use rusqlite::{Connection, params};
 
-#[test]
-fn fresh_file_database_is_migrated_and_reopens() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("nested/hangar.db");
-    let p = project("/repos/demo");
-    {
-        let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        store.insert_project(&p).unwrap();
-    }
-    let store = Store::open(&path).unwrap();
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(store.list_projects().unwrap(), vec![p]);
-    let mode: String = store
-        .conn()
-        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(mode, "wal");
-    let fk: bool = store
-        .conn()
-        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
-        .unwrap();
-    assert!(fk);
-}
+use hangar_core::Setting;
+use hangar_core::changes::{Cost, UsageEntry};
+use hangar_core::{AgentKind, Session, SessionStatus, Timestamp, Workspace, WorkspaceGroupId};
+
+use super::MIGRATIONS;
+use crate::fixtures::{project, workspace};
+use crate::{SCHEMA_VERSION, Store, StoreError};
 
 #[test]
 fn newer_schema_is_rejected() {
@@ -38,31 +21,6 @@ fn newer_schema_is_rejected() {
         Store::open(&path),
         Err(StoreError::UnsupportedSchema { .. })
     ));
-}
-
-#[test]
-fn db_path_resolution() {
-    let home = Some(PathBuf::from("/home/u"));
-    assert_eq!(
-        db_path_for(true, home.clone(), None),
-        Some(PathBuf::from(
-            "/home/u/Library/Application Support/Hangar/hangar.db"
-        ))
-    );
-    assert_eq!(
-        db_path_for(false, home.clone(), None),
-        Some(PathBuf::from("/home/u/.local/share/hangar/hangar.db"))
-    );
-    assert_eq!(
-        db_path_for(false, home.clone(), Some(PathBuf::from("/data"))),
-        Some(PathBuf::from("/data/hangar/hangar.db"))
-    );
-    assert_eq!(
-        db_path_for(false, home, Some(PathBuf::from("relative"))),
-        Some(PathBuf::from("/home/u/.local/share/hangar/hangar.db"))
-    );
-    assert_eq!(db_path_for(true, None, None), None);
-    assert!(default_db_path().is_some_and(|p| p.ends_with("hangar.db")));
 }
 
 #[test]

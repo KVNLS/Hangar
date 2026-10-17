@@ -61,3 +61,68 @@ impl Store {
         ensure_changed(changed, "project", id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use hangar_core::{AgentKind, Session};
+
+    use crate::StoreError;
+    use crate::fixtures::{project, store, workspace};
+
+    #[test]
+    fn project_crud_round_trip() {
+        let store = store();
+        let a = project("/repos/a");
+        let b = project("/repos/b");
+        store.insert_project(&a).unwrap();
+        store.insert_project(&b).unwrap();
+
+        assert_eq!(store.get_project(a.id).unwrap(), a);
+        assert_eq!(store.list_projects().unwrap(), vec![a.clone(), b.clone()]);
+
+        store.delete_project(a.id).unwrap();
+        assert_eq!(store.list_projects().unwrap(), vec![b]);
+        assert!(matches!(
+            store.get_project(a.id),
+            Err(StoreError::NotFound {
+                entity: "project",
+                ..
+            })
+        ));
+        assert!(matches!(
+            store.delete_project(a.id),
+            Err(StoreError::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn duplicate_repo_path_is_a_conflict() {
+        let store = store();
+        store.insert_project(&project("/repos/a")).unwrap();
+        assert!(matches!(
+            store.insert_project(&project("/repos/a")),
+            Err(StoreError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn deleting_a_project_cascades() {
+        let store = store();
+        let p = project("/repos/a");
+        store.insert_project(&p).unwrap();
+        let w = workspace(p.id, "task");
+        store.insert_workspace(&w).unwrap();
+        let s = Session::new(w.id, AgentKind::Codex);
+        store.insert_session(&s).unwrap();
+
+        store.delete_project(p.id).unwrap();
+        assert!(matches!(
+            store.get_workspace(w.id),
+            Err(StoreError::NotFound { .. })
+        ));
+        assert!(matches!(
+            store.get_session(s.id),
+            Err(StoreError::NotFound { .. })
+        ));
+    }
+}
