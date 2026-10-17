@@ -68,6 +68,7 @@ mod tests {
     use std::time::Duration;
 
     use hangar_core::WorkspaceId;
+    use hangar_core::device::Platform;
     use hangar_mcp::ToolError;
 
     use hangar_usecases::device_pool::{Member, PoolKey, Sharing};
@@ -85,7 +86,7 @@ mod tests {
     fn sharing_maps_to_what_agents_see() {
         let (a, b, c) = (WorkspaceId::new(), WorkspaceId::new(), WorkspaceId::new());
         let pool = Sharing {
-            key: PoolKey::Own(a),
+            key: PoolKey::Own(a, Platform::Ios),
             device: "Hangar ws-a".into(),
             device_id: Some("UDID-A".into()),
             holder: Some(member(a, "ws-a")),

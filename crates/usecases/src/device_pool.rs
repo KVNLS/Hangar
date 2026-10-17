@@ -62,11 +62,12 @@ pub struct WorkspaceRef {
     pub root: PathBuf,
 }
 
-/// A device the pool manages: a shared base device, or one workspace's own device.
+/// A device the pool manages: a shared base device, or one workspace's own device of a
+/// platform.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PoolKey {
     Base(DeviceKey),
-    Own(WorkspaceId),
+    Own(WorkspaceId, Platform),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

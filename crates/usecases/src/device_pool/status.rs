@@ -210,7 +210,7 @@ impl<S: Session> PoolMachine<S> {
                     .filter_map(|ws| self.workspaces.get(ws).map(|w| w.name.clone()))
                     .collect();
                 let clone_udid = match (key, &d.target) {
-                    (PoolKey::Own(_), Target::IosOwn { udid, .. }) => udid.clone(),
+                    (PoolKey::Own(..), Target::IosOwn { udid, .. }) => udid.clone(),
                     _ => None,
                 };
                 DeviceRow {
@@ -234,7 +234,7 @@ impl<S: Session> PoolMachine<S> {
             .collect();
         // Created simulators of workspaces whose device was never opened in this run.
         for (ws, a) in &self.assignments {
-            let key = PoolKey::Own(*ws);
+            let key = PoolKey::Own(*ws, Platform::Ios);
             if a.platform == Platform::Ios
                 && a.own.is_some()
                 && !self.devices.contains_key(&key)

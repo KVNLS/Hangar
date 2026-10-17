@@ -219,8 +219,10 @@ impl<S: Session> PoolMachine<S> {
                 message: "the workspace was closed".into(),
             });
         }
-        let own = PoolKey::Own(ws);
-        if let Some(device) = self.devices.get_mut(&own) {
+        for own in Platform::ALL.map(|p| PoolKey::Own(ws, p)) {
+            let Some(device) = self.devices.get_mut(&own) else {
+                continue;
+            };
             let message = format!("{} was shut down with its workspace", device.name);
             let other = device.leases.holder().copied().filter(|h| *h != ws);
             for token in device.leases.take_waiting() {
@@ -251,7 +253,13 @@ impl<S: Session> PoolMachine<S> {
 
     /// Shuts the workspace's own device down.
     pub fn shutdown_own(&mut self, ws: WorkspaceId) -> OwnShutdown<S> {
-        let key = PoolKey::Own(ws);
+        let Some(key) = self
+            .assignments
+            .get(&ws)
+            .map(|a| PoolKey::Own(ws, a.platform))
+        else {
+            return OwnShutdown::Nothing;
+        };
         let Some(device) = self.entry(&key) else {
             return OwnShutdown::Nothing;
         };
@@ -271,9 +279,13 @@ impl<S: Session> PoolMachine<S> {
     /// Marks the workspaces' own devices that still run (from an earlier launch) as running, so
     /// they count against the cap and can be shut down when idle.
     pub fn running_scanned(&mut self, running: &RunningSet) {
-        let owned: Vec<WorkspaceId> = self.assignments.keys().copied().collect();
-        for ws in owned {
-            let key = PoolKey::Own(ws);
+        let owned: Vec<(WorkspaceId, Platform)> = self
+            .assignments
+            .iter()
+            .map(|(ws, a)| (*ws, a.platform))
+            .collect();
+        for (ws, platform) in owned {
+            let key = PoolKey::Own(ws, platform);
             let Some(device) = self.entry(&key) else {
                 continue;
             };
@@ -296,7 +308,9 @@ impl<S: Session> PoolMachine<S> {
     /// The workspace is deleted (after [`Self::archive`] and its shutdown): forgets it and
     /// returns its assignment, if known.
     pub fn forget(&mut self, ws: WorkspaceId) -> Option<Assignment> {
-        self.remove_device(&PoolKey::Own(ws));
+        for platform in Platform::ALL {
+            self.remove_device(&PoolKey::Own(ws, platform));
+        }
         self.bindings.remove(&ws);
         self.workspaces.remove(&ws);
         self.assignments.remove(&ws)
@@ -309,7 +323,7 @@ impl<S: Session> PoolMachine<S> {
         &mut self,
         key: &PoolKey,
     ) -> Result<(String, Option<ShutdownJob<S>>), String> {
-        let PoolKey::Own(ws) = key else {
+        let PoolKey::Own(ws, Platform::Ios) = key else {
             return Err("only devices Hangar created can be deleted".into());
         };
         let ws = *ws;

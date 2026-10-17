@@ -72,7 +72,7 @@ impl<S: Session> PoolMachine<S> {
         self.last_target = Some(last.clone());
         self.save(Save::LastTarget(last));
         let replaced = previous.map(|previous| {
-            let key = PoolKey::Own(ws);
+            let key = PoolKey::Own(ws, previous.platform);
             let shutdown = self.shutdown(&key);
             self.remove_device(&key);
             Replaced {
@@ -126,7 +126,7 @@ impl<S: Session> PoolMachine<S> {
                 id: a.base.clone(),
             })
         } else {
-            PoolKey::Own(ws)
+            PoolKey::Own(ws, a.platform)
         }
     }
 
@@ -152,8 +152,11 @@ impl<S: Session> PoolMachine<S> {
                     },
                 },
             ),
-            PoolKey::Own(ws) => {
-                let a = self.assignments.get(ws)?;
+            PoolKey::Own(ws, platform) => {
+                let a = self
+                    .assignments
+                    .get(ws)
+                    .filter(|a| a.platform == *platform)?;
                 let w = self.workspaces.get(ws)?;
                 let name = clone_name(&w.project, &w.slug);
                 let target = match a.platform {

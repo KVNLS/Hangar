@@ -387,7 +387,7 @@ impl<S: Session> PoolMachine<S> {
         };
         if let (Some(udid), Target::IosOwn { udid: own, .. }) = (created, &mut device.target) {
             *own = Some(udid.clone());
-            if let PoolKey::Own(ws) = key {
+            if let PoolKey::Own(ws, _) = key {
                 self.record_own(*ws, Some(udid.clone()), udid);
             }
         }
@@ -433,7 +433,7 @@ impl<S: Session> PoolMachine<S> {
                     session: session.clone(),
                     reason,
                 };
-                if let PoolKey::Own(ws) = key {
+                if let PoolKey::Own(ws, _) = key {
                     self.record_own(*ws, created, id);
                 }
                 Ok(session)
