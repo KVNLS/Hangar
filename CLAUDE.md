@@ -54,11 +54,21 @@ shipped, docs/notes/ for spike results and per-milestone engineering notes.
   notify-rust.
 - Do not copy code from Zed's GPL crates, idb, SimView or baguette; learn from them and credit in CREDITS.md.
 - Code, comments, logs and UI copy in English. Minimal comments: only the non-obvious why.
-- File layout: modules as `foo.rs` next to `foo/` (no `mod.rs`). Unit tests start inline in
-  `#[cfg(test)] mod tests`; past about 150 lines (or 100 and longer than the code) they move to
-  `foo/tests.rs` via `#[cfg(test)] mod tests;`, still a child module. Public-API tests go in
-  `crates/<x>/tests/`. A source file past about 800 lines is split by concern into child modules,
-  each with its own `impl Type` block; helpers shared between them are `pub(super)`.
+- File layout: modules as `foo.rs` next to `foo/` (no `mod.rs`). A source file past about 800 lines
+  is split by concern into child modules, each with its own `impl Type` block; helpers shared between
+  them are `pub(super)`.
+- Tests live with the code and the layer they cover:
+  - A test goes in the module, at the layer, whose code makes it pass (use case behaviour in
+    `usecases` with `usecases::fakes`, Git/SQLite behaviour in the adapter, `app` only what it
+    decides). A wrapper gets no tests of behaviour it only forwards.
+  - Unit tests start inline in `#[cfg(test)] mod tests`; past about 150 lines (or 100 and longer than
+    the code) they move to one `foo/tests.rs` via `#[cfg(test)] mod tests;`. Never a `tests/`
+    directory under `src/` (`architecture.rs` checks): when `foo/tests.rs` outgrows ~800 lines or
+    several concerns, split `foo.rs` and the tests follow.
+  - Fixtures shared by a module's children: `foo/fixtures.rs`, `#[cfg(test)] mod fixtures;`, items
+    `pub(super)`.
+  - `crates/<x>/tests/<module>.rs`: public API, live environment, or use cases wired to real adapters
+    (`app/tests/workspaces.rs`), named after what they cover.
 
 ## Workflow
 - In agent worktrees (`.claude/worktrees/`) the rtk hook refuses plain `git`/`cargo`: use `/usr/bin/git` and

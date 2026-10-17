@@ -161,6 +161,40 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// Test-only modules: `tests.rs` and the `fixtures.rs` beside it.
+fn is_test_file(rel: &str) -> bool {
+    rel.ends_with("tests.rs") || rel.ends_with("fixtures.rs")
+}
+
+/// A module's unit tests sit in it (inline or one `foo/tests.rs`), never in a `tests/` directory
+/// under `src/`: too many tests for one file means the module wants splitting.
+#[test]
+fn unit_tests_sit_beside_their_module() {
+    fn dirs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "tests") {
+                    out.push(path.clone());
+                }
+                dirs(&path, out);
+            }
+        }
+    }
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(crates).unwrap() {
+        let src = entry.unwrap().path().join("src");
+        if src.is_dir() {
+            dirs(&src, &mut offenders);
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "move these tests into the module they cover (inline or `foo/tests.rs`):\n{offenders:#?}"
+    );
+}
+
 /// The app names adapter crates only in `app::adapters`: everything else goes through ports, core
 /// types or the re-exports there (tests aside).
 #[test]
@@ -175,8 +209,7 @@ fn app_names_adapter_crates_only_in_adapters() {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        let is_test_file = rel.ends_with("tests.rs") || rel.contains("/tests/");
-        if rel == "adapters.rs" || rel.starts_with("adapters/") || is_test_file {
+        if rel == "adapters.rs" || rel.starts_with("adapters/") || is_test_file(&rel) {
             continue;
         }
         let text = std::fs::read_to_string(&file).unwrap();
@@ -229,8 +262,7 @@ fn views_reach_the_store_through_ops() {
         let is_view = VIEWS
             .iter()
             .any(|v| rel == format!("{v}.rs") || rel.starts_with(&format!("{v}/")));
-        let is_test_file = rel.ends_with("tests.rs") || rel.contains("/tests/");
-        if !is_view || is_test_file {
+        if !is_view || is_test_file(&rel) {
             continue;
         }
         let text = std::fs::read_to_string(&file).unwrap();
