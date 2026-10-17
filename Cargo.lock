@@ -3097,7 +3097,6 @@ name = "hangar-runner"
 version = "0.1.0"
 dependencies = [
  "hangar-core",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
