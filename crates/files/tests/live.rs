@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hangar_files::{ChangeBatch, DiffUpdate, LiveDiff, LiveDiffConfig, Watcher, WatcherConfig};
-use hangar_worktree::{FileStatus, GitCli, LineKind};
+use hangar_worktree::{FileDiff, FileStatus, GitCli, LineKind};
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -203,15 +204,41 @@ async fn next_update(rx: &mut UnboundedReceiver<hangar_files::Result<DiffUpdate>
         .expect("live diff error")
 }
 
-/// Waits for an update satisfying `pred`, skipping intermediate ones.
-async fn update_where(
-    rx: &mut UnboundedReceiver<hangar_files::Result<DiffUpdate>>,
-    pred: impl Fn(&DiffUpdate) -> bool,
-) -> DiffUpdate {
-    loop {
-        let update = next_update(rx).await;
-        if pred(&update) {
-            return update;
+/// The update stream folded the way a consumer keeps it (the app's changes model does the same).
+struct Folded {
+    rx: UnboundedReceiver<hangar_files::Result<DiffUpdate>>,
+    files: BTreeMap<PathBuf, FileDiff>,
+}
+
+impl Folded {
+    fn new(rx: UnboundedReceiver<hangar_files::Result<DiffUpdate>>) -> Self {
+        Self {
+            rx,
+            files: BTreeMap::new(),
+        }
+    }
+
+    async fn next(&mut self) -> DiffUpdate {
+        let update = next_update(&mut self.rx).await;
+        for file in &update.changed {
+            self.files.insert(file.path.clone(), file.clone());
+        }
+        for path in &update.removed {
+            self.files.remove(path);
+        }
+        update
+    }
+
+    /// Folds updates until one satisfies `pred` (given the folded files after it).
+    async fn until(
+        &mut self,
+        pred: impl Fn(&DiffUpdate, &BTreeMap<PathBuf, FileDiff>) -> bool,
+    ) -> DiffUpdate {
+        loop {
+            let update = self.next().await;
+            if pred(&update, &self.files) {
+                return update;
+            }
         }
     }
 }
@@ -227,20 +254,19 @@ fn live_config() -> LiveDiffConfig {
 async fn live_diff_tracks_edit_and_checkout() {
     let repo = Repo::new();
     git(&repo.path, &["checkout", "-q", "-b", "feature"]);
-    let (live, mut rx) =
-        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
+    let (_live, rx) = LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
+    let mut rx = Folded::new(rx);
 
-    let initial = next_update(&mut rx).await;
+    let initial = rx.next().await;
     assert!(initial.full);
     assert!(initial.changed.is_empty() && initial.removed.is_empty());
     assert_eq!(initial.summary.files, 0);
     assert_eq!(initial.summary.status.branch.as_deref(), Some("feature"));
 
     repo.write("README.md", "one\nTWO\nthree\n");
-    let edited = update_where(&mut rx, |u| {
-        u.changed.iter().any(|f| f.path == Path::new("README.md"))
-    })
-    .await;
+    let edited = rx
+        .until(|u, _| u.changed.iter().any(|f| f.path == Path::new("README.md")))
+        .await;
     assert!(edited.trigger.is_some());
     let readme = edited
         .changed
@@ -271,31 +297,29 @@ async fn live_diff_tracks_edit_and_checkout() {
         edited.summary.status,
         hangar_worktree::status(&repo.path).unwrap()
     );
-    assert_eq!(live.file(Path::new("README.md")).as_ref(), Some(readme));
+    assert_eq!(rx.files.get(Path::new("README.md")), Some(readme));
 
     git(&repo.path, &["checkout", "--", "README.md"]);
-    let reverted = update_where(&mut rx, |u| {
-        u.removed.iter().any(|p| p == Path::new("README.md"))
-    })
-    .await;
+    let reverted = rx
+        .until(|u, _| u.removed.iter().any(|p| p == Path::new("README.md")))
+        .await;
     assert_eq!(reverted.summary.files, 0);
-    assert!(live.snapshot().is_empty());
+    assert!(rx.files.is_empty());
 }
 
 #[tokio::test]
 async fn live_diff_untracked_ignored_and_commit() {
     let repo = Repo::new();
     git(&repo.path, &["checkout", "-q", "-b", "feature"]);
-    let (live, mut rx) =
-        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
-    next_update(&mut rx).await;
+    let (_live, rx) = LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
+    let mut rx = Folded::new(rx);
+    rx.next().await;
 
     repo.write("debug.log", "ignored\n");
     repo.write("src/new.rs", "fn new() {}\n");
-    let added = update_where(&mut rx, |u| {
-        u.changed.iter().any(|f| f.path == Path::new("src/new.rs"))
-    })
-    .await;
+    let added = rx
+        .until(|u, _| u.changed.iter().any(|f| f.path == Path::new("src/new.rs")))
+        .await;
     assert!(
         added
             .changed
@@ -303,31 +327,30 @@ async fn live_diff_untracked_ignored_and_commit() {
             .all(|f| f.path != Path::new("debug.log"))
     );
     assert_eq!(
-        live.file(Path::new("src/new.rs")).unwrap().status,
+        rx.files[Path::new("src/new.rs")].status,
         FileStatus::Untracked
     );
 
     // Committed work stays in the diff (it is relative to the merge-base) but changes status.
     git(&repo.path, &["add", "src/new.rs"]);
     git(&repo.path, &["commit", "-q", "--no-verify", "-m", "new"]);
-    let committed = update_where(&mut rx, |u| {
-        u.changed
-            .iter()
-            .any(|f| f.path == Path::new("src/new.rs") && f.status == FileStatus::Added)
-    })
-    .await;
+    let committed = rx
+        .until(|u, _| {
+            u.changed
+                .iter()
+                .any(|f| f.path == Path::new("src/new.rs") && f.status == FileStatus::Added)
+        })
+        .await;
     assert!(committed.full);
     assert_eq!(committed.summary.status.untracked, 0);
-    assert_eq!(live.snapshot().len(), 1);
+    assert_eq!(rx.files.len(), 1);
 
     // Deleting the file again removes it from the diff.
     git(&repo.path, &["rm", "-q", "src/new.rs"]);
     git(&repo.path, &["commit", "-q", "--no-verify", "-m", "drop"]);
-    update_where(&mut rx, |u| {
-        u.removed.iter().any(|p| p == Path::new("src/new.rs"))
-    })
-    .await;
-    assert!(live.snapshot().is_empty());
+    rx.until(|u, _| u.removed.iter().any(|p| p == Path::new("src/new.rs")))
+        .await;
+    assert!(rx.files.is_empty());
 }
 
 #[tokio::test]
@@ -338,18 +361,15 @@ async fn live_diff_directory_rename() {
     git(&repo.path, &["add", "-A"]);
     git(&repo.path, &["commit", "-q", "--no-verify", "-m", "dir"]);
     git(&repo.path, &["checkout", "-q", "-b", "feature"]);
-    let (live, mut rx) =
-        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
-    next_update(&mut rx).await;
+    let (_live, rx) = LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
+    let mut rx = Folded::new(rx);
+    rx.next().await;
 
     // Moved without `git mv`: each file pairs with its deleted original as a rename.
     fs::rename(repo.path.join("old dir"), repo.path.join("new dir")).unwrap();
-    update_where(&mut rx, |_| {
-        let snapshot = live.snapshot();
-        snapshot.len() == 2 && snapshot.contains_key(Path::new("new dir/sub/b.rs"))
-    })
-    .await;
-    let snapshot = live.snapshot();
+    rx.until(|_, files| files.len() == 2 && files.contains_key(Path::new("new dir/sub/b.rs")))
+        .await;
+    let snapshot = &rx.files;
     let moved = &snapshot[Path::new("new dir/sub/b.rs")];
     assert_eq!(moved.status, FileStatus::Renamed);
     assert_eq!(
@@ -362,7 +382,7 @@ async fn live_diff_directory_rename() {
     );
 
     fs::rename(repo.path.join("new dir"), repo.path.join("old dir")).unwrap();
-    update_where(&mut rx, |_| live.snapshot().is_empty()).await;
+    rx.until(|_, files| files.is_empty()).await;
 }
 
 #[tokio::test]
@@ -377,34 +397,28 @@ async fn live_diff_refresh_and_bad_base() {
     .unwrap();
     let first = timeout(WAIT, rx.recv()).await.unwrap().unwrap();
     assert!(first.is_err());
-    live.set_base("main").unwrap();
-    let update = next_update(&mut rx).await;
-    assert!(update.full);
-    assert_eq!(update.summary.files, 0);
-    assert!(live.summary().is_some());
+    // The worker keeps going after an error: a refresh is answered (the base is still bad).
     live.refresh().unwrap();
+    let again = timeout(WAIT, rx.recv()).await.unwrap().unwrap();
+    assert!(again.is_err());
 }
 
 #[tokio::test]
 async fn ignoring_files_removes_them_from_the_live_diff() {
     let repo = Repo::new();
     git(&repo.path, &["checkout", "-q", "-b", "feature"]);
-    let (live, mut rx) =
-        LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
-    next_update(&mut rx).await;
+    let (_live, rx) = LiveDiff::start(Arc::new(GitCli), &repo.path, "main", live_config()).unwrap();
+    let mut rx = Folded::new(rx);
+    rx.next().await;
 
     repo.write("gen/out.bin", "generated\n");
-    update_where(&mut rx, |u| {
-        u.changed.iter().any(|f| f.path == Path::new("gen/out.bin"))
-    })
-    .await;
+    rx.until(|u, _| u.changed.iter().any(|f| f.path == Path::new("gen/out.bin")))
+        .await;
 
     // Only `.gitignore` changes, yet the now-ignored file must leave the diff.
     let ignore = fs::read_to_string(repo.path.join(".gitignore")).unwrap_or_default();
     repo.write(".gitignore", &format!("{ignore}gen/\n"));
-    update_where(&mut rx, |u| {
-        u.removed.iter().any(|p| p == Path::new("gen/out.bin"))
-    })
-    .await;
-    assert!(live.file(Path::new("gen/out.bin")).is_none());
+    rx.until(|u, _| u.removed.iter().any(|p| p == Path::new("gen/out.bin")))
+        .await;
+    assert!(!rx.files.contains_key(Path::new("gen/out.bin")));
 }
