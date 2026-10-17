@@ -1,46 +1,13 @@
-//! Switching a workspace to its other platform: one platform attached at a time.
+//! Switching a workspace to its other platform, and its parked device.
 
-use super::*;
+use hangar_core::device::Running;
 
-mod parked;
+use crate::device_pool::fixtures::*;
+use crate::device_pool::*;
 
 const SWITCHED: &str = "this workspace switched to Android; call again";
 /// What an open of a parked device left unstarted gets.
 const TO_ANDROID: &str = "this workspace switched to Android";
-
-fn android(base: &str) -> Assignment {
-    Assignment::new(Platform::Android, base)
-}
-
-fn ios_own(base: &str, own: &str) -> Assignment {
-    let mut a = ios(base);
-    a.own = Some(own.into());
-    a
-}
-
-fn own(ws: &WorkspaceRef, platform: Platform) -> PoolKey {
-    PoolKey::Own(ws.id, platform)
-}
-
-/// The jobs of a switch that went through.
-fn done(
-    switched: Result<Switched<Sess>, String>,
-) -> (Option<ShutdownJob<Sess>>, Option<Replaced<Sess>>) {
-    match switched {
-        Ok(Switched::Done { shutdown, replaced }) => (shutdown, replaced),
-        other => panic!("not switched: {other:?}"),
-    }
-}
-
-fn saves(commands: &[Command<Sess>]) -> Vec<&Save> {
-    commands
-        .iter()
-        .filter_map(|c| match c {
-            Command::Save(save) => Some(save),
-            _ => None,
-        })
-        .collect()
-}
 
 #[test]
 fn a_switch_hands_the_device_over_and_shares_the_new_platform_at_the_cap() {
@@ -249,92 +216,6 @@ fn a_parked_simulator_is_listed_and_can_be_deleted() {
 }
 
 #[test]
-fn archive_and_forget_cover_both_own_devices() {
-    let (a, w) = (workspace("a"), workspace("w"));
-    let mut m = pool(Limit::Auto, &[(&a, ios_own("B", "CLONE")), (&w, ios("B"))]);
-    let t = Instant::now();
-    let (ios_key, android_key) = (own(&a, Platform::Ios), own(&a, Platform::Android));
-    m.request_device(a.id, t).unwrap();
-    open_running(&mut m, &ios_key, "CLONE", t);
-    m.release_lease(&ios_key, a.id, t);
-    done(m.switch_platform(a.id, android("P"), SwitchBy::Agent, t));
-    // W shares the parked device, which runs.
-    m.shutdown_finished(&ios_key, Err("busy".into()), t);
-    let for_w = m.request_lease(&ios_key, w.id, t).unwrap();
-    assert_eq!(for_w, LeaseStart::Granted);
-    open_running(&mut m, &android_key, "emulator-5554", t);
-    m.take_commands();
-    assert!(m.archive(a.id, t));
-    let commands = m.take_commands();
-    assert!(
-        commands.iter().any(|c| matches!(
-            c,
-            Command::Revoked { holder, key } if *holder == w.id && *key == ios_key
-        )),
-        "{commands:?}"
-    );
-    let shutdowns = m.shutdown_own(a.id);
-    let keys: Vec<&PoolKey> = shutdowns
-        .iter()
-        .map(|s| match s {
-            OwnShutdown::Job(job) => &job.key,
-            other => panic!("{other:?}"),
-        })
-        .collect();
-    assert_eq!(keys, [&android_key, &ios_key]);
-    let forgotten = m.forget(a.id);
-    assert_eq!(
-        forgotten.active.map(|a| (a.platform, a.serial)),
-        Some((Platform::Android, Some("emulator-5554".into())))
-    );
-    assert_eq!(forgotten.parked, Some(ios_own("B", "CLONE")));
-    assert!(
-        m.rows()
-            .iter()
-            .all(|r| r.key != ios_key && r.key != android_key)
-    );
-}
-
-#[test]
-fn assigning_the_parked_platform_takes_the_parked_assignment_back() {
-    let a = workspace("a");
-    let mut m = pool(Limit::Auto, &[(&a, ios_own("B", "CLONE"))]);
-    let t = Instant::now();
-    let android_key = own(&a, Platform::Android);
-    done(m.switch_platform(a.id, android("P"), SwitchBy::Agent, t));
-    open_running(&mut m, &android_key, "emulator-5554", t);
-    // Another base: the parked simulator is deleted, the Android device shut down.
-    m.take_commands();
-    let replaced = m
-        .assign(a.id, Platform::Ios, "C".into(), t)
-        .unwrap()
-        .unwrap();
-    assert_eq!(replaced.clone.as_deref(), Some("CLONE"));
-    assert!(replaced.shutdown.is_none(), "the simulator never ran");
-    let commands = m.take_commands();
-    assert!(commands.iter().any(|c| matches!(
-        c,
-        Command::Shutdown(job) if job.key == android_key
-    )));
-    assert!(
-        saves(&commands).contains(&&Save::Unparked(a.id)),
-        "{commands:?}"
-    );
-    assert_eq!(m.assignment(a.id), Some(&ios("C")));
-    assert_eq!(m.parked(a.id), None);
-    // The same base keeps the parked simulator.
-    let mut m = pool(Limit::Auto, &[(&a, ios_own("B", "CLONE"))]);
-    done(m.switch_platform(a.id, android("P"), SwitchBy::Agent, t));
-    let replaced = m
-        .assign(a.id, Platform::Ios, "B".into(), t)
-        .unwrap()
-        .unwrap();
-    assert_eq!(replaced.clone, None);
-    assert_eq!(m.assignment(a.id), Some(&ios_own("B", "CLONE")));
-    assert_eq!(m.parked(a.id), None);
-}
-
-#[test]
 fn switching_back_saves_the_other_parked_assignment() {
     let a = workspace("a");
     let mut m = pool(Limit::Auto, &[(&a, ios_own("B", "CLONE"))]);
@@ -349,24 +230,6 @@ fn switching_back_saves_the_other_parked_assignment() {
             &Save::Parked(a.id, android("P")),
             &Save::Assignment(a.id, ios_own("B", "CLONE")),
         ]
-    );
-}
-
-#[test]
-fn a_saved_parked_assignment_is_loaded() {
-    let a = workspace("a");
-    let mut m: PoolMachine<Sess> = PoolMachine::new(DeviceCost::android(2048, 2), None);
-    m.track(a.clone());
-    let saved = Saved {
-        assignments: [(a.id, android("P"))].into(),
-        parked: [(a.id, ios_own("B", "CLONE"))].into(),
-        ..Saved::default()
-    };
-    m.loaded(Ok(saved), None);
-    assert_eq!(m.parked(a.id), Some(&ios_own("B", "CLONE")));
-    assert_eq!(
-        m.assignment_of(a.id, Platform::Ios),
-        Some(&ios_own("B", "CLONE"))
     );
 }
 
@@ -486,40 +349,148 @@ fn two_switches_resolved_together_apply_in_turn() {
 }
 
 #[test]
-fn loading_keeps_what_is_known_and_drops_a_parked_assignment_of_the_active_platform() {
+fn a_parked_device_records_its_simulator_in_the_parked_assignment() {
+    let a = workspace("a");
+    let mut m = pool(Limit::Auto, &[(&a, ios("B"))]);
+    let t = Instant::now();
+    let key = own(&a, Platform::Ios);
+    let token = wait(m.open(&key, t));
+    let probe = step(&m.take_commands());
+    m.step_done(&key, probe.attempt, StepDone::Probed(Ok(None)), t);
+    m.take_commands();
+    m.step_done(
+        &key,
+        probe.attempt,
+        StepDone::HostChecked(Ok(host(Pressure::Normal))),
+        t,
+    );
+    assert!(matches!(step(&m.take_commands()).step, Step::Create(_)));
+    // The panel's open holds no lease: the switch goes through while the simulator is made.
+    let (shutdown, _) = done(m.switch_platform(a.id, android("P"), SwitchBy::Agent, t));
+    assert!(shutdown.is_none(), "still starting");
+    m.take_commands();
+    m.step_done(
+        &key,
+        probe.attempt,
+        StepDone::Created(Ok(Some("NEW".into()))),
+        t,
+    );
+    // Recorded, then left unbooted: nothing uses it.
+    let commands = m.take_commands();
+    assert_eq!(saves(&commands), [&Save::Parked(a.id, ios_own("B", "NEW"))]);
+    assert!(steps(&commands).is_empty(), "{commands:?}");
+    assert_eq!(
+        replies(&commands),
+        [(token, Err(OpenError::Failed(TO_ANDROID.into())))]
+    );
+    assert_eq!(m.parked(a.id), Some(&ios_own("B", "NEW")));
+    assert_eq!(m.assignment(a.id), Some(&android("P")));
+    let row = m.rows().into_iter().find(|r| r.key == key).unwrap();
+    assert_eq!(row.state, "off");
+}
+
+#[test]
+fn a_parked_device_waiting_for_a_slot_stops_rather_than_evict() {
     let ws = workspaces(&["a", "b", "c"]);
     let [a, b, c] = [&ws[0], &ws[1], &ws[2]];
-    let mut m: PoolMachine<Sess> = PoolMachine::new(DeviceCost::android(2048, 2), None);
-    for w in &ws {
-        m.track(w.clone());
+    let mut m = pool(
+        Limit::Manual(2),
+        &[(a, ios("B")), (b, ios("X")), (c, ios("Y"))],
+    );
+    let t = Instant::now();
+    let kb = own(b, Platform::Ios);
+    for (w, udid) in [(b, "DB"), (c, "DC")] {
+        let key = m.request_device(w.id, t).unwrap().key;
+        open_running(&mut m, &key, udid, t);
     }
-    // Known before the settings were read.
-    m.resolved(a.id, ios("R"));
-    m.adopt(c.id, Some(ios("B")), Some(android("M")));
-    m.take_commands();
-    let saved = Saved {
-        assignments: [(a.id, android("P")), (b.id, android("P")), (c.id, ios("B"))].into(),
-        parked: [
-            (a.id, ios("OLD")),
-            (b.id, android("Q")),
-            (c.id, android("S")),
-        ]
-        .into(),
-        ..Saved::default()
-    };
-    m.loaded(Ok(saved), None);
+    // The panel opens A's device: every slot is in use, it waits.
+    let ka = own(a, Platform::Ios);
+    let token = wait(m.open(&ka, t));
+    let probe = step(&m.take_commands());
+    m.step_done(&ka, probe.attempt, StepDone::Probed(Ok(None)), t);
+    assert_eq!(step(&m.take_commands()).step, Step::Wait(SLOT_POLL));
+    assert!(m.is_waiting(a.id));
+    let (shutdown, _) = done(m.switch_platform(a.id, android("P"), SwitchBy::Agent, t));
+    assert!(shutdown.is_none());
     let commands = m.take_commands();
-    let unparked: HashSet<WorkspaceId> = saves(&commands)
-        .into_iter()
-        .filter_map(|s| match s {
-            Save::Unparked(ws) => Some(*ws),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(unparked, HashSet::from([a.id, b.id]));
-    assert_eq!(m.assignment(a.id), Some(&ios("R")));
-    assert_eq!(m.parked(a.id), None);
-    assert_eq!(m.assignment(b.id), Some(&android("P")));
-    assert_eq!(m.parked(b.id), None);
-    assert_eq!(m.parked(c.id), Some(&android("M")));
+    assert_eq!(
+        replies(&commands),
+        [(token, Err(OpenError::Failed(TO_ANDROID.into())))]
+    );
+    assert!(!commands.iter().any(|c| matches!(c, Command::Shutdown(_))));
+    // B's device goes idle: nothing is evicted for the parked one.
+    m.release_lease(&kb, b.id, t + secs(1));
+    m.release_reservation(b.id, t + secs(1));
+    m.take_commands();
+    m.step_done(&ka, probe.attempt, StepDone::Waited, t + SLOT_POLL);
+    assert!(m.take_commands().is_empty());
+    let row = m.rows().into_iter().find(|r| r.key == ka).unwrap();
+    assert_eq!(row.state, "off");
+}
+
+#[test]
+fn a_parked_device_shuts_down_once_its_sharer_is_done() {
+    // W's reservation expires.
+    let (mut m, [a, w, ..], ka, t) = handed_over();
+    m.release_lease(&ka, w.id, t + secs(1));
+    assert!(!shut_down(&m.take_commands(), &ka), "W keeps it reserved");
+    let commands = tick(&mut m, t + secs(1) + RESERVATION_IDLE);
+    assert!(shut_down(&commands, &ka), "{commands:?}");
+    m.shutdown_finished(&ka, Ok(()), t + secs(2) + RESERVATION_IDLE);
+    assert_eq!(
+        m.parked(a.id),
+        Some(&ios_own("B", "CLONE")),
+        "kept for switching back"
+    );
+    assert!(m.rows().iter().any(|r| r.key == ka && r.state == "off"));
+    // W releases it during its call: down once the call ends.
+    let (mut m, [_, w, ..], ka, t) = handed_over();
+    m.release_reservation(w.id, t + secs(1));
+    assert!(!shut_down(&m.take_commands(), &ka), "a call is in flight");
+    m.release_lease(&ka, w.id, t + secs(2));
+    assert!(shut_down(&m.take_commands(), &ka));
+}
+
+#[test]
+fn a_parked_device_that_finishes_booting_is_shut_down() {
+    let a = workspace("a");
+    let mut m = pool(Limit::Auto, &[(&a, android("P"))]);
+    let t = Instant::now();
+    let key = own(&a, Platform::Android);
+    let token = wait(m.open(&key, t));
+    let probe = step(&m.take_commands());
+    m.step_done(&key, probe.attempt, StepDone::Probed(Ok(None)), t);
+    m.take_commands();
+    m.step_done(
+        &key,
+        probe.attempt,
+        StepDone::HostChecked(Ok(host(Pressure::Normal))),
+        t,
+    );
+    assert!(matches!(step(&m.take_commands()).step, Step::Boot(_)));
+    let (shutdown, _) = done(m.switch_platform(a.id, ios("B"), SwitchBy::Agent, t));
+    assert!(shutdown.is_none(), "booting");
+    m.take_commands();
+    let running = Running {
+        info: info("emulator-5554", "Pixel"),
+        created: None,
+    };
+    m.step_done(&key, probe.attempt, StepDone::Booted(Ok(running)), t);
+    let open = step(&m.take_commands());
+    m.step_done(
+        &key,
+        open.attempt,
+        StepDone::Opened(Ok((Sess(info("emulator-5554", "Pixel")), None))),
+        t,
+    );
+    let commands = m.take_commands();
+    assert!(matches!(
+        replies(&commands).as_slice(),
+        [(t, Ok(_))] if *t == token
+    ));
+    assert!(shut_down(&commands, &key), "{commands:?}");
+    let mut parked = android("P");
+    parked.own = Some("P".into());
+    parked.serial = Some("emulator-5554".into());
+    assert_eq!(saves(&commands), [&Save::Parked(a.id, parked)]);
 }

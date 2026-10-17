@@ -278,3 +278,127 @@ impl<S: Session> PoolMachine<S> {
         self.focused.and_then(|ws| self.key_for(ws))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::device_pool::fixtures::*;
+    use crate::device_pool::*;
+
+    #[test]
+    fn a_new_base_replaces_the_own_device() {
+        let w = workspace("a");
+        let mut a = ios("OLD");
+        a.own = Some("CLONE".into());
+        let mut m = pool(Limit::Auto, &[(&w, a)]);
+        let now = Instant::now();
+        let key = PoolKey::Own(w.id, Platform::Ios);
+        let token = wait(m.open(&key, now));
+        let probe = step(&m.take_commands());
+        let replaced = m
+            .assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+            .unwrap()
+            .unwrap();
+        assert!(replaced.shutdown.is_none(), "not running yet");
+        assert_eq!(replaced.clone.as_deref(), Some("CLONE"));
+        let commands = m.take_commands();
+        assert_eq!(
+            replies(&commands),
+            [(token, Err(OpenError::Failed(STOPPED.into())))]
+        );
+        assert!(commands.iter().any(|c| matches!(
+            c,
+            Command::Save(Save::LastTarget(k)) if k.id == "NEW"
+        )));
+        assert_eq!(m.assignment(w.id).map(|a| a.base.as_str()), Some("NEW"));
+        // The old bring-up's results land nowhere.
+        m.step_done(&key, probe.attempt, StepDone::Probed(Ok(None)), now);
+        assert!(m.take_commands().is_empty());
+        assert!(
+            m.assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    fn android_base(id: &str) -> PoolKey {
+        PoolKey::Base(DeviceKey {
+            platform: Platform::Android,
+            id: id.into(),
+        })
+    }
+
+    #[test]
+    fn a_new_assignment_leaves_the_device_it_shared() {
+        let (mut m, [a, b, c], x, t) = shared_base();
+        assert_eq!(m.request_device(a.id, t).unwrap().key, x);
+        let for_b = queued(m.request_device(b.id, t).map(|s| s.lease));
+        let for_c = queued(m.request_device(c.id, t).map(|s| s.lease));
+        m.take_commands();
+        m.assign(b.id, Platform::Android, "P".into(), t).unwrap();
+        let commands = m.take_commands();
+        assert_eq!(failed(&commands), [for_b]);
+        assert!(grants(&commands).is_empty(), "a keeps the device");
+        let p = android_base("P");
+        assert_eq!(m.key_for(b.id), Some(p.clone()));
+        let start = m.request_device(b.id, t).unwrap();
+        assert_eq!((&start.key, start.lease), (&p, LeaseStart::Granted));
+        assert_bound_to_held(&m);
+        // The holder moves during a call: the call finishes on X, then X passes on.
+        m.assign(a.id, Platform::Android, "Q".into(), t).unwrap();
+        assert!(grants(&m.take_commands()).is_empty(), "a call is in flight");
+        let q = android_base("Q");
+        assert_eq!(m.key_for(a.id), Some(q.clone()));
+        assert_eq!(m.request_device(a.id, t).unwrap().key, q);
+        assert_bound_to_held(&m);
+        m.release_lease(&x, a.id, t + secs(1));
+        assert_eq!(grants(&m.take_commands()), [(for_c, c.id, true)]);
+        // A stale release of the old call changes nothing on either device.
+        m.release_lease(&x, a.id, t + secs(2));
+        assert!(m.take_commands().is_empty());
+        assert_eq!(m.held_by_other(a.id), None);
+        assert_eq!(
+            m.sharing(c.id, t).and_then(|s| s.holder).map(|h| h.id),
+            Some(c.id)
+        );
+        assert_bound_to_held(&m);
+    }
+
+    #[test]
+    fn assigning_the_parked_platform_takes_the_parked_assignment_back() {
+        let a = workspace("a");
+        let mut m = pool(Limit::Auto, &[(&a, ios_own("B", "CLONE"))]);
+        let t = Instant::now();
+        let android_key = own(&a, Platform::Android);
+        done(m.switch_platform(a.id, android("P"), SwitchBy::Agent, t));
+        open_running(&mut m, &android_key, "emulator-5554", t);
+        // Another base: the parked simulator is deleted, the Android device shut down.
+        m.take_commands();
+        let replaced = m
+            .assign(a.id, Platform::Ios, "C".into(), t)
+            .unwrap()
+            .unwrap();
+        assert_eq!(replaced.clone.as_deref(), Some("CLONE"));
+        assert!(replaced.shutdown.is_none(), "the simulator never ran");
+        let commands = m.take_commands();
+        assert!(commands.iter().any(|c| matches!(
+            c,
+            Command::Shutdown(job) if job.key == android_key
+        )));
+        assert!(
+            saves(&commands).contains(&&Save::Unparked(a.id)),
+            "{commands:?}"
+        );
+        assert_eq!(m.assignment(a.id), Some(&ios("C")));
+        assert_eq!(m.parked(a.id), None);
+        // The same base keeps the parked simulator.
+        let mut m = pool(Limit::Auto, &[(&a, ios_own("B", "CLONE"))]);
+        done(m.switch_platform(a.id, android("P"), SwitchBy::Agent, t));
+        let replaced = m
+            .assign(a.id, Platform::Ios, "B".into(), t)
+            .unwrap()
+            .unwrap();
+        assert_eq!(replaced.clone, None);
+        assert_eq!(m.assignment(a.id), Some(&ios_own("B", "CLONE")));
+        assert_eq!(m.parked(a.id), None);
+    }
+}

@@ -492,3 +492,6 @@ impl<S: Session> PoolMachine<S> {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

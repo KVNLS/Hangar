@@ -382,3 +382,6 @@ impl<S: Session> PoolMachine<S> {
             .and_then(|d| d.conflict.clone())
     }
 }
+
+#[cfg(test)]
+mod tests;

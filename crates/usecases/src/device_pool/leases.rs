@@ -134,3 +134,57 @@ impl<S: Session> PoolMachine<S> {
                 .is_some_and(|k| self.waiting_slot.contains(&k))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::device_pool::fixtures::*;
+    use crate::device_pool::*;
+
+    #[test]
+    fn leases_queue_hand_over_and_time_out() {
+        let (a, b, c) = (workspace("a"), workspace("b"), workspace("c"));
+        let assigned = [(&a, ios("X")), (&b, ios("X")), (&c, ios("X"))];
+        let mut m = pool(Limit::Manual(1), &assigned);
+        let now = Instant::now();
+        let x = base_key("X");
+        assert_eq!(m.request_lease(&x, a.id, now), Ok(LeaseStart::Granted));
+        let Ok(LeaseStart::Queued(for_b)) = m.request_lease(&x, b.id, now) else {
+            panic!("b should wait");
+        };
+        let Ok(LeaseStart::Queued(for_c)) = m.request_lease(&x, c.id, now) else {
+            panic!("c should wait");
+        };
+        assert_eq!(m.held_by_other(b.id).map(|(ws, _)| ws), Some(a.id));
+        m.release_lease(&x, a.id, now);
+        let commands = m.take_commands();
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::GrantLease { token, holder, .. }] if *token == for_b && *holder == b.id
+        ));
+        m.monitor(now + LEASE_TIMEOUT, Ok(Pressure::Normal), None);
+        let commands = m.take_commands();
+        assert!(matches!(
+            commands.as_slice(),
+            [Command::FailLease { token, message }]
+                if *token == for_c && message == "waited 10 minutes for X without getting it"
+        ));
+        assert!(!m.is_waiting(c.id));
+    }
+
+    #[test]
+    fn a_polled_ticket_survives_the_lease_timeout() {
+        let (mut m, [a, b, c], x, t) = shared_base();
+        m.request_lease(&x, a.id, t).unwrap();
+        let for_b = queued(m.request_lease(&x, b.id, t));
+        let for_c = queued(m.request_lease(&x, c.id, t));
+        assert!(m.touch(b.id, t + secs(9 * 60)));
+        assert_eq!(failed(&tick(&mut m, t + LEASE_TIMEOUT)), [for_c]);
+        assert!(m.is_waiting(b.id));
+        assert!(failed(&tick(&mut m, t + secs(9 * 60) + LEASE_TIMEOUT - secs(1))).is_empty());
+        assert_eq!(
+            failed(&tick(&mut m, t + secs(9 * 60) + LEASE_TIMEOUT)),
+            [for_b]
+        );
+        assert!(!m.is_waiting(b.id));
+    }
+}
