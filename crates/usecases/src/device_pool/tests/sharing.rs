@@ -3,6 +3,7 @@
 use super::*;
 
 mod rebinding;
+mod switch;
 
 const fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
@@ -304,7 +305,10 @@ fn at_the_cap_workspaces_share_the_devices_of_their_class() {
         .iter()
         .map(|w| m.request_device(w.id, t).unwrap())
         .collect();
-    let (k1, k2) = (PoolKey::Own(ws[0].id), PoolKey::Own(ws[1].id));
+    let (k1, k2) = (
+        PoolKey::Own(ws[0].id, Platform::Ios),
+        PoolKey::Own(ws[1].id, Platform::Ios),
+    );
     assert_eq!(
         starts[0],
         DeviceStart {
@@ -395,7 +399,7 @@ fn another_class_is_never_shared() {
         let start = m.request_device(w.id, t).unwrap();
         open_running(&mut m, &start.key, &w.slug, t);
     }
-    let own = PoolKey::Own(ws[2].id);
+    let own = PoolKey::Own(ws[2].id, Platform::Ios);
     let start = m.request_device(ws[2].id, t).unwrap();
     assert_eq!((&start.key, start.shared), (&own, false));
     assert!(notices(&m.take_commands()).is_empty());
@@ -413,10 +417,10 @@ fn a_refused_boot_shares_a_running_device() {
     let ws = workspaces(&["w1", "w2"]);
     let mut m = pool(Limit::Auto, &[(&ws[0], ios("B")), (&ws[1], ios("B"))]);
     let t = Instant::now();
-    let k1 = PoolKey::Own(ws[0].id);
+    let k1 = PoolKey::Own(ws[0].id, Platform::Ios);
     m.request_device(ws[0].id, t).unwrap();
     open_running(&mut m, &k1, "D1", t);
-    let own = PoolKey::Own(ws[1].id);
+    let own = PoolKey::Own(ws[1].id, Platform::Ios);
     let start = m.request_device(ws[1].id, t).unwrap();
     assert_eq!((&start.key, start.lease), (&own, LeaseStart::Granted));
     wait(m.open(&own, t));
@@ -452,7 +456,7 @@ fn a_refused_boot_shares_a_running_device() {
     let lone = workspace("lone");
     m.track(lone.clone());
     m.resolved(lone.id, ios("Z"));
-    let key = PoolKey::Own(lone.id);
+    let key = PoolKey::Own(lone.id, Platform::Ios);
     m.request_device(lone.id, t).unwrap();
     assert_eq!(m.boot_refused(lone.id, &key, t), Ok(None));
     assert_eq!(m.key_for(lone.id), Some(key));
@@ -478,7 +482,10 @@ fn a_workspace_waiting_for_a_slot_moves_to_a_compatible_device() {
         let start = m.request_device(w.id, t).unwrap();
         open_running(&mut m, &start.key, &w.slug, t);
     }
-    let (k2, k4) = (PoolKey::Own(ws[2].id), PoolKey::Own(ws[4].id));
+    let (k2, k4) = (
+        PoolKey::Own(ws[2].id, Platform::Ios),
+        PoolKey::Own(ws[4].id, Platform::Ios),
+    );
     assert_eq!(m.request_device(ws[2].id, t).unwrap().key, k2);
     let start = m.request_device(ws[3].id, t).unwrap();
     assert_eq!((&start.key, start.shared), (&k2, true), "about to boot");
@@ -556,7 +563,7 @@ fn archiving_drops_the_binding_and_fails_each_ticket_once() {
     let assigned: Vec<(&WorkspaceRef, Assignment)> = ws.iter().map(|w| (w, ios("B"))).collect();
     let mut m = pool(Limit::Manual(2), &assigned);
     let t = Instant::now();
-    let k1 = PoolKey::Own(ws[0].id);
+    let k1 = PoolKey::Own(ws[0].id, Platform::Ios);
     m.request_device(ws[0].id, t).unwrap();
     m.request_device(ws[1].id, t).unwrap();
     let w3: Vec<Token> = (0..2)
@@ -566,13 +573,16 @@ fn archiving_drops_the_binding_and_fails_each_ticket_once() {
     assert_eq!(m.key_for(ws[2].id), Some(k1.clone()));
     assert_eq!(
         m.key_for(ws[3].id),
-        Some(PoolKey::Own(ws[1].id)),
+        Some(PoolKey::Own(ws[1].id, Platform::Ios)),
         "shortest queue"
     );
     m.take_commands();
     assert!(m.archive(ws[2].id, t));
     assert_eq!(failed(&m.take_commands()), w3);
-    assert_eq!(m.key_for(ws[2].id), Some(PoolKey::Own(ws[2].id)));
+    assert_eq!(
+        m.key_for(ws[2].id),
+        Some(PoolKey::Own(ws[2].id, Platform::Ios))
+    );
     // The owner is archived: who shares its device loses it.
     assert!(m.archive(ws[1].id, t));
     let commands = m.take_commands();
@@ -581,7 +591,10 @@ fn archiving_drops_the_binding_and_fails_each_ticket_once() {
         c,
         Command::FailLease { message, .. } if message == "Hangar · app/w2 was shut down with its workspace"
     )));
-    assert_eq!(m.key_for(ws[3].id), Some(PoolKey::Own(ws[3].id)));
+    assert_eq!(
+        m.key_for(ws[3].id),
+        Some(PoolKey::Own(ws[3].id, Platform::Ios))
+    );
     assert!(grants(&commands).is_empty());
 }
 
@@ -612,4 +625,17 @@ fn a_grant_returned_by_a_caller_that_gave_up_keeps_a_reservation() {
         grants(&tick(&mut m, t + secs(21) + RESERVATION_IDLE)),
         [(for_c, c.id, true)]
     );
+}
+
+/// Every holder whose reservation is not ending is bound to the device it holds, and every
+/// waiter to the device it waits for.
+fn assert_bound_to_held(m: &Machine) {
+    for (key, d) in &m.devices {
+        if let Some(h) = d.leases.holding().filter(|h| !h.ending) {
+            assert_eq!(m.bindings.get(&h.who), Some(key), "holder of {key:?}");
+        }
+        for ws in d.leases.waiters() {
+            assert_eq!(m.bindings.get(ws), Some(key), "waiter of {key:?}");
+        }
+    }
 }

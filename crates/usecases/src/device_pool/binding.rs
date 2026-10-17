@@ -136,7 +136,9 @@ impl<S: Session> PoolMachine<S> {
     fn class_base<'a>(&'a self, key: &'a PoolKey) -> Option<&'a str> {
         match key {
             PoolKey::Base(k) => Some(k.id.as_str()),
-            PoolKey::Own(ws) => self.assignments.get(ws).map(|a| a.base.as_str()),
+            PoolKey::Own(ws, platform) => {
+                self.assignment_of(*ws, *platform).map(|a| a.base.as_str())
+            }
         }
     }
 
@@ -340,7 +342,7 @@ impl<S: Session> PoolMachine<S> {
         let device = self.name_of(key).unwrap_or("a running device").to_owned();
         let mut with = self.bound_names(key, ws);
         if with.is_empty()
-            && let PoolKey::Own(owner) = key
+            && let PoolKey::Own(owner, _) = key
             && let Some(owner) = self.workspace_name(*owner)
         {
             with.push(owner.to_owned());

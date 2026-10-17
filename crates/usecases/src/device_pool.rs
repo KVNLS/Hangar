@@ -27,6 +27,7 @@ pub mod policy;
 mod reservations;
 mod shutdown;
 mod status;
+mod switch;
 #[cfg(test)]
 mod tests;
 
@@ -44,8 +45,9 @@ pub use binding::DeviceStart;
 pub use boot::{BootFailed, OpenStart, StepDone};
 pub use leases::LeaseStart;
 pub use policy::{LEASE_TIMEOUT, MAX_HOLD, RESERVATION_IDLE, REVOKE_GRACE};
-pub use shutdown::{OwnShutdown, Replaced};
+pub use shutdown::{Forgotten, OwnShutdown, Replaced};
 pub use status::{DeviceRow, DeviceStatus, Member, Sharing};
+pub use switch::Switched;
 
 /// How often memory pressure, lease timeouts, the cap and open simulators are checked.
 pub const MONITOR_TICK: Duration = Duration::from_secs(10);
@@ -62,11 +64,12 @@ pub struct WorkspaceRef {
     pub root: PathBuf,
 }
 
-/// A device the pool manages: a shared base device, or one workspace's own device.
+/// A device the pool manages: a shared base device, or one workspace's own device of a
+/// platform.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PoolKey {
     Base(DeviceKey),
-    Own(WorkspaceId),
+    Own(WorkspaceId, Platform),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +123,9 @@ pub type Token = u64;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Save {
     Assignment(WorkspaceId, Assignment),
+    /// The workspace's assignment of its other platform, kept while one platform is attached
+    /// ([`PoolMachine::switch_platform`]).
+    Parked(WorkspaceId, Assignment),
     Limit(Limit),
     Base(Platform, String),
     LastTarget(DeviceKey),
@@ -319,6 +325,8 @@ pub struct PoolMachine<S> {
     bases: BTreeMap<Platform, String>,
     android_cost: DeviceCost,
     assignments: HashMap<WorkspaceId, Assignment>,
+    /// The other platform's assignment of a workspace (its own device kept for switching back).
+    parked: HashMap<WorkspaceId, Assignment>,
     workspaces: HashMap<WorkspaceId, WorkspaceRef>,
     devices: HashMap<PoolKey, PoolDevice<S>>,
     /// Keys whose boot waits for a free slot.
@@ -347,6 +355,7 @@ impl<S: Session> PoolMachine<S> {
             bases: BTreeMap::new(),
             android_cost,
             assignments: HashMap::new(),
+            parked: HashMap::new(),
             workspaces: HashMap::new(),
             devices: HashMap::new(),
             waiting_slot: HashSet::new(),

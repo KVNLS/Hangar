@@ -49,7 +49,10 @@ fn a_call_moved_before_it_opened_asks_again() {
         let start = m.request_device(w.id, t).unwrap();
         open_running(&mut m, &start.key, &w.slug, t);
     }
-    let (k2, k4) = (PoolKey::Own(ws[2].id), PoolKey::Own(ws[3].id));
+    let (k2, k4) = (
+        PoolKey::Own(ws[2].id, Platform::Ios),
+        PoolKey::Own(ws[3].id, Platform::Ios),
+    );
     // Two calls of B2 hold its device; the first one's boot waits for a slot.
     assert_eq!(m.request_device(ws[2].id, t).unwrap().key, k2);
     let first = wait(m.open_held(&k2, ws[2].id, t));
@@ -138,7 +141,7 @@ fn switching_to_one_device_at_a_time_rebinds_the_workspaces() {
     let assigned: Vec<(&WorkspaceRef, Assignment)> = ws.iter().map(|w| (w, ios("B"))).collect();
     let mut m = pool(Limit::Manual(2), &assigned);
     let t = Instant::now();
-    let k1 = PoolKey::Own(ws[0].id);
+    let k1 = PoolKey::Own(ws[0].id, Platform::Ios);
     m.request_device(ws[0].id, t).unwrap();
     m.request_device(ws[1].id, t).unwrap();
     let for_w3 = queued(m.request_device(ws[2].id, t).map(|s| s.lease));
@@ -163,26 +166,16 @@ fn switching_to_one_device_at_a_time_rebinds_the_workspaces() {
     assert_eq!(m.key_for(ws[0].id), Some(b));
 }
 
-/// Every holder whose reservation is not ending is bound to the device it holds, and every
-/// waiter to the device it waits for.
-fn assert_bound_to_held(m: &Machine) {
-    for (key, d) in &m.devices {
-        if let Some(h) = d.leases.holding().filter(|h| !h.ending) {
-            assert_eq!(m.bindings.get(&h.who), Some(key), "holder of {key:?}");
-        }
-        for ws in d.leases.waiters() {
-            assert_eq!(m.bindings.get(ws), Some(key), "waiter of {key:?}");
-        }
-    }
-}
-
 #[test]
 fn a_refused_boot_moves_its_waiters_before_the_lease_is_dropped() {
     let ws = workspaces(&["w1", "w2", "w3"]);
     let assigned: Vec<(&WorkspaceRef, Assignment)> = ws.iter().map(|w| (w, ios("B"))).collect();
     let mut m = pool(Limit::Auto, &assigned);
     let t = Instant::now();
-    let (k1, k2) = (PoolKey::Own(ws[0].id), PoolKey::Own(ws[1].id));
+    let (k1, k2) = (
+        PoolKey::Own(ws[0].id, Platform::Ios),
+        PoolKey::Own(ws[1].id, Platform::Ios),
+    );
     m.request_device(ws[0].id, t).unwrap();
     open_running(&mut m, &k1, "D1", t);
     assert_eq!(m.request_device(ws[1].id, t).unwrap().key, k2);
