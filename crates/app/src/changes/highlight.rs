@@ -3,7 +3,6 @@
 //! are split per row.
 
 use std::ops::Range;
-use std::sync::Arc;
 
 use gpui_kit::base::input::Rope;
 use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
@@ -95,9 +94,6 @@ fn side_runs(
         .filter(|(range, style)| !range.is_empty() && *style != HighlightStyle::default())
         .collect()
 }
-
-/// Theme handle shared with the background thread.
-pub type Theme = Arc<HighlightTheme>;
 
 #[cfg(test)]
 mod tests {

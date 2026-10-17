@@ -235,10 +235,6 @@ impl DeviceView {
         }
     }
 
-    pub fn stats_enabled(&self) -> bool {
-        self.stats.borrow().enabled
-    }
-
     pub fn set_stats(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.stats.borrow_mut().set_enabled(enabled);
         cx.notify();

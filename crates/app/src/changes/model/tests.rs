@@ -65,9 +65,7 @@ fn apply_update_replaces_and_removes() {
 }
 
 #[test]
-fn badges_and_shas() {
-    assert_eq!(badge_text(0, 0, 0), None);
-    assert_eq!(badge_text(3, 12, 4).as_deref(), Some("3 +12 −4"));
+fn short_shas() {
     assert_eq!(short_sha("0123456789abcdef"), "0123456");
     assert_eq!(short_sha("abc"), "abc");
 }

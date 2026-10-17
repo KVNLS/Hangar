@@ -141,6 +141,7 @@ pub enum McpRequest {
 }
 
 impl McpRequest {
+    #[cfg(test)]
     pub fn workspace(&self) -> WorkspaceId {
         match self {
             Self::Status { ws, .. }

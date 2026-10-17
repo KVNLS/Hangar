@@ -26,7 +26,7 @@ use crate::device_view::{DeviceView, InputResult};
 use crate::ui::{ActiveTokens as _, Tokens};
 pub use logs::LogsSettings;
 pub use picker::{DeviceEntry, DeviceKey, Effect, Picker};
-pub use platform::{BackendReason, Control, Listing, Platform, PlatformUi, list_all};
+pub use platform::{BackendReason, Listing, Platform, list_all};
 
 /// Key context of the panel: its bindings apply while focus is inside it.
 pub const KEY_CONTEXT: &str = "DevicePanel";
