@@ -126,6 +126,8 @@ pub enum Save {
     /// The workspace's assignment of its other platform, kept while one platform is attached
     /// ([`PoolMachine::switch_platform`]).
     Parked(WorkspaceId, Assignment),
+    /// The workspace's parked assignment was attached again: forget the saved one.
+    Unparked(WorkspaceId),
     Limit(Limit),
     Base(Platform, String),
     LastTarget(DeviceKey),
@@ -234,6 +236,7 @@ pub struct Saved {
     pub alert_shown: bool,
     pub last_target: Option<DeviceKey>,
     pub assignments: HashMap<WorkspaceId, Assignment>,
+    pub parked: HashMap<WorkspaceId, Assignment>,
 }
 
 /// Where a bring-up is.

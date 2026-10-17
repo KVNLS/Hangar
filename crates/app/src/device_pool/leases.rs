@@ -61,13 +61,15 @@ impl DevicePool {
     ) -> Task<anyhow::Result<Acquired>> {
         let assignment = self.resolve_assignment(ws, cx);
         cx.spawn(async move |this, cx| {
-            let a = assignment.await?;
+            let resolved = assignment.await?;
             Self::wait_host(&this, cx).await;
-            let avd = (a.platform == Platform::Android).then(|| a.base.clone());
-            let mut pending = this.update(cx, |pool, cx| {
+            // Read with the request: a platform switch may have happened meanwhile.
+            let (a, mut pending) = this.update(cx, |pool, cx| {
+                let a = pool.machine.assignment(ws).cloned().unwrap_or(resolved);
                 let start = pool.machine.request_device(ws, Instant::now());
-                pool.pending(ws, start, cx)
+                pool.pending(ws, start, cx).map(|pending| (a, pending))
             })??;
+            let avd = (a.platform == Platform::Android).then(|| a.base.clone());
             for _ in 0..MAX_ATTEMPTS {
                 let Granted { lease, stale_app } = Self::granted(ws, pending, deadline, cx)
                     .await?;

@@ -16,6 +16,7 @@ pub mod orphans;
 mod sharing;
 mod shutdown;
 mod status;
+mod switch;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -306,6 +307,7 @@ fn load_settings(store: &dyn Store, workspaces: &[WorkspaceId]) -> anyhow::Resul
         }
     }
     let mut assignments = HashMap::new();
+    let mut parked = HashMap::new();
     for ws in workspaces {
         match store.get_setting(&setting_keys::device_assignment(*ws)) {
             Ok(Some(a)) => {
@@ -314,6 +316,15 @@ fn load_settings(store: &dyn Store, workspaces: &[WorkspaceId]) -> anyhow::Resul
             Ok(None) => {}
             Err(err) => {
                 tracing::warn!(target: "device_pool", workspace = %ws, "unreadable device assignment, using the default: {err}");
+            }
+        }
+        match store.get_setting(&setting_keys::device_parked(*ws)) {
+            Ok(Some(a)) => {
+                parked.insert(*ws, a);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(target: "device_pool", workspace = %ws, "unreadable parked device, ignored: {err}");
             }
         }
     }
@@ -325,6 +336,7 @@ fn load_settings(store: &dyn Store, workspaces: &[WorkspaceId]) -> anyhow::Resul
             .unwrap_or(false),
         last_target: store.get_setting(&setting_keys::LAST_DEVICE_TARGET)?,
         assignments,
+        parked,
     })
 }
 
@@ -340,29 +352,41 @@ fn default_assignment(
     }
     let last = store.get_setting(&setting_keys::LAST_DEVICE_TARGET)?;
     let builds_for = backend::stack_platforms(root);
-    let platform = choose_platform(last.as_ref().map(|k| k.platform), &builds_for);
-    let base = match (
-        bases.get(&platform),
-        last.filter(|k| k.platform == platform),
-    ) {
-        (Some(base), _) => base.clone(),
-        (None, Some(last)) => last.id,
-        (None, None) => adapters::device_catalog(platform)
-            .bases()?
-            .into_iter()
-            .next()
-            .map(|(id, _)| id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "no {} device found to run this workspace on",
-                    platform.label()
-                )
-            })?,
-    };
+    let platform = choose_platform(last.map(|k| k.platform), &builds_for);
+    let base = default_base(store, platform, bases)?;
     let a = Assignment::new(platform, base);
     store.set_setting(&setting_keys::device_assignment(ws), &a)?;
     tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), base = %a.base, "default device assigned");
     Ok(a)
+}
+
+/// The base device of `platform` for a workspace that picked none: the one chosen in Settings,
+/// else the last one chosen in the New workspace sheet, else the first one found. Blocks.
+fn default_base(
+    store: &dyn Store,
+    platform: Platform,
+    bases: &BTreeMap<Platform, String>,
+) -> anyhow::Result<String> {
+    if let Some(base) = bases.get(&platform) {
+        return Ok(base.clone());
+    }
+    if let Some(last) = store
+        .get_setting(&setting_keys::LAST_DEVICE_TARGET)?
+        .filter(|k| k.platform == platform)
+    {
+        return Ok(last.id);
+    }
+    adapters::device_catalog(platform)
+        .bases()?
+        .into_iter()
+        .next()
+        .map(|(id, _)| id)
+        .ok_or_else(|| {
+            anyhow!(
+                "no {} device found to run this workspace on",
+                platform.label()
+            )
+        })
 }
 
 /// The last choice when the repository builds for it (or nothing was detected), else the first
@@ -377,7 +401,32 @@ pub fn choose_platform(last: Option<Platform>, builds_for: &[Platform]) -> Platf
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the glob import of gpui would shadow `#[test]`.
-    use super::{Platform, choose_platform};
+    use std::collections::BTreeMap;
+
+    use hangar_usecases::settings::SettingsExt as _;
+
+    use super::{Platform, choose_platform, default_base};
+    use crate::device_panel::DeviceKey;
+    use crate::setting_keys;
+
+    #[test]
+    fn the_default_base_is_the_settings_one_then_the_last_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::adapters::open_store(&dir.path().join("hangar.db")).unwrap();
+        let last = DeviceKey {
+            platform: Platform::Android,
+            id: "Pixel_9".into(),
+        };
+        store
+            .set_setting(&setting_keys::LAST_DEVICE_TARGET, &last)
+            .unwrap();
+        let bases = BTreeMap::from([(Platform::Android, "Pixel_8".to_owned())]);
+        let base = |bases: &BTreeMap<Platform, String>| {
+            default_base(store.as_ref(), Platform::Android, bases).unwrap()
+        };
+        assert_eq!(base(&bases), "Pixel_8");
+        assert_eq!(base(&BTreeMap::new()), "Pixel_9");
+    }
 
     #[test]
     fn platform_follows_the_last_choice_when_the_repo_builds_for_it() {

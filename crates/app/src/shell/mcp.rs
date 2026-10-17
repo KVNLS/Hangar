@@ -60,7 +60,7 @@ fn status(info: DeviceStatusInfo) -> hangar_mcp::DeviceStatus {
         scale: info.scale,
         orientation: info.orientation,
         sharing: info.sharing,
-        platforms: Vec::new(),
+        platforms: info.platforms,
     }
 }
 
@@ -143,7 +143,7 @@ impl HangarApp {
                 answer(task, reply, |()| (), cx);
             }
             McpRequest::Acquire { ws, wait, reply } => {
-                let task = self.device_acquire(ws, wait, cx);
+                let task = self.device_acquire(ws, None, wait, cx);
                 answer(task, reply, |got| got, cx);
             }
             McpRequest::Release { ws, reply } => {

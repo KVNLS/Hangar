@@ -139,6 +139,18 @@ impl DevicePool {
         match save {
             Save::Assignment(ws, a) => self.save(setting_keys::device_assignment(ws), a, cx),
             Save::Parked(ws, a) => self.save(setting_keys::device_parked(ws), a, cx),
+            Save::Unparked(ws) => {
+                let Some(store) = self.store.clone() else {
+                    return;
+                };
+                cx.background_executor()
+                    .spawn(async move {
+                        if let Err(err) = store.delete_setting(&setting_keys::device_parked(ws)) {
+                            tracing::error!(target: "device_pool", workspace = %ws, %err, "failed to forget the parked device");
+                        }
+                    })
+                    .detach();
+            }
             Save::Limit(limit) => self.save(setting_keys::DEVICE_LIMIT, limit, cx),
             Save::Base(platform, id) => self.save(setting_keys::device_base(platform), id, cx),
             Save::LastTarget(key) => self.save(setting_keys::LAST_DEVICE_TARGET, key, cx),

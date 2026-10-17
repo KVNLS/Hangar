@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::device_panel::Platform;
 use crate::mcp_host::{Acquisition, Released, acquisition, released};
 
 /// How often `device_acquire` looks again while it waits for its turn.
@@ -11,10 +12,12 @@ const ACQUIRE_POLL: Duration = Duration::from_millis(250);
 
 impl HangarApp {
     /// Reserves the workspace's device, or keeps its place in line and waits up to `wait` for
-    /// its turn, keeping its place alive meanwhile. Never boots the device.
+    /// its turn, keeping its place alive meanwhile. Never boots the device. A `platform` other
+    /// than the attached one is switched to first ([`crate::device_pool::DevicePool::switch_platform`]).
     pub fn device_acquire(
         &mut self,
         ws: WorkspaceId,
+        platform: Option<Platform>,
         wait: Duration,
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<Acquisition>> {
@@ -22,13 +25,17 @@ impl HangarApp {
             return Task::ready(Err(anyhow!("unknown or archived workspace")));
         }
         self.track_workspace(ws, cx);
-        let reserve = self
-            .devices
-            .pool
-            .update(cx, |pool, cx| pool.reserve(ws, cx));
+        let switch = match platform {
+            Some(platform) => self
+                .devices
+                .pool
+                .update(cx, |pool, cx| pool.switch_platform(ws, platform, cx)),
+            None => Task::ready(Ok(None)),
+        };
         let pool = self.devices.pool.downgrade();
         cx.spawn(async move |_, cx| {
-            reserve.await?;
+            let switched_from = switch.await?;
+            pool.update(cx, |pool, cx| pool.reserve(ws, cx))?.await?;
             let deadline = Instant::now() + wait;
             loop {
                 let sharing = pool
@@ -38,7 +45,7 @@ impl HangarApp {
                     })?
                     .ok_or_else(|| anyhow!("the pool does not know this workspace's device"))?;
                 let now = Instant::now();
-                if let Some(answer) = acquisition(&sharing, ws, now >= deadline) {
+                if let Some(answer) = acquisition(&sharing, ws, now >= deadline, switched_from) {
                     return Ok(answer);
                 }
                 cx.background_executor()

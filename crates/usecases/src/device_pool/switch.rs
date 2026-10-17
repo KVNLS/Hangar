@@ -56,6 +56,9 @@ impl<S: Session> PoolMachine<S> {
             target.platform.label()
         );
         self.unbind(ws, now, &message);
+        let unparking = self
+            .parked(ws)
+            .is_some_and(|p| p.platform == target.platform);
         let replaced = self.unpark(ws, &mut target);
         let mut shutdown = None;
         if let Some(active) = active {
@@ -65,6 +68,9 @@ impl<S: Session> PoolMachine<S> {
             }
             self.parked.insert(ws, active.clone());
             self.save(Save::Parked(ws, active));
+        } else if unparking {
+            // With an active one, the parked save above replaces it.
+            self.save(Save::Unparked(ws));
         }
         self.assignments.insert(ws, target.clone());
         self.save(Save::Assignment(ws, target));

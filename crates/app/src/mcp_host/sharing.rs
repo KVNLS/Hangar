@@ -1,6 +1,7 @@
 //! A workspace's turn on its device as its agent sees it.
 
 use hangar_core::WorkspaceId;
+use hangar_core::device::Platform;
 use hangar_mcp::ToolError;
 use hangar_usecases::device_pool::{RESERVATION_IDLE, Sharing};
 
@@ -13,11 +14,20 @@ pub fn holds(s: &Sharing, ws: WorkspaceId) -> bool {
 
 /// What `device_acquire` answers at one look at the pool: `None` while the workspace still
 /// waits in line within its `wait`; the answer once it holds the device or `expired`.
-pub fn acquisition(s: &Sharing, ws: WorkspaceId, expired: bool) -> Option<Acquisition> {
+/// `switched_from`: the platform the call switched the workspace from.
+pub fn acquisition(
+    s: &Sharing,
+    ws: WorkspaceId,
+    expired: bool,
+    switched_from: Option<Platform>,
+) -> Option<Acquisition> {
     let granted = holds(s, ws);
     (granted || expired).then(|| Acquisition {
         granted,
-        sharing: agent_sharing(s, ws),
+        sharing: hangar_mcp::Sharing {
+            switched_from,
+            ..agent_sharing(s, ws)
+        },
     })
 }
 

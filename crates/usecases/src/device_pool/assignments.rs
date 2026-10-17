@@ -124,7 +124,11 @@ impl<S: Session> PoolMachine<S> {
         tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), %base, "device assigned");
         self.unbind(ws, now, REASSIGNED);
         let mut assignment = Assignment::new(platform, base.clone());
+        let unparking = self.parked(ws).is_some_and(|p| p.platform == platform);
         let unparked = self.unpark(ws, &mut assignment);
+        if unparking {
+            self.save(Save::Unparked(ws));
+        }
         self.assignments.insert(ws, assignment.clone());
         self.save(Save::Assignment(ws, assignment));
         let last = DeviceKey { platform, id: base };

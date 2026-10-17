@@ -279,7 +279,7 @@ fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool
                                 m.sharing(ws, Instant::now()).unwrap()
                             };
                             if let Some(answer) =
-                                acquisition(&sharing, ws, Instant::now() >= deadline)
+                                acquisition(&sharing, ws, Instant::now() >= deadline, None)
                             {
                                 let _ = reply.send(Ok(answer));
                                 return;

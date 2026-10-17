@@ -7,6 +7,7 @@ use hangar_usecases::device_pool::Replaced;
 
 use crate::adapters;
 use crate::device_panel::{DeviceKey, Platform};
+use crate::device_view::DeviceSession;
 
 use super::policy::Assignment;
 use super::{DevicePool, PoolKey, WorkspaceRef, default_assignment};
@@ -36,34 +37,41 @@ impl DevicePool {
         base: String,
         cx: &mut Context<Self>,
     ) {
-        if let Some(Replaced { shutdown, clone }) =
-            self.machine
-                .assign(ws, platform, base, std::time::Instant::now())
+        if let Some(replaced) = self
+            .machine
+            .assign(ws, platform, base, std::time::Instant::now())
         {
-            let shutdown = match shutdown {
-                Some(job) => self.run_shutdown(job, cx),
-                None => Task::ready(Ok(())),
-            };
-            cx.spawn(async move |_, cx| {
-                if let Err(err) = shutdown.await {
-                    tracing::warn!(target: "device_pool", "shutdown of the replaced device failed: {err:#}");
-                }
-                if let Some(udid) = clone {
-                    let deleted = cx
-                        .background_executor()
-                        .spawn(async move {
-                            adapters::device_catalog(Platform::Ios).delete_clone(&udid)
-                        })
-                        .await;
-                    if let Err(err) = deleted {
-                        tracing::warn!(target: "device_pool", "could not delete the replaced simulator: {:#}", anyhow::Error::from(err));
-                    }
-                }
-            })
-            .detach();
+            self.drop_replaced(replaced, cx);
         }
         self.run(cx);
         cx.notify();
+    }
+
+    /// Shuts a replaced own device down, then deletes the simulator the pool created for it.
+    pub(super) fn drop_replaced(
+        &mut self,
+        Replaced { shutdown, clone }: Replaced<DeviceSession>,
+        cx: &mut Context<Self>,
+    ) {
+        let shutdown = match shutdown {
+            Some(job) => self.run_shutdown(job, cx),
+            None => Task::ready(Ok(())),
+        };
+        cx.spawn(async move |_, cx| {
+            if let Err(err) = shutdown.await {
+                tracing::warn!(target: "device_pool", "shutdown of the replaced device failed: {err:#}");
+            }
+            if let Some(udid) = clone {
+                let deleted = cx
+                    .background_executor()
+                    .spawn(async move { adapters::device_catalog(Platform::Ios).delete_clone(&udid) })
+                    .await;
+                if let Err(err) = deleted {
+                    tracing::warn!(target: "device_pool", "could not delete the replaced simulator: {:#}", anyhow::Error::from(err));
+                }
+            }
+        })
+        .detach();
     }
 
     /// The workspace's assignment, loading or creating (and saving) it on first use: the

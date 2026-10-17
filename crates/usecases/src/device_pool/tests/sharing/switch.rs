@@ -329,13 +329,19 @@ fn assigning_the_parked_platform_takes_the_parked_assignment_back() {
     done(m.switch_platform(a.id, android("P"), t));
     open_running(&mut m, &android_key, "emulator-5554", t);
     // Another base: the parked simulator is deleted, the Android device shut down.
+    m.take_commands();
     let replaced = m.assign(a.id, Platform::Ios, "C".into(), t).unwrap();
     assert_eq!(replaced.clone.as_deref(), Some("CLONE"));
     assert!(replaced.shutdown.is_none(), "the simulator never ran");
-    assert!(m.take_commands().iter().any(|c| matches!(
+    let commands = m.take_commands();
+    assert!(commands.iter().any(|c| matches!(
         c,
         Command::Shutdown(job) if job.key == android_key
     )));
+    assert!(
+        saves(&commands).contains(&&Save::Unparked(a.id)),
+        "{commands:?}"
+    );
     assert_eq!(m.assignment(a.id), Some(&ios("C")));
     assert_eq!(m.parked(a.id), None);
     // The same base keeps the parked simulator.
@@ -345,4 +351,40 @@ fn assigning_the_parked_platform_takes_the_parked_assignment_back() {
     assert_eq!(replaced.clone, None);
     assert_eq!(m.assignment(a.id), Some(&ios_own("B", "CLONE")));
     assert_eq!(m.parked(a.id), None);
+}
+
+#[test]
+fn switching_back_saves_the_other_parked_assignment() {
+    let a = workspace("a");
+    let mut m = pool(Limit::Auto, &[(&a, ios_own("B", "CLONE"))]);
+    let t = Instant::now();
+    done(m.switch_platform(a.id, android("P"), t));
+    m.take_commands();
+    done(m.switch_platform(a.id, ios("B"), t));
+    // The parked Android assignment replaces the saved iOS one: nothing is forgotten.
+    assert_eq!(
+        saves(&m.take_commands()),
+        [
+            &Save::Parked(a.id, android("P")),
+            &Save::Assignment(a.id, ios_own("B", "CLONE")),
+        ]
+    );
+}
+
+#[test]
+fn a_saved_parked_assignment_is_loaded() {
+    let a = workspace("a");
+    let mut m: PoolMachine<Sess> = PoolMachine::new(DeviceCost::android(2048, 2), None);
+    m.track(a.clone());
+    let saved = Saved {
+        assignments: [(a.id, android("P"))].into(),
+        parked: [(a.id, ios_own("B", "CLONE"))].into(),
+        ..Saved::default()
+    };
+    m.loaded(Ok(saved), None);
+    assert_eq!(m.parked(a.id), Some(&ios_own("B", "CLONE")));
+    assert_eq!(
+        m.assignment_of(a.id, Platform::Ios),
+        Some(&ios_own("B", "CLONE"))
+    );
 }

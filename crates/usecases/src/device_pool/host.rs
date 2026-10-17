@@ -24,6 +24,9 @@ impl<S: Session> PoolMachine<S> {
                 self.single_alert_shown = saved.alert_shown;
                 self.last_target = saved.last_target;
                 self.assignments.extend(saved.assignments);
+                for (ws, a) in saved.parked {
+                    self.adopt_parked(ws, a);
+                }
             }
             Err(err) => {
                 tracing::error!(target: "device_pool", "failed to read the device settings: {err}");
