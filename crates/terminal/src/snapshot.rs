@@ -34,6 +34,7 @@ impl CellFlags {
         self.0 |= other.0;
     }
 
+    #[cfg(test)]
     pub fn remove(&mut self, other: Self) {
         self.0 &= !other.0;
     }

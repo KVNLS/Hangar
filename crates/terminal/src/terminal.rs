@@ -83,7 +83,6 @@ struct ListenerState {
     size_requests: Vec<SizeFormatter>,
     title: Option<String>,
     clipboard_store: Option<String>,
-    bell: bool,
 }
 
 #[derive(Clone, Default)]
@@ -109,10 +108,10 @@ impl EventListener for Listener {
                     "ignored an oversized clipboard write (OSC 52)"
                 );
             }
-            Event::Bell => state.bell = true,
             // ClipboardLoad is never emitted: OSC 52 paste is disabled by the default config.
-            // The rest concern renderer state that is recomputed on every snapshot.
+            // Hangar rings no bell; the rest concern renderer state recomputed on every snapshot.
             Event::ClipboardLoad(..)
+            | Event::Bell
             | Event::MouseCursorDirty
             | Event::CursorBlinkingChange
             | Event::Wakeup
@@ -206,10 +205,12 @@ impl Terminal {
         }
     }
 
+    #[cfg(test)]
     pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
     }
 
+    #[cfg(test)]
     pub fn history_size(&self) -> usize {
         self.term.grid().history_size()
     }
@@ -242,11 +243,6 @@ impl Terminal {
     /// Text the program asked to put on the clipboard (OSC 52), consumed once.
     pub fn take_clipboard_store(&mut self) -> Option<String> {
         lock(&self.listener.0).clipboard_store.take()
-    }
-
-    /// Whether the bell rang since the last call.
-    pub fn take_bell(&mut self) -> bool {
-        std::mem::take(&mut lock(&self.listener.0).bell)
     }
 
     pub fn palette(&self) -> &Palette {
