@@ -92,6 +92,8 @@ Numbers are stable; resolved questions moved to docs/HISTORY.md ("Resolved quest
   iOS log history (`LogFilter::history`); simctl backend: input on Xcode 27 (Device Hub), `send_text`,
   `Lock`/volume buttons (private backend only); iOS `AppSwitch`/`Back`; text beyond printable ASCII +
   `\n`/`\t` on the private backend.
+- `devices` on a physical Android device: the gRPC backend (it needs an emulator) and `shutdown`
+  (adb can only kill emulators).
 - `mcp` device sharing: a push notification when a device grant arrives (no server-initiated MCP messages;
   agents poll `device_acquire` with `wait_s`).
 - `agents::ollama`: `https://` Ollama hosts (`OllamaError::Unsupported`); the app shows the error.
