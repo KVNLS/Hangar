@@ -30,28 +30,6 @@ pub fn contain(container_w: f64, container_h: f64, content_w: f64, content_h: f6
     }
 }
 
-/// Maps a point inside a view (relative to the view's origin) that shows the device screen with
-/// `contain` fitting into device points. Returns `None` when the point is in the letterbox area.
-pub fn view_to_device(
-    view_x: f64,
-    view_y: f64,
-    view_w: f64,
-    view_h: f64,
-    screen_w_pt: f64,
-    screen_h_pt: f64,
-) -> Option<(f64, f64)> {
-    let r = contain(view_w, view_h, screen_w_pt, screen_h_pt);
-    if r.width <= 0.0 {
-        return None;
-    }
-    let fx = (view_x - r.x) / r.width;
-    let fy = (view_y - r.y) / r.height;
-    if !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy) {
-        return None;
-    }
-    Some((fx * screen_w_pt, fy * screen_h_pt))
-}
-
 /// Device points → 0..1 fractions of the screen, clamped.
 pub fn device_to_unit(x: f64, y: f64, screen_w_pt: f64, screen_h_pt: f64) -> (f64, f64) {
     let fx = if screen_w_pt > 0.0 {

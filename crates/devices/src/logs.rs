@@ -187,11 +187,6 @@ impl LogStream {
         })
     }
 
-    /// Next queued entry, if any. Never blocks.
-    pub fn try_recv(&self) -> Option<LogEntry> {
-        self.shared.lock().queue.pop_front()
-    }
-
     /// All queued entries, oldest first. Never blocks.
     pub fn drain(&self) -> Vec<LogEntry> {
         self.shared.lock().queue.drain(..).collect()
