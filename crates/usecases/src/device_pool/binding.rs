@@ -142,13 +142,6 @@ impl<S: Session> PoolMachine<S> {
         }
     }
 
-    /// A running device of the class of `key` (same platform and base) other than `key`, the
-    /// one with the shortest queue. Open ones first, then ones opening or left running (which
-    /// need no boot).
-    pub fn borrowable(&self, platform: Platform, base: &str, key: &PoolKey) -> Option<PoolKey> {
-        self.shareable(platform, base, key, RUNNING)
-    }
-
     fn shareable(
         &self,
         platform: Platform,

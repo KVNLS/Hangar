@@ -7,7 +7,7 @@ use hangar_core::WorkspaceId;
 use super::policy::{Acquire, Grant, LEASE_TIMEOUT};
 use super::{Command, PoolKey, PoolMachine, Session, State, Token};
 
-/// Result of [`PoolMachine::request_lease`].
+/// Result of joining a device's lease queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaseStart {
     Granted,
@@ -18,6 +18,7 @@ pub enum LeaseStart {
 impl<S: Session> PoolMachine<S> {
     /// Asks for the lease on `key` for a call of `ws` (granted at once when free or already
     /// `ws`'s). Release it with [`Self::release_lease`] when the call ends.
+    #[cfg(test)]
     pub fn request_lease(
         &mut self,
         key: &PoolKey,
