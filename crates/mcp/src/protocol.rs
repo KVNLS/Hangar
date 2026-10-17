@@ -30,6 +30,8 @@ const INSTRUCTIONS: &str = "These tools act on the iOS simulator or Android emul
     Devices are shared between workspaces: call device_acquire before a sequence of device calls \
     and device_release when done verifying. When device_info or a tool result shows a queue, a \
     holder or a shared device, that is authoritative over HANGAR_DEVICE_ID and ANDROID_SERIAL. \
+    A workspace has one platform at a time: to test the other one, finish on the current one, \
+    then call device_acquire with platform (it gives the current device up), then build_and_run. \
     When stale_app_from is set, another workspace's app is on screen: run build_and_run first.";
 
 const ORCHESTRATION_INSTRUCTIONS: &str = " The user also lets this agent split work across \

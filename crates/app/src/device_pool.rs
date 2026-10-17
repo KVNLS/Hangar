@@ -16,6 +16,7 @@ pub mod orphans;
 mod sharing;
 mod shutdown;
 mod status;
+mod switch;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -61,6 +62,8 @@ pub enum PoolEvent {
 }
 
 type Opened = Result<DeviceSession, OpenError>;
+/// A settings write, run in order with the others ([`DevicePool::queue_save`]).
+type SaveJob = Box<dyn FnOnce() + Send>;
 type LeaseReply = oneshot::Sender<anyhow::Result<Granted>>;
 
 /// A call's lease, handed over by the machine.
@@ -147,6 +150,7 @@ pub struct DevicePool {
     release: mpsc::UnboundedSender<(PoolKey, WorkspaceId)>,
     /// Boot stages reported from the background executor: key, attempt, stage.
     stages: mpsc::UnboundedSender<(PoolKey, u64, String)>,
+    saves: mpsc::UnboundedSender<SaveJob>,
     open_waiters: HashMap<Token, oneshot::Sender<Opened>>,
     lease_waiters: HashMap<Token, LeaseReply>,
     /// The device and installer each workspace was last told about, so the agent hears of
@@ -181,6 +185,12 @@ impl DevicePool {
                 }
             }
         });
+        let (saves, mut queued) = mpsc::unbounded_channel::<SaveJob>();
+        let saver = cx.background_executor().spawn(async move {
+            while let Some(job) = queued.recv().await {
+                job();
+            }
+        });
         let monitor = cx.spawn(async move |this, cx| Self::monitor(this, cx).await);
         let forced_backend = std::env::var("HANGAR_DEVICE_BACKEND")
             .ok()
@@ -193,10 +203,11 @@ impl DevicePool {
             store: None,
             release,
             stages,
+            saves,
             open_waiters: HashMap::new(),
             lease_waiters: HashMap::new(),
             stale_told: HashMap::new(),
-            _tasks: vec![releases, stage_updates, monitor],
+            _tasks: vec![releases, stage_updates, saver, monitor],
         }
     }
 
@@ -278,23 +289,24 @@ impl DevicePool {
         cx.notify();
     }
 
-    fn save<T: serde::Serialize + Send + 'static>(
-        &self,
-        setting: Setting<T>,
-        value: T,
-        cx: &mut Context<Self>,
-    ) {
+    fn save<T: serde::Serialize + Send + 'static>(&self, setting: Setting<T>, value: T) {
+        self.queue_save(move |store| {
+            if let Err(err) = store.set_setting(&setting, &value) {
+                let key = setting.key();
+                tracing::error!(target: "device_pool", %key, %err, "failed to save");
+            }
+        });
+    }
+
+    /// Runs a settings write off the UI thread after the ones queued before it, so that the
+    /// last write of a key wins.
+    fn queue_save(&self, write: impl FnOnce(&dyn Store) + Send + 'static) {
         let Some(store) = self.store.clone() else {
             return;
         };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(err) = store.set_setting(&setting, &value) {
-                    let key = setting.key();
-                    tracing::error!(target: "device_pool", %key, %err, "failed to save");
-                }
-            })
-            .detach();
+        if self.saves.send(Box::new(move || write(&*store))).is_err() {
+            tracing::error!(target: "device_pool", "the settings queue stopped: not saved");
+        }
     }
 }
 
@@ -306,6 +318,7 @@ fn load_settings(store: &dyn Store, workspaces: &[WorkspaceId]) -> anyhow::Resul
         }
     }
     let mut assignments = HashMap::new();
+    let mut parked = HashMap::new();
     for ws in workspaces {
         match store.get_setting(&setting_keys::device_assignment(*ws)) {
             Ok(Some(a)) => {
@@ -314,6 +327,15 @@ fn load_settings(store: &dyn Store, workspaces: &[WorkspaceId]) -> anyhow::Resul
             Ok(None) => {}
             Err(err) => {
                 tracing::warn!(target: "device_pool", workspace = %ws, "unreadable device assignment, using the default: {err}");
+            }
+        }
+        match store.get_setting(&setting_keys::device_parked(*ws)) {
+            Ok(Some(a)) => {
+                parked.insert(*ws, a);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(target: "device_pool", workspace = %ws, "unreadable parked device, ignored: {err}");
             }
         }
     }
@@ -325,6 +347,7 @@ fn load_settings(store: &dyn Store, workspaces: &[WorkspaceId]) -> anyhow::Resul
             .unwrap_or(false),
         last_target: store.get_setting(&setting_keys::LAST_DEVICE_TARGET)?,
         assignments,
+        parked,
     })
 }
 
@@ -340,29 +363,41 @@ fn default_assignment(
     }
     let last = store.get_setting(&setting_keys::LAST_DEVICE_TARGET)?;
     let builds_for = backend::stack_platforms(root);
-    let platform = choose_platform(last.as_ref().map(|k| k.platform), &builds_for);
-    let base = match (
-        bases.get(&platform),
-        last.filter(|k| k.platform == platform),
-    ) {
-        (Some(base), _) => base.clone(),
-        (None, Some(last)) => last.id,
-        (None, None) => adapters::device_catalog(platform)
-            .bases()?
-            .into_iter()
-            .next()
-            .map(|(id, _)| id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "no {} device found to run this workspace on",
-                    platform.label()
-                )
-            })?,
-    };
+    let platform = choose_platform(last.map(|k| k.platform), &builds_for);
+    let base = default_base(store, platform, bases)?;
     let a = Assignment::new(platform, base);
     store.set_setting(&setting_keys::device_assignment(ws), &a)?;
     tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), base = %a.base, "default device assigned");
     Ok(a)
+}
+
+/// The base device of `platform` for a workspace that picked none: the one chosen in Settings,
+/// else the last one chosen in the New workspace sheet, else the first one found. Blocks.
+fn default_base(
+    store: &dyn Store,
+    platform: Platform,
+    bases: &BTreeMap<Platform, String>,
+) -> anyhow::Result<String> {
+    if let Some(base) = bases.get(&platform) {
+        return Ok(base.clone());
+    }
+    if let Some(last) = store
+        .get_setting(&setting_keys::LAST_DEVICE_TARGET)?
+        .filter(|k| k.platform == platform)
+    {
+        return Ok(last.id);
+    }
+    adapters::device_catalog(platform)
+        .bases()?
+        .into_iter()
+        .next()
+        .map(|(id, _)| id)
+        .ok_or_else(|| {
+            anyhow!(
+                "no {} device found to run this workspace on",
+                platform.label()
+            )
+        })
 }
 
 /// The last choice when the repository builds for it (or nothing was detected), else the first
@@ -377,7 +412,32 @@ pub fn choose_platform(last: Option<Platform>, builds_for: &[Platform]) -> Platf
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the glob import of gpui would shadow `#[test]`.
-    use super::{Platform, choose_platform};
+    use std::collections::BTreeMap;
+
+    use hangar_usecases::settings::SettingsExt as _;
+
+    use super::{Platform, choose_platform, default_base};
+    use crate::device_panel::DeviceKey;
+    use crate::setting_keys;
+
+    #[test]
+    fn the_default_base_is_the_settings_one_then_the_last_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::adapters::open_store(&dir.path().join("hangar.db")).unwrap();
+        let last = DeviceKey {
+            platform: Platform::Android,
+            id: "Pixel_9".into(),
+        };
+        store
+            .set_setting(&setting_keys::LAST_DEVICE_TARGET, &last)
+            .unwrap();
+        let bases = BTreeMap::from([(Platform::Android, "Pixel_8".to_owned())]);
+        let base = |bases: &BTreeMap<Platform, String>| {
+            default_base(store.as_ref(), Platform::Android, bases).unwrap()
+        };
+        assert_eq!(base(&bases), "Pixel_8");
+        assert_eq!(base(&BTreeMap::new()), "Pixel_9");
+    }
 
     #[test]
     fn platform_follows_the_last_choice_when_the_repo_builds_for_it() {

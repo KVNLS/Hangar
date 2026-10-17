@@ -191,7 +191,8 @@ pub(super) fn device_definitions() -> Vec<Value> {
         json!({
             "name": "device_acquire",
             "description": "Reserve this workspace's device for a sequence of calls, or keep your place in \
-                line when it is busy. Long-polls up to wait_s seconds. The result says granted or queued, \
+                line when it is busy. A workspace has one platform (iOS or Android) at a time; pass \
+                platform to switch. Long-polls up to wait_s seconds. The result says granted or queued, \
                 with position, holder and estimated wait. The reservation ends on device_release or after \
                 idle_release_s seconds without a device call.",
             "inputSchema": {
@@ -203,6 +204,11 @@ pub(super) fn device_definitions() -> Vec<Value> {
                         "maximum": MAX_ACQUIRE_WAIT_S,
                         "default": 0,
                         "description": "Seconds to wait for the device before answering queued.",
+                    },
+                    "platform": {
+                        "type": "string",
+                        "enum": ["ios", "android"],
+                        "description": "Switch this workspace to that platform: gives up the current device (the next workspace in line gets it) and reserves one of this platform. Omit to keep the current platform.",
                     },
                 },
                 "additionalProperties": false,

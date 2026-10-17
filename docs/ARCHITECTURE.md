@@ -114,6 +114,9 @@ Each step is a series of small commits that leave behaviour unchanged, each pass
    - Done (device sharing, branch `device-sharing`): the same machine also owns the binding (which device a
      workspace uses now), reservations (idle expiry, warn and revoke, take over) and sharing at the cap.
      Tested in `device_pool/tests/sharing.rs`. `DevicePool::acquire` in `app` only follows its choice.
+   - Done (platform switch, branch `platform-switch`): own devices are keyed by workspace and platform,
+     so the two can never share a key. The other platform's assignment is parked, and `switch_platform`
+     releases the device through the queue. Tested in `device_pool/tests/sharing/switch.rs`.
    - Done (M10, shell side): views do no store or process I/O. Run configs, the saved chat, session
      cost, the usage ledger and settings and the co-author trailer are `app::ops` functions
      (`ops/run_config.rs`, `ops/chats.rs`, tested in `ops/tests/`) run on the background executor

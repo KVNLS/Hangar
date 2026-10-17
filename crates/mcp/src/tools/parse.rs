@@ -5,7 +5,7 @@ use super::{
     BUTTONS, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES, KEYS, LEVELS,
     MAX_ACQUIRE_WAIT_S, MAX_CHOICE_CHARS, MAX_CHOICES, MAX_LOG_LINES, MAX_NAME_CHARS,
     MAX_PROMPT_CHARS, MAX_QUESTION_CHARS, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES,
-    MAX_TYPE_TEXT_CHARS, ParseError, Press, Tool,
+    MAX_TYPE_TEXT_CHARS, PLATFORMS, ParseError, Press, Tool,
 };
 
 impl Tool {
@@ -98,6 +98,7 @@ impl Tool {
                     .integer("wait_s", 0, MAX_ACQUIRE_WAIT_S)
                     .map_err(invalid)?
                     .unwrap_or(0),
+                platform: a.choice("platform", &PLATFORMS).map_err(invalid)?,
             },
             "device_release" => Self::DeviceRelease,
             "workspaces_list" => Self::WorkspacesList,

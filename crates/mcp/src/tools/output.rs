@@ -76,6 +76,7 @@ impl ToolOutput {
             "booted": status.booted,
             "screen": screen,
             "orientation": orientation,
+            "platforms": status.platforms.iter().map(|p| p.id()).collect::<Vec<_>>(),
             "sharing": Self::sharing_json(status.sharing.as_ref()),
         });
         Self::text(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
@@ -101,6 +102,8 @@ pub struct DeviceStatus {
     pub screen_pt: Option<(f64, f64)>,
     pub scale: Option<f64>,
     pub orientation: Option<Orientation>,
+    /// Platforms this workspace may switch to with `device_acquire`.
+    pub platforms: Vec<Platform>,
     pub sharing: Option<Sharing>,
 }
 

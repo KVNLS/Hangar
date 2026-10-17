@@ -37,6 +37,8 @@ pub struct DeviceStatusInfo {
     pub orientation: Option<Orientation>,
     /// Who else uses the device and the workspace's turn, once the pool knows the device.
     pub sharing: Option<hangar_mcp::Sharing>,
+    /// The platforms the workspace may switch to (`device_acquire`).
+    pub platforms: Vec<Platform>,
 }
 
 /// One frame (captured bytes, never a live surface) and the point size of the screen it shows
@@ -92,9 +94,14 @@ impl HangarApp {
             .devices
             .pool
             .update(cx, |pool, cx| pool.assignment_for(ws, cx));
+        let platforms = self
+            .devices
+            .pool
+            .update(cx, |pool, cx| pool.platforms(ws, cx));
         let pool = self.devices.pool.downgrade();
         cx.spawn(async move |_, cx| {
             let a = assignment.await?;
+            let platforms = platforms.await;
             let (session, name, sharing) = pool.read_with(cx, |pool, _| {
                 (
                     pool.session(ws).cloned(),
@@ -113,6 +120,7 @@ impl HangarApp {
                     scale: None,
                     orientation: None,
                     sharing,
+                    platforms,
                 });
             };
             let info = session.info().clone();
@@ -150,6 +158,7 @@ impl HangarApp {
                 scale: screen.map(|s| s.scale),
                 orientation,
                 sharing,
+                platforms,
             })
         })
     }

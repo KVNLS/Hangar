@@ -1,6 +1,7 @@
 //! A workspace's turn on its device as its agent sees it.
 
 use hangar_core::WorkspaceId;
+use hangar_core::device::Platform;
 use hangar_mcp::ToolError;
 use hangar_usecases::device_pool::{RESERVATION_IDLE, Sharing};
 
@@ -13,11 +14,20 @@ pub fn holds(s: &Sharing, ws: WorkspaceId) -> bool {
 
 /// What `device_acquire` answers at one look at the pool: `None` while the workspace still
 /// waits in line within its `wait`; the answer once it holds the device or `expired`.
-pub fn acquisition(s: &Sharing, ws: WorkspaceId, expired: bool) -> Option<Acquisition> {
+/// `switched_from`: the platform the call switched the workspace from.
+pub fn acquisition(
+    s: &Sharing,
+    ws: WorkspaceId,
+    expired: bool,
+    switched_from: Option<Platform>,
+) -> Option<Acquisition> {
     let granted = holds(s, ws);
     (granted || expired).then(|| Acquisition {
         granted,
-        sharing: agent_sharing(s, ws),
+        sharing: hangar_mcp::Sharing {
+            switched_from,
+            ..agent_sharing(s, ws)
+        },
     })
 }
 
@@ -50,6 +60,7 @@ pub fn agent_sharing(s: &Sharing, ws: WorkspaceId) -> hangar_mcp::Sharing {
         idle_release_s: RESERVATION_IDLE.as_secs(),
         stale_app_from: s.stale_app_from.clone(),
         notice: None,
+        switched_from: None,
     }
 }
 
@@ -68,6 +79,7 @@ mod tests {
     use std::time::Duration;
 
     use hangar_core::WorkspaceId;
+    use hangar_core::device::Platform;
     use hangar_mcp::ToolError;
 
     use hangar_usecases::device_pool::{Member, PoolKey, Sharing};
@@ -85,7 +97,7 @@ mod tests {
     fn sharing_maps_to_what_agents_see() {
         let (a, b, c) = (WorkspaceId::new(), WorkspaceId::new(), WorkspaceId::new());
         let pool = Sharing {
-            key: PoolKey::Own(a),
+            key: PoolKey::Own(a, Platform::Ios),
             device: "Hangar ws-a".into(),
             device_id: Some("UDID-A".into()),
             holder: Some(member(a, "ws-a")),
@@ -112,6 +124,7 @@ mod tests {
                 idle_release_s: 90,
                 stale_app_from: Some("ws-a".into()),
                 notice: None,
+                switched_from: None,
             }
         );
         assert!(agent_sharing(&pool, a).you_hold);

@@ -106,6 +106,11 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   drag and sideways scroll; device sharing with two or three workspaces, `HANGAR_DEV_DEVICE_LIMIT=2` and
   `HANGAR_DEV_AGENT=claude-acp`: queue in the in-use overlay, waiting position in the sidebar, hand-over
   after idle expiry, Take over, the stale-app hint; the same with an Android AVD.
+- Platform switch: an Expo / React Native repo with `HANGAR_DEV_DEVICE_LIMIT=1` and two workspaces with
+  `HANGAR_DEV_AGENT=claude-acp`. Agent A verifies on iOS, then calls `device_acquire { platform: "android" }`,
+  `build_and_run` and a screenshot; agent B, waiting on iOS, gets the iOS device at A's switch; switching
+  back to iOS reuses the clone with no "creating" stage; the panel picker switches without deleting the
+  clone; a Swift-only repo refuses `android`.
 - Agents: Claude Code Resume click; Claude Code mode chip and slash list; Ollama settings and model chip;
   overview subagent rows and subagent chat; Input from `elicitation_dialog`; terminal transcripts read by a
   lead; ACP watchdog after a Hangar crash.
@@ -141,8 +146,14 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   its build tab exits or the run is replaced; agents poll with `wait_s` (no push on grant); holds are
   counted per workspace, not per call: after a base change replaces a workspace's own device, a stale
   release from an old call can lower the new device's hold count (needs per-call lease identity); on a
-  base change the old device's pending shutdown result can overwrite a new bring-up of the same key;
-  `mcp_host.rs` is near the 800-line split threshold (773 lines).
+  base change of the same platform the old device's pending shutdown result can overwrite a new bring-up
+  of the same key (keys are per platform, so a platform switch cannot); after a platform switch
+  `HANGAR_DEVICE_PLATFORM`, `HANGAR_DEVICE_ID` and `ANDROID_SERIAL` still name the old device (the agent's
+  environment cannot change; `device_acquire` and `device_info` give the real one);
+  workspace deletion removes its `device:`/`device_parked:` settings outside the pool's ordered save queue,
+  and archiving a workspace whose assignment was not loaded yet leaves a short window in which the monitor can
+  shut its parked device down without the archive waiting for it (the clone deletion may then overlap it);
+  `mcp_host.rs` is near the 800-line split threshold (779 lines).
 - **Run loop:** no parsed build progress or crash overlay; `expo run` prebuild
   output lands in the worktree; Expo picks Android devices by AVD name (ambiguous with pool instances);
   React Native CLI unit-tested only; the JDK/Gradle setup is the user's.
@@ -201,6 +212,8 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   (2026-10-12).
 - (2026-10-14) Device sharing: inside Hangar only; reservation with idle expiry; at the cap, a workspace
   shares a compatible running device rather than wait for one of its own.
+- (2026-10-17) Platform switch: a workspace has one platform attached at a time, never an iOS and an
+  Android device held together; an agent switches through the device queue.
 
 ## Next
 1. Split the files over 800 lines (docs/ARCHITECTURE.md "Done when").

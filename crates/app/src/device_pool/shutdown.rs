@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
-use hangar_usecases::device_pool::{OwnShutdown, ShutdownJob, ShutdownKind};
+use hangar_usecases::device_pool::{Forgotten, OwnShutdown, ShutdownJob, ShutdownKind};
 use hangar_usecases::settings::SettingsExt as _;
 
 use crate::device_panel::Platform;
@@ -84,19 +84,34 @@ impl DevicePool {
     /// The workspace is archived: its waiters give up and its own device shuts down.
     pub fn archive(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) -> Task<anyhow::Result<()>> {
         let known = self.machine.archive(ws, Instant::now());
+        let parked_known = self.machine.parked(ws).is_some();
         self.run(cx);
         cx.notify();
         let store = self.store.clone();
         cx.spawn(async move |this, cx| {
-            // Right after launch the saved assignment may not be loaded yet.
-            if !known && let Some(store) = store {
-                let saved = cx
+            // Right after launch the saved assignments may not be loaded yet; a parked device
+            // may still run from an earlier launch.
+            if (!known || !parked_known)
+                && let Some(store) = store
+            {
+                let (active, parked) = cx
                     .background_executor()
-                    .spawn(async move { store.get_setting(&setting_keys::device_assignment(ws)) })
+                    .spawn(async move {
+                        let active = match known {
+                            true => None,
+                            false => store.get_setting(&setting_keys::device_assignment(ws))?,
+                        };
+                        let parked = match parked_known {
+                            true => None,
+                            false => store.get_setting(&setting_keys::device_parked(ws))?,
+                        };
+                        anyhow::Ok((active, parked))
+                    })
                     .await?;
-                if let Some(a) = saved {
-                    this.update(cx, |pool, _| pool.machine.adopt_assignment(ws, a))?;
-                }
+                this.update(cx, |pool, cx| {
+                    pool.machine.adopt(ws, active, parked);
+                    pool.run(cx);
+                })?;
             }
             this.update(cx, |pool, cx| pool.shutdown_own(ws, cx))?.await
         })
@@ -107,21 +122,34 @@ impl DevicePool {
         ws: WorkspaceId,
         cx: &mut Context<Self>,
     ) -> Task<anyhow::Result<()>> {
-        match self.machine.shutdown_own(ws) {
-            OwnShutdown::Nothing => Task::ready(Ok(())),
-            OwnShutdown::IfRunning { platform, target } => {
-                cx.background_executor().spawn(async move {
-                    if adapters::device_catalog(platform).shutdown_if_running(&target)? {
-                        tracing::info!(target: "device_pool", ?target, "device left from an earlier run shut down");
-                    }
-                    Ok(())
-                })
+        let tasks: Vec<Task<anyhow::Result<()>>> = self
+            .machine
+            .shutdown_own(ws)
+            .into_iter()
+            .map(|own| match own {
+                OwnShutdown::IfRunning { platform, target } => {
+                    cx.background_executor().spawn(async move {
+                        if adapters::device_catalog(platform).shutdown_if_running(&target)? {
+                            tracing::info!(target: "device_pool", ?target, "device left from an earlier run shut down");
+                        }
+                        Ok(())
+                    })
+                }
+                OwnShutdown::Job(job) => {
+                    cx.notify();
+                    self.run_shutdown(job, cx)
+                }
+            })
+            .collect();
+        cx.spawn(async move |_, _| {
+            let mut result = Ok(());
+            for task in tasks {
+                if let Err(err) = task.await {
+                    result = Err(err);
+                }
             }
-            OwnShutdown::Job(job) => {
-                cx.notify();
-                self.run_shutdown(job, cx)
-            }
-        }
+            result
+        })
     }
 
     /// The workspace is deleted: as [`Self::archive`], then its simulator (if the pool created
@@ -133,30 +161,40 @@ impl DevicePool {
             if let Err(err) = shutdown.await {
                 tracing::warn!(target: "device_pool", "shutdown before delete failed: {err:#}");
             }
-            let assignment = this.update(cx, |pool, cx| {
-                let assignment = pool.machine.forget(ws);
+            let forgotten = this.update(cx, |pool, cx| {
+                let forgotten = pool.machine.forget(ws);
                 pool.run(cx);
                 cx.notify();
-                assignment
+                forgotten
             })?;
             cx.background_executor()
                 .spawn(async move {
-                    let mut assignment = assignment;
+                    let Forgotten {
+                        mut active,
+                        mut parked,
+                    } = forgotten;
                     if let Some(store) = store {
                         // Archived workspaces are not loaded into the pool: read theirs.
-                        if assignment.is_none() {
-                            assignment = store.get_setting(&setting_keys::device_assignment(ws))?;
+                        if active.is_none() {
+                            active = store.get_setting(&setting_keys::device_assignment(ws))?;
+                        }
+                        if parked.is_none() {
+                            parked = store.get_setting(&setting_keys::device_parked(ws))?;
                         }
                         store.delete_setting(&setting_keys::device_assignment(ws))?;
+                        store.delete_setting(&setting_keys::device_parked(ws))?;
                     }
-                    match assignment {
-                        Some(Assignment {
+                    for a in [active, parked].into_iter().flatten() {
+                        if let Assignment {
                             platform: Platform::Ios,
                             own: Some(udid),
                             ..
-                        }) => Ok(adapters::device_catalog(Platform::Ios).delete_clone(&udid)?),
-                        _ => Ok(()),
+                        } = a
+                        {
+                            adapters::device_catalog(Platform::Ios).delete_clone(&udid)?;
+                        }
                     }
+                    Ok(())
                 })
                 .await
         })

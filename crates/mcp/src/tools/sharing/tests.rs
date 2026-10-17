@@ -2,6 +2,7 @@ use hangar_core::device::Platform;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::tools::schema::definitions;
 use crate::tools::{Content, DeviceStatus, Tool};
 
 fn sharing() -> Sharing {
@@ -92,8 +93,25 @@ fn acquired_json_shape() {
     assert_eq!(v["reservation_left_s"], Value::Null);
     assert_eq!(v["stale_app_from"], Value::Null);
     assert_eq!(v["notice"], Value::Null);
+    assert_eq!(v["switched_from"], Value::Null);
+    assert_eq!(v["hint"], Value::Null);
     let granted = json_of(ToolOutput::device_acquired(true, &sharing()));
     assert_eq!(granted["status"], "granted");
+}
+
+#[test]
+fn acquired_reports_a_platform_switch() {
+    let s = Sharing {
+        switched_from: Some(Platform::Ios),
+        ..sharing()
+    };
+    let v = json_of(ToolOutput::device_acquired(true, &s));
+    assert_eq!(v["switched_from"], "ios");
+    assert_eq!(
+        v["hint"],
+        "Switched from iOS: the app from this branch may not be installed on this device yet, \
+         run build_and_run before testing."
+    );
 }
 
 #[test]
@@ -114,6 +132,7 @@ fn device_status_carries_sharing() {
         screen_pt: None,
         scale: None,
         orientation: None,
+        platforms: vec![Platform::Android],
         sharing: None,
     };
     assert_eq!(
@@ -130,20 +149,60 @@ fn device_status_carries_sharing() {
     assert_eq!(v["sharing"]["you_hold"], true);
     assert_eq!(v["sharing"]["stale_app_from"], "ws-b");
     assert_eq!(v["sharing"]["holder"], "ws-b");
+    assert_eq!(v["platforms"], json!(["android"]));
+    status.platforms.clear();
+    assert_eq!(
+        json_of(ToolOutput::device_status(&status))["platforms"],
+        json!([])
+    );
 }
 
 #[test]
 fn parses_acquire_and_release() {
     let p = |args: Value| Tool::parse("device_acquire", Some(&args));
-    assert_eq!(p(json!({})), Ok(Tool::DeviceAcquire { wait_s: 0 }));
+    assert_eq!(
+        p(json!({})),
+        Ok(Tool::DeviceAcquire {
+            wait_s: 0,
+            platform: None
+        })
+    );
     assert_eq!(
         p(json!({"wait_s": 25})),
-        Ok(Tool::DeviceAcquire { wait_s: 25 })
+        Ok(Tool::DeviceAcquire {
+            wait_s: 25,
+            platform: None
+        })
     );
     assert!(p(json!({"wait_s": 26})).is_err());
     assert!(p(json!({"wait_s": -1})).is_err());
     assert!(p(json!({"wait_s": "5"})).is_err());
     assert!(p(json!({"x": 1})).is_err());
+    assert_eq!(
+        p(json!({"platform": "android"})),
+        Ok(Tool::DeviceAcquire {
+            wait_s: 0,
+            platform: Some(Platform::Android)
+        })
+    );
+    assert_eq!(
+        p(json!({"platform": "ios", "wait_s": 5})),
+        Ok(Tool::DeviceAcquire {
+            wait_s: 5,
+            platform: Some(Platform::Ios)
+        })
+    );
+    let err = p(json!({"platform": "windows"})).unwrap_err().to_string();
+    assert!(err.contains("ios, android"), "{err}");
+    assert!(p(json!({"platform": 1})).is_err());
+    let acquire = definitions(false)
+        .into_iter()
+        .find(|d| d["name"] == "device_acquire")
+        .unwrap();
+    assert_eq!(
+        acquire["inputSchema"]["properties"]["platform"]["enum"],
+        json!(["ios", "android"])
+    );
     assert_eq!(Tool::parse("device_release", None), Ok(Tool::DeviceRelease));
     assert!(Tool::parse("device_release", Some(&json!({"a": 1}))).is_err());
     assert!(!Tool::is_orchestration_name("device_acquire"));

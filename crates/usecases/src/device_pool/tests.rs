@@ -169,7 +169,7 @@ fn own_simulator_is_created_booted_and_opened() {
     let mut m = pool(Limit::Auto, &[(&w, ios("BASE"))]);
     let now = Instant::now();
     let key = m.key_for(w.id).unwrap();
-    assert_eq!(key, PoolKey::Own(w.id));
+    assert_eq!(key, PoolKey::Own(w.id, Platform::Ios));
     let token = wait(m.open(&key, now));
     let probe = step(&m.take_commands());
     let own = Target::IosOwn {
@@ -437,7 +437,10 @@ fn critical_pressure_shuts_the_idle_device_down() {
     let (a, b) = (workspace("a"), workspace("b"));
     let mut m = pool(Limit::Auto, &[(&a, ios("X")), (&b, ios("Y"))]);
     let now = Instant::now();
-    let (ka, kb) = (PoolKey::Own(a.id), PoolKey::Own(b.id));
+    let (ka, kb) = (
+        PoolKey::Own(a.id, Platform::Ios),
+        PoolKey::Own(b.id, Platform::Ios),
+    );
     for (key, ws) in [(&ka, &a), (&kb, &b)] {
         let udid = ws.slug.as_str();
         wait(m.open(key, now));
@@ -534,11 +537,12 @@ fn a_new_base_replaces_the_own_device() {
     a.own = Some("CLONE".into());
     let mut m = pool(Limit::Auto, &[(&w, a)]);
     let now = Instant::now();
-    let key = PoolKey::Own(w.id);
+    let key = PoolKey::Own(w.id, Platform::Ios);
     let token = wait(m.open(&key, now));
     let probe = step(&m.take_commands());
     let replaced = m
         .assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+        .unwrap()
         .unwrap();
     assert!(replaced.shutdown.is_none(), "not running yet");
     assert_eq!(replaced.clone.as_deref(), Some("CLONE"));
@@ -557,6 +561,7 @@ fn a_new_base_replaces_the_own_device() {
     assert!(m.take_commands().is_empty());
     assert!(
         m.assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+            .unwrap()
             .is_none()
     );
 }
@@ -585,7 +590,7 @@ fn launch_scan_adopts_devices_left_running() {
     assert_eq!(rows.len(), 1, "b has nothing running: no row");
     assert_eq!((rows[0].state, rows[0].busy), ("running", false));
     // Running but not open: shutting down needs its id only.
-    let job = m.shutdown(&PoolKey::Own(a.id)).unwrap();
+    let job = m.shutdown(&PoolKey::Own(a.id, Platform::Ios)).unwrap();
     assert!(matches!(job.kind, ShutdownKind::Device { ref id, .. } if id == "LEFT"));
 }
 
@@ -595,7 +600,7 @@ fn lowering_the_limit_shuts_idle_extras_down() {
     let mut m = pool(Limit::Auto, &[(&a, ios("X")), (&b, ios("Y"))]);
     let now = Instant::now();
     for ws in [&a, &b] {
-        let key = PoolKey::Own(ws.id);
+        let key = PoolKey::Own(ws.id, Platform::Ios);
         wait(m.open(&key, now));
         let probe = step(&m.take_commands());
         let r = Running {
@@ -623,7 +628,7 @@ fn lowering_the_limit_shuts_idle_extras_down() {
         .collect();
     assert_eq!(
         shutdowns,
-        [&PoolKey::Own(a.id)],
+        [&PoolKey::Own(a.id, Platform::Ios)],
         "least recently used first"
     );
     assert!(
@@ -664,13 +669,15 @@ fn deleting_a_clone_needs_one() {
     let mut m = pool(Limit::Auto, &[(&a, own), (&b, ios("B"))]);
     assert!(m.delete_clone(&base_key("B")).is_err());
     assert_eq!(
-        m.delete_clone(&PoolKey::Own(b.id)).err().as_deref(),
+        m.delete_clone(&PoolKey::Own(b.id, Platform::Ios))
+            .err()
+            .as_deref(),
         Some("no simulator was created for this workspace")
     );
-    let (udid, shutdown) = m.delete_clone(&PoolKey::Own(a.id)).unwrap();
+    let (udid, shutdown) = m.delete_clone(&PoolKey::Own(a.id, Platform::Ios)).unwrap();
     assert_eq!((udid.as_str(), shutdown.is_none()), ("CLONE", true));
     assert_eq!(m.assignment(a.id).and_then(|a| a.own.clone()), None);
-    assert_eq!(m.forget(a.id).map(|a| a.base), Some("B".into()));
+    assert_eq!(m.forget(a.id).active.map(|a| a.base), Some("B".into()));
     assert!(m.assignment(a.id).is_none());
 }
 

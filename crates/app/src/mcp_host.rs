@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use crate::adapters::devices::LogEntry;
 use anyhow::Context as _;
-use hangar_core::device::{Frame, Input, LogLevel};
+use hangar_core::device::{Frame, Input, LogLevel, Platform};
 use hangar_core::{AgentSignal, WorkspaceId};
 use hangar_mcp::{
     Answer, ChildWorkspace, CreatedWorkspace, DeviceStatus, MAX_SIDE, Sharing, Tool, ToolError,
@@ -81,10 +81,12 @@ pub enum McpRequest {
         reply: Reply<()>,
     },
     /// `device_acquire`: reserves the workspace's device, or keeps its place in line and waits
-    /// up to `wait` for its turn (touching the reservation while it waits). Never boots.
+    /// up to `wait` for its turn (touching the reservation while it waits). Never boots. A
+    /// `platform` other than the attached one is switched to first.
     Acquire {
         ws: WorkspaceId,
         wait: Duration,
+        platform: Option<Platform>,
         reply: Reply<Acquisition>,
     },
     /// `device_release`: ends the workspace's reservation.
@@ -570,11 +572,15 @@ impl McpHost {
                 })?;
                 Ok(ToolOutput::text(summary))
             }
-            Tool::DeviceAcquire { wait_s } => {
+            Tool::DeviceAcquire { wait_s, platform } => {
                 let wait = Duration::from_secs(wait_s);
-                let mut got = self.ask("device_acquire", call + wait, |reply| {
-                    McpRequest::Acquire { ws, wait, reply }
-                })?;
+                let mut got =
+                    self.ask("device_acquire", call + wait, |reply| McpRequest::Acquire {
+                        ws,
+                        wait,
+                        platform,
+                        reply,
+                    })?;
                 self.sharing_notice(ws, Some(&mut got.sharing));
                 Ok(ToolOutput::device_acquired(got.granted, &got.sharing))
             }

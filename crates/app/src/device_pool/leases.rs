@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 use crate::device_panel::Platform;
 use crate::device_view::DeviceSession;
 
+use super::policy::Assignment;
 use super::{Acquired, DevicePool, Granted, Lease, OpenError, PoolKey, StillQueued};
 
 /// How many times a call asks for a device again after its boot was refused or moved.
@@ -61,12 +62,13 @@ impl DevicePool {
     ) -> Task<anyhow::Result<Acquired>> {
         let assignment = self.resolve_assignment(ws, cx);
         cx.spawn(async move |this, cx| {
-            let a = assignment.await?;
+            let resolved = assignment.await?;
             Self::wait_host(&this, cx).await;
-            let avd = (a.platform == Platform::Android).then(|| a.base.clone());
-            let mut pending = this.update(cx, |pool, cx| {
+            // Read with the request: a platform switch may have happened meanwhile.
+            let (mut a, mut pending) = this.update(cx, |pool, cx| {
+                let a = pool.machine.assignment(ws).cloned().unwrap_or(resolved);
                 let start = pool.machine.request_device(ws, Instant::now());
-                pool.pending(ws, start, cx)
+                pool.pending(ws, start, cx).map(|pending| (a, pending))
             })??;
             for _ in 0..MAX_ATTEMPTS {
                 let Granted { lease, stale_app } = Self::granted(ws, pending, deadline, cx)
@@ -88,7 +90,7 @@ impl DevicePool {
                             session,
                             lease,
                             platform: a.platform,
-                            avd,
+                            avd: (a.platform == Platform::Android).then(|| a.base.clone()),
                             borrowed,
                             shared_with,
                             stale_app,
@@ -99,6 +101,7 @@ impl DevicePool {
                         tracing::info!(target: "device_pool", workspace = %ws, from = ?key, ?to, "device moved, asking again");
                         lease.disarm();
                         pending = this.update(cx, |pool, cx| {
+                            a = pool.still_on(ws, a.platform)?;
                             let start = pool.machine.request_device(ws, Instant::now());
                             pool.pending(ws, start, cx)
                         })??;
@@ -106,6 +109,8 @@ impl DevicePool {
                     }
                     Err(OpenError::Refused(why)) => why,
                 };
+                // Checked before the lease is disarmed: on an error, dropping it releases the hold.
+                a = this.update(cx, |pool, _| pool.still_on(ws, a.platform))??;
                 lease.disarm();
                 let moved = this.update(cx, |pool, cx| {
                     let moved = pool.machine.boot_refused(ws, &key, Instant::now());
@@ -134,6 +139,19 @@ impl DevicePool {
                 "the device kept moving while it was being opened; try again"
             ))
         })
+    }
+
+    /// The workspace's assignment, when it is still of `platform`: a call asking again after
+    /// its device moved must not go on with a platform the workspace left meanwhile.
+    fn still_on(&self, ws: WorkspaceId, platform: Platform) -> anyhow::Result<Assignment> {
+        match self.machine.assignment(ws) {
+            Some(a) if a.platform == platform => Ok(a.clone()),
+            Some(a) => Err(anyhow!(
+                "the workspace switched to {}; call again",
+                a.platform.label()
+            )),
+            None => Err(anyhow!("no device assigned to this workspace")),
+        }
     }
 
     /// Runs what `start` queued and, in the same update, takes its lease or registers its

@@ -6,7 +6,7 @@ use hangar_core::WorkspaceId;
 use hangar_core::device::Platform;
 use hangar_core::device::capacity::{self, DeviceCost, HostResources, Pressure};
 
-use super::policy::{self, Limit};
+use super::policy::{self, Assignment, Limit};
 use super::{Command, NoticeLevel, PoolMachine, Save, Saved, Session};
 
 /// What a waiting call gets when single-device mode switches on or off.
@@ -23,7 +23,14 @@ impl<S: Session> PoolMachine<S> {
                 self.bases = saved.bases;
                 self.single_alert_shown = saved.alert_shown;
                 self.last_target = saved.last_target;
-                self.assignments.extend(saved.assignments);
+                let mut parked = saved.parked;
+                for (ws, a) in saved.assignments {
+                    let p = parked.remove(&ws);
+                    self.adopt(ws, Some(a), p);
+                }
+                for (ws, p) in parked {
+                    self.adopt(ws, None, Some(p));
+                }
             }
             Err(err) => {
                 tracing::error!(target: "device_pool", "failed to read the device settings: {err}");
@@ -35,6 +42,32 @@ impl<S: Session> PoolMachine<S> {
         }
         self.detect_host();
         self.push(Command::ScanRunning);
+    }
+
+    /// Saved assignments of `ws` read after launch, active and parked: one already known wins.
+    /// A parked one of the active platform is dropped (and forgotten).
+    pub fn adopt(
+        &mut self,
+        ws: WorkspaceId,
+        active: Option<Assignment>,
+        parked: Option<Assignment>,
+    ) {
+        if let Some(a) = active {
+            self.assignments.entry(ws).or_insert(a);
+        }
+        if let Some(p) = parked {
+            self.parked.entry(ws).or_insert(p);
+        }
+        let clash = self
+            .assignments
+            .get(&ws)
+            .zip(self.parked.get(&ws))
+            .is_some_and(|(a, p)| a.platform == p.platform);
+        if clash {
+            tracing::warn!(target: "device_pool", workspace = %ws, "parked assignment of the active platform dropped");
+            self.parked.remove(&ws);
+            self.save(Save::Unparked(ws));
+        }
     }
 
     fn detect_host(&mut self) {

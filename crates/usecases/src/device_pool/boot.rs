@@ -9,8 +9,8 @@ use hangar_core::device::{BackendReason, Conflict, Platform, Running, Target};
 
 use super::policy::{self, Capacity, LEASE_TIMEOUT, Slot};
 use super::{
-    BringUp, Command, OpenError, Opening, Phase, PoolKey, PoolMachine, SLOT_POLL, Save, Session,
-    State, Step, Token,
+    BringUp, Command, OpenError, Opening, Phase, PoolKey, PoolMachine, SLOT_POLL, Session, State,
+    Step, Token,
 };
 
 /// Result of [`PoolMachine::open`].
@@ -48,7 +48,7 @@ impl<S: Session> PoolMachine<S> {
             .map(|(k, d)| Slot {
                 key: k.clone(),
                 // One shutting down already makes room.
-                booted: d.booted() && !matches!(d.state, State::ShuttingDown),
+                booted: d.booted() && !matches!(d.state, State::ShuttingDown { .. }),
                 busy: d.busy(),
                 focused: focused.as_ref() == Some(k),
                 last_used: d.last_used,
@@ -56,7 +56,8 @@ impl<S: Session> PoolMachine<S> {
             .collect()
     }
 
-    /// Opens the device `key` (booting it if needed), or joins the bring-up in progress.
+    /// Opens the device `key` (booting it if needed), or joins the bring-up in progress. One
+    /// shutting down is opened again once it is down.
     pub fn open(&mut self, key: &PoolKey, now: Instant) -> OpenStart<S> {
         let token = self.token();
         let Some(device) = self.entry(key) else {
@@ -70,27 +71,34 @@ impl<S: Session> PoolMachine<S> {
                 opening.waiters.push(token);
                 return OpenStart::Wait(token);
             }
-            State::ShuttingDown => {
-                return OpenStart::Ready(Err(OpenError::Failed(format!(
-                    "{} is shutting down; try again in a moment",
-                    device.name
-                ))));
+            State::ShuttingDown { reopen } => {
+                tracing::info!(target: "device_pool", ?key, "open asked while shutting down: reopening after");
+                reopen.push(token);
+                return OpenStart::Wait(token);
             }
             State::Closed => {}
         }
+        self.start(key, token, vec![token], now);
+        OpenStart::Wait(token)
+    }
+
+    /// Starts bringing the closed device `key` up for `waiters`, as bring-up `attempt`.
+    pub(super) fn start(&mut self, key: &PoolKey, attempt: u64, waiters: Vec<Token>, now: Instant) {
+        let Some(device) = self.devices.get_mut(key) else {
+            return;
+        };
         device.error = None;
         device.conflict = None;
         device.state = State::Opening(Opening {
             stage: "checking the device".to_owned(),
             started: now,
-            waiters: vec![token],
-            attempt: token,
+            waiters,
+            attempt,
             phase: Phase::Probing,
         });
         let target = device.target.clone();
         self.mark_used(key);
-        self.bring_up(key, token, Step::Probe(target));
-        OpenStart::Wait(token)
+        self.bring_up(key, attempt, Step::Probe(target));
     }
 
     /// Like [`Self::open`], for a call of `ws` granted the lease on `key`. A grant can be taken
@@ -235,6 +243,9 @@ impl<S: Session> PoolMachine<S> {
     /// waits, those who wait for this device move to a compatible running one when there is.
     pub(super) fn claim(&mut self, key: &PoolKey, attempt: u64, now: Instant) {
         loop {
+            if self.abandon_parked(key) {
+                return;
+            }
             let Some(Phase::Claiming { since, .. }) =
                 self.opening(key, attempt).map(|o| o.phase.clone())
             else {
@@ -345,6 +356,9 @@ impl<S: Session> PoolMachine<S> {
         else {
             return;
         };
+        if self.abandon_parked(key) {
+            return;
+        }
         let guard = match &host {
             Ok(host) => policy::guard(Some(host), cost),
             Err(err) => {
@@ -387,9 +401,12 @@ impl<S: Session> PoolMachine<S> {
         };
         if let (Some(udid), Target::IosOwn { udid: own, .. }) = (created, &mut device.target) {
             *own = Some(udid.clone());
-            if let PoolKey::Own(ws) = key {
-                self.record_own(*ws, Some(udid.clone()), udid);
+            if let PoolKey::Own(ws, platform) = key {
+                self.record_own(*ws, *platform, Some(udid.clone()), udid);
             }
+        }
+        if self.abandon_parked(key) {
+            return;
         }
         let Some(target) = self.devices.get(key).map(|d| d.target.clone()) else {
             return;
@@ -433,8 +450,8 @@ impl<S: Session> PoolMachine<S> {
                     session: session.clone(),
                     reason,
                 };
-                if let PoolKey::Own(ws) = key {
-                    self.record_own(*ws, created, id);
+                if let PoolKey::Own(ws, platform) = key {
+                    self.record_own(*ws, *platform, created, id);
                 }
                 Ok(session)
             }
@@ -453,13 +470,16 @@ impl<S: Session> PoolMachine<S> {
         self.enforce_limit();
     }
 
-    /// Saves what the workspace's own device is now (created simulator, Android serial).
-    fn record_own(&mut self, ws: WorkspaceId, created: Option<String>, id: String) {
-        let Some(a) = self.assignments.get_mut(&ws) else {
-            return;
-        };
-        let before = a.clone();
-        match a.platform {
+    /// Saves what the workspace's own device of `platform` is now (created simulator, Android
+    /// serial), in its active or parked assignment.
+    fn record_own(
+        &mut self,
+        ws: WorkspaceId,
+        platform: Platform,
+        created: Option<String>,
+        id: String,
+    ) {
+        self.edit_assignment(ws, platform, |a| match a.platform {
             Platform::Ios => {
                 if let Some(udid) = created {
                     a.own = Some(udid);
@@ -469,10 +489,6 @@ impl<S: Session> PoolMachine<S> {
                 a.own = Some(a.base.clone());
                 a.serial = Some(id);
             }
-        }
-        if *a != before {
-            let a = a.clone();
-            self.save(Save::Assignment(ws, a));
-        }
+        });
     }
 }

@@ -115,7 +115,7 @@ impl<S: Session> PoolMachine<S> {
         let mut slots = self.slots(Some(except));
         for slot in &mut slots {
             if let Some(d) = self.devices.get(&slot.key)
-                && !matches!(d.state, State::ShuttingDown)
+                && !matches!(d.state, State::ShuttingDown { .. })
                 && (matches!(d.state, State::Opening(_)) || in_use(d))
             {
                 slot.booted = true;
@@ -136,7 +136,9 @@ impl<S: Session> PoolMachine<S> {
     fn class_base<'a>(&'a self, key: &'a PoolKey) -> Option<&'a str> {
         match key {
             PoolKey::Base(k) => Some(k.id.as_str()),
-            PoolKey::Own(ws) => self.assignments.get(ws).map(|a| a.base.as_str()),
+            PoolKey::Own(ws, platform) => {
+                self.assignment_of(*ws, *platform).map(|a| a.base.as_str())
+            }
         }
     }
 
@@ -202,6 +204,7 @@ impl<S: Session> PoolMachine<S> {
         let Some(to) = to else {
             self.drop_holder(key, ws, now);
             self.prune_bindings();
+            self.enforce_limit();
             return Ok(None);
         };
         // Before the lease is dropped, or the refused device would be granted to the first one.
@@ -212,6 +215,7 @@ impl<S: Session> PoolMachine<S> {
         let lease = self.queue_for(&to, ws, now, true)?;
         self.notice_shared(ws, &to, Some("could not boot its own device"));
         self.prune_bindings();
+        self.enforce_limit();
         Ok(Some(DeviceStart {
             stale_app: (lease == LeaseStart::Granted)
                 .then(|| self.stale_app(&to, ws))
@@ -340,7 +344,7 @@ impl<S: Session> PoolMachine<S> {
         let device = self.name_of(key).unwrap_or("a running device").to_owned();
         let mut with = self.bound_names(key, ws);
         if with.is_empty()
-            && let PoolKey::Own(owner) = key
+            && let PoolKey::Own(owner, _) = key
             && let Some(owner) = self.workspace_name(*owner)
         {
             with.push(owner.to_owned());

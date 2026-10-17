@@ -8,6 +8,8 @@ use gpui_kit::*;
 use hangar_core::WorkspaceId;
 use hangar_usecases::device_pool::LeaseStart;
 
+use crate::device_panel::Platform;
+
 use super::{DevicePool, PoolEvent, PoolKey, Sharing};
 
 impl DevicePool {
@@ -135,6 +137,15 @@ pub(super) fn revoked_notice(device: &str, next: Option<&str>) -> String {
     )
 }
 
+/// Told to a workspace the user switched to `platform` (device panel).
+pub(super) fn switched_notice(platform: Platform) -> String {
+    let platform = platform.label();
+    format!(
+        "The user switched this workspace to {platform}: device calls now use its {platform} \
+         device. Run build_and_run to install the app there."
+    )
+}
+
 /// Told to a workspace granted a device where another workspace's build is installed.
 pub(super) fn stale_notice(device: &str, by: &str) -> String {
     format!(
@@ -147,7 +158,7 @@ pub(super) fn stale_notice(device: &str, by: &str) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::{revoked_notice, stale_notice, warn_notice};
+    use super::{Platform, revoked_notice, stale_notice, switched_notice, warn_notice};
 
     #[test]
     fn notices_name_the_device_and_who_waits() {
@@ -170,5 +181,10 @@ mod tests {
         );
         assert!(!revoked_notice("iPhone 16", None).contains("has it now"));
         assert!(stale_notice("iPhone 16", "ws-a").contains("installed by ws-a"));
+        assert_eq!(
+            switched_notice(Platform::Android),
+            "The user switched this workspace to Android: device calls now use its Android \
+             device. Run build_and_run to install the app there."
+        );
     }
 }

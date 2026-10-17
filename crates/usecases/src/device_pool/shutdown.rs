@@ -8,13 +8,12 @@ use hangar_core::device::{Conflict, Platform, Pressure, RunningSet, Target};
 
 use super::policy::{self, Assignment};
 use super::{
-    Command, NoticeLevel, PoolKey, PoolMachine, Save, Session, ShutdownJob, ShutdownKind, State,
+    Command, NoticeLevel, PoolKey, PoolMachine, Session, ShutdownJob, ShutdownKind, State,
 };
 
 /// What shutting a workspace's own device down takes ([`PoolMachine::shutdown_own`]).
 #[derive(Debug)]
 pub enum OwnShutdown<S> {
-    Nothing,
     /// Not opened in this run: shut it down if it still runs from an earlier launch.
     IfRunning {
         platform: Platform,
@@ -31,6 +30,13 @@ pub struct Replaced<S> {
     pub clone: Option<String>,
 }
 
+/// What [`PoolMachine::forget`] dropped: the workspace's assignments, if known.
+#[derive(Debug, Default, PartialEq)]
+pub struct Forgotten {
+    pub active: Option<Assignment>,
+    pub parked: Option<Assignment>,
+}
+
 impl<S: Session> PoolMachine<S> {
     /// Shuts a pool device down. `None` when there is nothing to wait for (not running, or
     /// already starting or stopping); otherwise run the job and report it with
@@ -38,7 +44,8 @@ impl<S: Session> PoolMachine<S> {
     pub fn shutdown(&mut self, key: &PoolKey) -> Option<ShutdownJob<S>> {
         let device = self.devices.get_mut(key)?;
         let platform = device.platform;
-        match std::mem::replace(&mut device.state, State::ShuttingDown) {
+        let stopping = State::ShuttingDown { reopen: Vec::new() };
+        match std::mem::replace(&mut device.state, stopping) {
             State::Open { session, .. } => {
                 tracing::info!(target: "device_pool", ?key, name = %device.name, "shutting down");
                 Some(ShutdownJob {
@@ -72,7 +79,10 @@ impl<S: Session> PoolMachine<S> {
     }
 
     /// How the shutdown of `key` went (`Err` holds the message).
+    /// How the shutdown of `key` went (`Err` holds the message). Opens asked meanwhile start
+    /// the device again.
     pub fn shutdown_finished(&mut self, key: &PoolKey, result: Result<(), String>, now: Instant) {
+        let mut reopen = Vec::new();
         if let Some(device) = self.devices.get_mut(key) {
             let before = std::mem::replace(&mut device.state, State::Closed);
             match &result {
@@ -85,14 +95,23 @@ impl<S: Session> PoolMachine<S> {
                     device.error = Some(format!("Shutdown failed: {err}"));
                 }
             }
-            self.abandon(before);
+            match before {
+                State::ShuttingDown { reopen: waiters } => reopen = waiters,
+                other => self.abandon(other),
+            }
         }
         self.evicted(key, &result, now);
+        if let Some(&attempt) = reopen.first() {
+            tracing::info!(target: "device_pool", ?key, "opening again for the calls that waited");
+            self.start(key, attempt, reopen, now);
+        }
     }
 
-    /// Shuts down idle devices above the cap. The cap counts booted devices of every platform;
-    /// with several platforms booted the tightest of their caps applies.
+    /// Shuts down the parked devices nobody uses ([`Self::retire_parked`]) and idle devices
+    /// above the cap. The cap counts booted devices of every platform; with several platforms
+    /// booted the tightest of their caps applies.
     pub(super) fn enforce_limit(&mut self) {
+        self.retire_parked(None);
         if !self.host_known() {
             return;
         }
@@ -207,7 +226,7 @@ impl<S: Session> PoolMachine<S> {
     /// The workspace is archived: its waiters give up and its reservations end. Its own device
     /// is about to shut down, so the workspaces sharing it lose it too (waiters fail, a holder
     /// is revoked). Whether its assignment is known; the caller reads an unknown one
-    /// ([`Self::adopt_assignment`]) before [`Self::shutdown_own`].
+    /// ([`Self::adopt`]) before [`Self::shutdown_own`].
     pub fn archive(&mut self, ws: WorkspaceId, now: Instant) -> bool {
         let mut cancelled = Vec::new();
         for device in self.devices.values_mut() {
@@ -219,61 +238,85 @@ impl<S: Session> PoolMachine<S> {
                 message: "the workspace was closed".into(),
             });
         }
-        let own = PoolKey::Own(ws);
-        if let Some(device) = self.devices.get_mut(&own) {
-            let message = format!("{} was shut down with its workspace", device.name);
-            let other = device.leases.holder().copied().filter(|h| *h != ws);
-            for token in device.leases.take_waiting() {
-                self.push(Command::FailLease {
-                    token,
-                    message: message.clone(),
-                });
-            }
-            if let Some(other) = other {
-                self.drop_holder(&own, other, now);
-                self.push(Command::Revoked {
-                    holder: other,
-                    key: own,
-                });
+        for own in Platform::ALL.map(|p| PoolKey::Own(ws, p)) {
+            if let Some(name) = self.name_of(&own) {
+                let message = format!("{name} was shut down with its workspace");
+                self.evict_users(&own, ws, &message, now);
             }
         }
-        self.release_reservation(ws, now);
+        self.leave(ws, now, "the workspace was closed");
+        self.prune_bindings();
+        // Its own devices are shut down by `shutdown_own`, whose jobs the caller waits for.
+        self.retire_parked(Some(ws));
         if self.focused == Some(ws) {
             self.focused = None;
         }
         self.assignments.contains_key(&ws)
     }
 
-    /// A saved assignment read after launch; one already known wins.
-    pub fn adopt_assignment(&mut self, ws: WorkspaceId, assignment: Assignment) {
-        self.assignments.entry(ws).or_insert(assignment);
+    /// The device `key` of `owner` goes away: the other workspaces waiting for it fail with
+    /// `message` and one holding it is revoked.
+    pub(super) fn evict_users(
+        &mut self,
+        key: &PoolKey,
+        owner: WorkspaceId,
+        message: &str,
+        now: Instant,
+    ) {
+        let Some(device) = self.devices.get_mut(key) else {
+            return;
+        };
+        let other = device.leases.holder().copied().filter(|h| *h != owner);
+        for token in device.leases.take_waiting() {
+            self.push(Command::FailLease {
+                token,
+                message: message.to_owned(),
+            });
+        }
+        if let Some(other) = other {
+            self.drop_holder(key, other, now);
+            self.push(Command::Revoked {
+                holder: other,
+                key: key.clone(),
+            });
+        }
     }
 
-    /// Shuts the workspace's own device down.
-    pub fn shutdown_own(&mut self, ws: WorkspaceId) -> OwnShutdown<S> {
-        let key = PoolKey::Own(ws);
-        let Some(device) = self.entry(&key) else {
-            return OwnShutdown::Nothing;
-        };
+    /// Shuts the workspace's own devices down (the active platform's and the parked one's).
+    pub fn shutdown_own(&mut self, ws: WorkspaceId) -> Vec<OwnShutdown<S>> {
+        let platforms: Vec<Platform> = [self.assignment(ws), self.parked(ws)]
+            .into_iter()
+            .flatten()
+            .map(|a| a.platform)
+            .collect();
+        platforms
+            .into_iter()
+            .filter_map(|platform| self.shutdown_own_of(ws, platform))
+            .collect()
+    }
+
+    fn shutdown_own_of(&mut self, ws: WorkspaceId, platform: Platform) -> Option<OwnShutdown<S>> {
+        let key = PoolKey::Own(ws, platform);
+        let device = self.entry(&key)?;
         if matches!(device.state, State::Closed) && !device.running {
             // Possibly still running from an earlier launch of Hangar.
-            return OwnShutdown::IfRunning {
-                platform: device.platform,
+            return Some(OwnShutdown::IfRunning {
+                platform,
                 target: device.target.clone(),
-            };
+            });
         }
-        match self.shutdown(&key) {
-            Some(job) => OwnShutdown::Job(job),
-            None => OwnShutdown::Nothing,
-        }
+        self.shutdown(&key).map(OwnShutdown::Job)
     }
 
     /// Marks the workspaces' own devices that still run (from an earlier launch) as running, so
     /// they count against the cap and can be shut down when idle.
     pub fn running_scanned(&mut self, running: &RunningSet) {
-        let owned: Vec<WorkspaceId> = self.assignments.keys().copied().collect();
-        for ws in owned {
-            let key = PoolKey::Own(ws);
+        let owned: Vec<(WorkspaceId, Platform)> = self
+            .own_assignments()
+            .map(|(ws, a)| (ws, a.platform))
+            .collect();
+        for (ws, platform) in owned {
+            let key = PoolKey::Own(ws, platform);
             let Some(device) = self.entry(&key) else {
                 continue;
             };
@@ -294,12 +337,19 @@ impl<S: Session> PoolMachine<S> {
     }
 
     /// The workspace is deleted (after [`Self::archive`] and its shutdown): forgets it and
-    /// returns its assignment, if known.
-    pub fn forget(&mut self, ws: WorkspaceId) -> Option<Assignment> {
-        self.remove_device(&PoolKey::Own(ws));
+    /// returns its assignments, active and parked, if known.
+    pub fn forget(&mut self, ws: WorkspaceId) -> Forgotten {
+        for platform in Platform::ALL {
+            self.remove_device(&PoolKey::Own(ws, platform));
+        }
         self.bindings.remove(&ws);
         self.workspaces.remove(&ws);
-        self.assignments.remove(&ws)
+        let parked = self.parked(ws).is_some();
+        let parked = self.parked.remove(&ws).filter(|_| parked);
+        Forgotten {
+            active: self.assignments.remove(&ws),
+            parked,
+        }
     }
 
     /// Settings › Devices: forgets the simulator the pool created for a workspace. Returns its
@@ -309,25 +359,19 @@ impl<S: Session> PoolMachine<S> {
         &mut self,
         key: &PoolKey,
     ) -> Result<(String, Option<ShutdownJob<S>>), String> {
-        let PoolKey::Own(ws) = key else {
+        let PoolKey::Own(ws, Platform::Ios) = key else {
             return Err("only devices Hangar created can be deleted".into());
         };
         let ws = *ws;
         let Some(udid) = self
-            .assignments
-            .get(&ws)
-            .filter(|a| a.platform == Platform::Ios)
+            .assignment_of(ws, Platform::Ios)
             .and_then(|a| a.own.clone())
         else {
             return Err("no simulator was created for this workspace".into());
         };
         let shutdown = self.shutdown(key);
         self.remove_device(key);
-        if let Some(a) = self.assignments.get_mut(&ws) {
-            a.own = None;
-            let a = a.clone();
-            self.save(Save::Assignment(ws, a));
-        }
+        self.edit_assignment(ws, Platform::Ios, |a| a.own = None);
         Ok((udid, shutdown))
     }
 

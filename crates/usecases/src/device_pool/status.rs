@@ -164,7 +164,7 @@ impl<S: Session> PoolMachine<S> {
                 session,
                 reason: reason.as_ref(),
             },
-            State::ShuttingDown => DeviceStatus::ShuttingDown { name: &device.name },
+            State::ShuttingDown { .. } => DeviceStatus::ShuttingDown { name: &device.name },
         }
     }
 
@@ -210,7 +210,7 @@ impl<S: Session> PoolMachine<S> {
                     .filter_map(|ws| self.workspaces.get(ws).map(|w| w.name.clone()))
                     .collect();
                 let clone_udid = match (key, &d.target) {
-                    (PoolKey::Own(_), Target::IosOwn { udid, .. }) => udid.clone(),
+                    (PoolKey::Own(..), Target::IosOwn { udid, .. }) => udid.clone(),
                     _ => None,
                 };
                 DeviceRow {
@@ -220,7 +220,7 @@ impl<S: Session> PoolMachine<S> {
                     state: match &d.state {
                         State::Open { .. } => "open",
                         State::Opening(_) => "starting",
-                        State::ShuttingDown => "shutting down",
+                        State::ShuttingDown { .. } => "shutting down",
                         State::Closed if d.running => "running",
                         State::Closed => "off",
                     },
@@ -232,14 +232,16 @@ impl<S: Session> PoolMachine<S> {
                 }
             })
             .collect();
-        // Created simulators of workspaces whose device was never opened in this run.
-        for (ws, a) in &self.assignments {
-            let key = PoolKey::Own(*ws);
+        // Created simulators of workspaces whose device was never opened in this run, parked
+        // ones too.
+        for (ws, a) in self.own_assignments() {
+            let key = PoolKey::Own(ws, Platform::Ios);
             if a.platform == Platform::Ios
                 && a.own.is_some()
                 && !self.devices.contains_key(&key)
-                && let Some(w) = self.workspaces.get(ws)
+                && let Some(w) = self.workspaces.get(&ws)
             {
+                let active = self.assignment(ws) == Some(a);
                 rows.push(DeviceRow {
                     key,
                     platform: Platform::Ios,
@@ -248,7 +250,11 @@ impl<S: Session> PoolMachine<S> {
                     busy: false,
                     holder: None,
                     queue_len: 0,
-                    workspaces: vec![w.name.clone()],
+                    workspaces: if active {
+                        vec![w.name.clone()]
+                    } else {
+                        Vec::new()
+                    },
                     clone_udid: a.own.clone(),
                 });
             }

@@ -14,7 +14,7 @@ use hangar_core::device::capacity::{DeviceCost, HostResources, Pressure};
 use hangar_core::device::{DeviceInfo, Platform};
 use hangar_devices::Frame;
 use hangar_usecases::device_pool::policy::{Assignment, Limit};
-use hangar_usecases::device_pool::{PoolMachine, Saved, Session, WorkspaceRef};
+use hangar_usecases::device_pool::{PoolMachine, Saved, Session, SwitchBy, WorkspaceRef};
 use serde_json::Value;
 
 fn fake_gpui_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>) {
@@ -252,20 +252,46 @@ fn shared_pool(workspaces: &[WorkspaceRef]) -> Pool {
     Arc::new(Mutex::new(m))
 }
 
+/// The Android base device of the fake pool.
+const ANDROID_BASE: &str = "Pixel";
+
 /// Answers `device_acquire` and `device_release` as the app does
-/// (`shell/device_api/sharing.rs`), on a real pool machine: reserve, then poll for the turn
-/// until the wait ends.
+/// (`shell/device_api/sharing.rs`), on a real pool machine: switch to the asked platform (its
+/// parked assignment, else [`ANDROID_BASE`] or "X"), reserve, then poll for the turn until the
+/// wait ends.
 fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool: Pool) {
     std::thread::spawn(move || {
         while let Some(req) = rx.blocking_recv() {
             match req {
-                McpRequest::Acquire { ws, wait, reply } => {
+                McpRequest::Acquire {
+                    ws,
+                    wait,
+                    platform,
+                    reply,
+                } => {
                     let pool = Arc::clone(&pool);
                     std::thread::spawn(move || {
                         let deadline = Instant::now() + wait;
+                        let mut switched_from = None;
                         {
                             let mut m = pool.lock().unwrap();
                             let now = Instant::now();
+                            let active = m.assignment(ws).map(|a| a.platform);
+                            if let Some(p) = platform.filter(|p| Some(*p) != active) {
+                                let target = m.parked(ws).filter(|a| a.platform == p).cloned();
+                                let base = match p {
+                                    Platform::Ios => "X",
+                                    Platform::Android => ANDROID_BASE,
+                                };
+                                let target = target.unwrap_or_else(|| Assignment::new(p, base));
+                                if let Err(err) =
+                                    m.switch_platform(ws, target, SwitchBy::Agent, now)
+                                {
+                                    let _ = reply.send(Err(anyhow::anyhow!(err)));
+                                    return;
+                                }
+                                switched_from = active;
+                            }
                             m.touch(ws, now);
                             if m.sharing(ws, now).is_none_or(|s| s.position.is_none()) {
                                 m.reserve(ws, now).unwrap();
@@ -279,7 +305,7 @@ fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool
                                 m.sharing(ws, Instant::now()).unwrap()
                             };
                             if let Some(answer) =
-                                acquisition(&sharing, ws, Instant::now() >= deadline)
+                                acquisition(&sharing, ws, Instant::now() >= deadline, switched_from)
                             {
                                 let _ = reply.send(Ok(answer));
                                 return;
@@ -376,5 +402,97 @@ fn two_agents_take_turns_on_a_shared_device() {
     assert!(
         waited < Duration::from_secs(5),
         "granted on release: {waited:?}"
+    );
+}
+
+#[test]
+fn switching_platform_hands_the_device_to_the_next_in_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("hangar.sock");
+    let timeouts = Timeouts {
+        call: Duration::from_secs(5),
+        ..Timeouts::default()
+    };
+    let (handle, rx) = start_with(&socket, timeouts).unwrap();
+    let workspace = |slug: &str| WorkspaceRef {
+        id: WorkspaceId::new(),
+        name: slug.to_uppercase(),
+        project: "app".into(),
+        slug: slug.into(),
+        root: dir.path().join(slug),
+    };
+    let (a, b) = (workspace("ws-a"), workspace("ws-b"));
+    let pool = shared_pool(&[a.clone(), b.clone()]);
+    fake_pool_side(rx, Arc::clone(&pool));
+    let (sa, sb) = (handle.register(a.id), handle.register(b.id));
+    let once = |session: &str, line: String| {
+        let (responses, stderr, ok) = bridge(&socket, session, &format!("{line}\n"));
+        assert!(ok, "bridge failed: {stderr}");
+        responses
+    };
+
+    let got = result_json(&once(&sa, call(1, "device_acquire", "{}")), 1);
+    assert_eq!(
+        (&got["status"], &got["device"]["name"]),
+        (&"granted".into(), &"X".into())
+    );
+    assert_eq!(got["switched_from"], Value::Null);
+
+    let waiting = std::thread::spawn({
+        let (socket, sb) = (socket.clone(), sb.clone());
+        move || {
+            let started = Instant::now();
+            let line = call(2, "device_acquire", r#"{"wait_s":10}"#);
+            let (responses, stderr, ok) = bridge(&socket, &sb, &format!("{line}\n"));
+            assert!(ok, "bridge failed: {stderr}");
+            (responses, started.elapsed())
+        }
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    let got = result_json(
+        &once(&sa, call(3, "device_acquire", r#"{"platform":"android"}"#)),
+        3,
+    );
+    println!("A device_acquire android -> {got}");
+    assert_eq!(got["status"], "granted");
+    assert_eq!(got["device"]["name"], ANDROID_BASE);
+    assert_eq!(got["holder"], "WS-A");
+    assert_eq!(got["switched_from"], "ios");
+    assert!(
+        got["hint"].as_str().unwrap().contains("build_and_run"),
+        "{got}"
+    );
+
+    let (responses, waited) = waiting.join().unwrap();
+    let got = result_json(&responses, 2);
+    println!("B device_acquire (long poll, {waited:?}) -> {got}");
+    assert_eq!(got["status"], "granted");
+    assert_eq!(
+        (&got["holder"], &got["device"]["name"]),
+        (&"WS-B".into(), &"X".into())
+    );
+    assert!(
+        waited < Duration::from_secs(5),
+        "granted on the switch: {waited:?}"
+    );
+
+    // Asking for the attached platform switches nothing; back to iOS takes A's place in line.
+    let got = result_json(
+        &once(&sa, call(4, "device_acquire", r#"{"platform":"android"}"#)),
+        4,
+    );
+    assert_eq!(got["switched_from"], Value::Null);
+    let got = result_json(
+        &once(&sa, call(5, "device_acquire", r#"{"platform":"ios"}"#)),
+        5,
+    );
+    println!("A device_acquire ios -> {got}");
+    assert_eq!(got["status"], "queued");
+    assert_eq!(got["switched_from"], "android");
+    assert_eq!(got["holder"], "WS-B");
+    let parked = pool.lock().unwrap().parked(a.id).cloned();
+    assert_eq!(
+        parked,
+        Some(Assignment::new(Platform::Android, ANDROID_BASE))
     );
 }

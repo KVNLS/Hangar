@@ -608,6 +608,30 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   parsing); `mcp_bridge` test with two agents on one device through the bridge binary (A granted, B queued
   at position 0, B granted on A's release). Not yet seen on screen (PLAN M10 checklist).
 
+## Platform switch (2026-10-17, branch `platform-switch`)
+- A workspace has one platform attached at a time. `device_acquire { platform }` gives up the current device
+  (the next workspace in line gets it) and gets the other platform's device the usual way: its own, shared at
+  the cap, or queued. The answer carries `switched_from` and a hint to run `build_and_run`. Refused while a call
+  or build still uses the device, and when the repo does not build for that platform.
+- `device_info` lists the `platforms` the workspace may switch to (all of them when no stack is detected).
+- The other platform's assignment is parked (`device_parked:<ws>`). Its own device is shut down once nothing
+  uses it (at the switch, when the workspace sharing it leaves, when a boot started for it finishes; a boot
+  still waiting for a slot stops instead of evicting another device) but kept, so switching back reuses the
+  iOS simulator copy with no "creating" stage. Orphan cleanup covers parked copies.
+- Switching back while the old device shuts down: the call's open waits and reopens it once it is down.
+- The device panel picker switches through the queue for the other platform, with the chosen base, in one
+  pool call; the agent is told "the user switched this workspace to …" with its next device call. Switches
+  are decided when they apply, so two made together apply in turn; a call whose device moved re-reads the
+  platform. Device-pool settings are written through one ordered queue.
+- Replacing a parked or active own device with another base is refused while another workspace's call uses it;
+  a workspace that only reserves it is revoked, its waiters fail.
+- Known gap: `HANGAR_DEVICE_PLATFORM`, `HANGAR_DEVICE_ID` and `ANDROID_SERIAL` are set when the agent starts,
+  so they name the old device after a switch. `device_acquire` and `device_info` give the real one.
+- Checked: unit tests in `usecases` (`device_pool/tests/sharing/switch.rs`, `switch/parked.rs`), `mcp` and
+  the app's switch target resolution; the `mcp_bridge` test
+  switches A from iOS to Android while B waits on iOS, and B gets the iOS device. Not yet seen on screen
+  (PLAN M10 checklist).
+
 ## Resolved questions (moved from PLAN.md, 2026-10-14)
 2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (docs/notes/spike-b-notes.md).
    Keep `sim_probe` to re-check each Xcode release.
