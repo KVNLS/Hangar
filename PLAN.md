@@ -150,7 +150,10 @@ Unit-tested or protocol-checked only. Each needs one pass through the dev hooks 
   of the same key (keys are per platform, so a platform switch cannot); after a platform switch
   `HANGAR_DEVICE_PLATFORM`, `HANGAR_DEVICE_ID` and `ANDROID_SERIAL` still name the old device (the agent's
   environment cannot change; `device_acquire` and `device_info` give the real one);
-  `mcp_host.rs` is near the 800-line split threshold (773 lines).
+  workspace deletion removes its `device:`/`device_parked:` settings outside the pool's ordered save queue,
+  and archiving a workspace whose assignment was not loaded yet leaves a short window in which the monitor can
+  shut its parked device down without the archive waiting for it (the clone deletion may then overlap it);
+  `mcp_host.rs` is near the 800-line split threshold (779 lines).
 - **Run loop:** no parsed build progress or crash overlay; `expo run` prebuild
   output lands in the worktree; Expo picks Android devices by AVD name (ambiguous with pool instances);
   React Native CLI unit-tested only; the JDK/Gradle setup is the user's.
