@@ -461,10 +461,7 @@ impl DevicePanel {
                 .tooltip("Make it this workspace's device")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let key = key.clone();
-                    this.pool.update(cx, |pool, cx| {
-                        pool.assign(ws, key.platform, key.id, cx);
-                    });
-                    this.start_workspace_device(ws, cx);
+                    this.choose_device(ws, key, true, cx);
                 }))
         });
         Some(
