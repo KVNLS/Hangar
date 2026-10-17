@@ -5,12 +5,16 @@
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use hangar_app::mcp_host::{McpRequest, ScreenFrame, Timeouts, start_with};
+use hangar_app::mcp_host::{McpRequest, ScreenFrame, Timeouts, acquisition, released, start_with};
 use hangar_core::WorkspaceId;
+use hangar_core::device::capacity::{DeviceCost, HostResources, Pressure};
+use hangar_core::device::{DeviceInfo, Platform};
 use hangar_devices::Frame;
+use hangar_usecases::device_pool::policy::{Assignment, Limit};
+use hangar_usecases::device_pool::{PoolMachine, Saved, Session, WorkspaceRef};
 use serde_json::Value;
 
 fn fake_gpui_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>) {
@@ -203,4 +207,174 @@ fn orchestration_tools_follow_the_setting() {
     let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
     println!("on -> workspaces_list {text}");
     assert_eq!(text["workspaces"][0]["diff"]["added"], 3);
+}
+
+/// Never opened: reservations alone do not boot a device.
+#[derive(Clone)]
+struct NoSession(DeviceInfo);
+
+impl Session for NoSession {
+    fn info(&self) -> &DeviceInfo {
+        &self.0
+    }
+
+    fn backend(&self) -> &'static str {
+        "none"
+    }
+}
+
+type Pool = Arc<Mutex<PoolMachine<NoSession>>>;
+
+/// A pool with one simulator slot, shared by `workspaces` (single-device mode).
+fn shared_pool(workspaces: &[WorkspaceRef]) -> Pool {
+    let mut m = PoolMachine::new(DeviceCost::android(2048, 2), None);
+    for w in workspaces {
+        m.track(w.clone());
+    }
+    let saved = Saved {
+        limit: Some(Limit::Manual(1)),
+        assignments: workspaces
+            .iter()
+            .map(|w| (w.id, Assignment::new(Platform::Ios, "X")))
+            .collect(),
+        ..Saved::default()
+    };
+    m.loaded(Ok(saved), None);
+    let host = HostResources {
+        total_ram_mb: 48 * 1024,
+        available_ram_mb: 40_000,
+        perf_cores: 6,
+        efficiency_cores: 12,
+        pressure: Pressure::Normal,
+    };
+    m.host_detected(Ok(host), DeviceCost::android(2048, 2), Instant::now());
+    m.take_commands();
+    Arc::new(Mutex::new(m))
+}
+
+/// Answers `device_acquire` and `device_release` as the app does
+/// (`shell/device_api/sharing.rs`), on a real pool machine: reserve, then poll for the turn
+/// until the wait ends.
+fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool: Pool) {
+    std::thread::spawn(move || {
+        while let Some(req) = rx.blocking_recv() {
+            match req {
+                McpRequest::Acquire { ws, wait, reply } => {
+                    let pool = Arc::clone(&pool);
+                    std::thread::spawn(move || {
+                        let deadline = Instant::now() + wait;
+                        {
+                            let mut m = pool.lock().unwrap();
+                            let now = Instant::now();
+                            m.touch(ws, now);
+                            if m.sharing(ws, now).is_none_or(|s| s.position.is_none()) {
+                                m.reserve(ws, now).unwrap();
+                            }
+                            m.take_commands();
+                        }
+                        loop {
+                            let sharing = {
+                                let mut m = pool.lock().unwrap();
+                                m.touch(ws, Instant::now());
+                                m.sharing(ws, Instant::now()).unwrap()
+                            };
+                            if let Some(answer) =
+                                acquisition(&sharing, ws, Instant::now() >= deadline)
+                            {
+                                let _ = reply.send(Ok(answer));
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    });
+                }
+                McpRequest::Release { ws, reply } => {
+                    let mut m = pool.lock().unwrap();
+                    let now = Instant::now();
+                    let sharing = m.sharing(ws, now);
+                    let had_waiters = m.release_reservation(ws, now);
+                    m.take_commands();
+                    let _ = reply.send(Ok(released(sharing.as_ref(), ws, had_waiters)));
+                }
+                other => drop(other),
+            }
+        }
+    });
+}
+
+fn call(id: u64, tool: &str, arguments: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{tool}","arguments":{arguments}}}}}"#
+    )
+}
+
+/// The JSON text of a successful tool result.
+fn result_json(responses: &[Value], id: u64) -> Value {
+    let result = &by_id(responses, id)["result"];
+    assert_eq!(result["isError"], false, "{result}");
+    serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn two_agents_take_turns_on_a_shared_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("hangar.sock");
+    let timeouts = Timeouts {
+        call: Duration::from_secs(5),
+        ..Timeouts::default()
+    };
+    let (handle, rx) = start_with(&socket, timeouts).unwrap();
+    let workspace = |slug: &str| WorkspaceRef {
+        id: WorkspaceId::new(),
+        name: slug.to_uppercase(),
+        project: "app".into(),
+        slug: slug.into(),
+        root: dir.path().join(slug),
+    };
+    let (a, b) = (workspace("ws-a"), workspace("ws-b"));
+    fake_pool_side(rx, shared_pool(&[a.clone(), b.clone()]));
+    let (sa, sb) = (handle.register(a.id), handle.register(b.id));
+    let once = |session: &str, line: String| {
+        let (responses, stderr, ok) = bridge(&socket, session, &format!("{line}\n"));
+        assert!(ok, "bridge failed: {stderr}");
+        responses
+    };
+
+    let got = result_json(&once(&sa, call(1, "device_acquire", "{}")), 1);
+    println!("A device_acquire -> {got}");
+    assert_eq!(got["status"], "granted");
+    assert_eq!(got["holder"], "WS-A");
+
+    let got = result_json(&once(&sb, call(2, "device_acquire", "{}")), 2);
+    println!("B device_acquire -> {got}");
+    assert_eq!(got["status"], "queued");
+    assert_eq!(got["position"], 0);
+    assert_eq!(got["holder"], "WS-A");
+    assert_eq!(got["shared_with"], serde_json::json!(["WS-A"]));
+
+    let waiting = std::thread::spawn({
+        let (socket, sb) = (socket.clone(), sb.clone());
+        move || {
+            let started = Instant::now();
+            let line = call(3, "device_acquire", r#"{"wait_s":10}"#);
+            let (responses, stderr, ok) = bridge(&socket, &sb, &format!("{line}\n"));
+            assert!(ok, "bridge failed: {stderr}");
+            (responses, started.elapsed())
+        }
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    let released = once(&sa, call(4, "device_release", "{}"));
+    let text = &by_id(&released, 4)["result"]["content"][0]["text"];
+    println!("A device_release -> {text}");
+    assert_eq!(text, "Device released; WS-B is next in line.");
+
+    let (responses, waited) = waiting.join().unwrap();
+    let got = result_json(&responses, 3);
+    println!("B device_acquire (long poll, {waited:?}) -> {got}");
+    assert_eq!(got["status"], "granted");
+    assert_eq!(got["holder"], "WS-B");
+    assert!(
+        waited < Duration::from_secs(5),
+        "granted on release: {waited:?}"
+    );
 }

@@ -10,8 +10,10 @@ mod assignments;
 pub mod backend;
 mod boot;
 mod commands;
+pub mod copy;
 mod leases;
 pub mod orphans;
+mod sharing;
 mod shutdown;
 mod status;
 
@@ -33,7 +35,8 @@ use crate::{adapters, setting_keys};
 use policy::{Assignment, Limit};
 
 pub use hangar_usecases::device_pool::{
-    DeviceRow, NoticeLevel, OpenError, PoolKey, WorkspaceRef, policy,
+    DeviceRow, Member, NoticeLevel, OpenError, PoolKey, RESERVATION_IDLE, Sharing, WorkspaceRef,
+    policy,
 };
 
 /// What the device panel shows for a workspace.
@@ -52,15 +55,42 @@ impl Session for DeviceSession {
 pub enum PoolEvent {
     /// Something the user should know (a refused boot, an automatic shutdown).
     Notice(NoticeLevel, String),
+    /// Something the agent of `ws` should be told with its next device tool result (its
+    /// reservation is about to end or ended, another workspace's app is on the device).
+    AgentNotice { ws: WorkspaceId, message: String },
 }
 
 type Opened = Result<DeviceSession, OpenError>;
-type LeaseReply = oneshot::Sender<anyhow::Result<Lease>>;
+type LeaseReply = oneshot::Sender<anyhow::Result<Granted>>;
 
-/// Held while a run or tool call uses a device; dropping it releases the device.
+/// A call's lease, handed over by the machine.
+struct Granted {
+    lease: Lease,
+    /// Another workspace installed the app now on the device (its name).
+    stale_app: Option<String>,
+}
+
+/// The call waited in line longer than its budget ([`DevicePool::acquire`]). Its place is kept:
+/// once its turn comes the workspace holds the device as a reservation, and its next call is
+/// granted at once.
+#[derive(Debug)]
+pub struct StillQueued;
+
+impl std::fmt::Display for StillQueued {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("still waiting for the device")
+    }
+}
+
+impl std::error::Error for StillQueued {}
+
+/// Held while a run or tool call uses a device; dropping it releases the call's hold (the
+/// workspace keeps the device as a reservation until it expires).
 pub struct Lease {
     key: PoolKey,
     holder: WorkspaceId,
+    /// A call's hold, released on drop; `false` once the machine took it back.
+    hold: bool,
     release: mpsc::UnboundedSender<(PoolKey, WorkspaceId)>,
 }
 
@@ -68,11 +98,19 @@ impl Lease {
     pub fn key(&self) -> &PoolKey {
         &self.key
     }
+
+    /// Drops the lease without releasing it: the machine took the hold back already
+    /// ([`OpenError::Moved`], `boot_refused`).
+    fn disarm(mut self) {
+        self.hold = false;
+    }
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        let _ = self.release.send((self.key.clone(), self.holder));
+        if self.hold {
+            let _ = self.release.send((self.key.clone(), self.holder));
+        }
     }
 }
 
@@ -81,6 +119,7 @@ impl std::fmt::Debug for Lease {
         f.debug_struct("Lease")
             .field("key", &self.key)
             .field("holder", &self.holder)
+            .field("hold", &self.hold)
             .finish()
     }
 }
@@ -93,8 +132,13 @@ pub struct Acquired {
     pub platform: Platform,
     /// AVD id on Android (Expo picks emulators by name).
     pub avd: Option<String>,
-    /// The workspace's own device could not boot; this is another device of its platform.
+    /// Not the workspace's own device: another workspace's, shared at the cap or because its
+    /// own could not boot.
     pub borrowed: bool,
+    /// The other workspaces using the device now.
+    pub shared_with: Vec<String>,
+    /// Another workspace installed the app now on the device (its name).
+    pub stale_app: Option<String>,
 }
 
 pub struct DevicePool {
@@ -105,6 +149,9 @@ pub struct DevicePool {
     stages: mpsc::UnboundedSender<(PoolKey, u64, String)>,
     open_waiters: HashMap<Token, oneshot::Sender<Opened>>,
     lease_waiters: HashMap<Token, LeaseReply>,
+    /// The device and installer each workspace was last told about, so the agent hears of
+    /// another workspace's app once rather than on every call.
+    stale_told: HashMap<WorkspaceId, (PoolKey, String)>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -148,6 +195,7 @@ impl DevicePool {
             stages,
             open_waiters: HashMap::new(),
             lease_waiters: HashMap::new(),
+            stale_told: HashMap::new(),
             _tasks: vec![releases, stage_updates, monitor],
         }
     }
@@ -218,7 +266,7 @@ impl DevicePool {
     }
 
     pub fn set_limit(&mut self, limit: Limit, cx: &mut Context<Self>) {
-        self.machine.set_limit(limit);
+        self.machine.set_limit(limit, std::time::Instant::now());
         self.run(cx);
         cx.notify();
     }

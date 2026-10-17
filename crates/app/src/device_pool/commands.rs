@@ -5,14 +5,15 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use gpui_kit::*;
+use hangar_core::WorkspaceId;
 use hangar_core::ports::PortError;
-use hangar_usecases::device_pool::{Command, MONITOR_TICK, Save};
+use hangar_usecases::device_pool::{Command, MAX_HOLD, MONITOR_TICK, Save};
 use hangar_usecases::settings::SettingsExt as _;
 
 use crate::device_panel::Platform;
 use crate::{adapters, setting_keys};
 
-use super::{DevicePool, Lease, PoolEvent, backend};
+use super::{DevicePool, Granted, NoticeLevel, PoolEvent, PoolKey, backend, sharing};
 
 /// A port error with its sources, as the pool shows and logs it.
 pub(super) fn chain(err: PortError) -> String {
@@ -46,15 +47,21 @@ impl DevicePool {
                     let _ = waiter.send(result);
                 }
             }
-            Command::GrantLease { token, key, holder } => {
-                let lease = Lease {
-                    key,
-                    holder,
-                    release: self.release.clone(),
+            Command::GrantLease {
+                token,
+                key,
+                holder,
+                hold,
+                stale_app,
+            } => {
+                let granted = Granted {
+                    lease: self.lease(key, holder, hold),
+                    stale_app,
                 };
-                // A waiter that gave up returns the lease, which releases it again.
+                // A waiter that gave up returns the lease, which releases its hold: the
+                // workspace keeps the device as a reservation.
                 if let Some(waiter) = self.lease_waiters.remove(&token) {
-                    let _ = waiter.send(Ok(lease));
+                    let _ = waiter.send(Ok(granted));
                 }
             }
             Command::FailLease { token, message } => {
@@ -62,11 +69,70 @@ impl DevicePool {
                     let _ = waiter.send(Err(anyhow!(message)));
                 }
             }
+            Command::WarnHolder {
+                holder,
+                key,
+                ends_in,
+            } => {
+                let device = self.device_label(&key);
+                let name = self.workspace_label(holder);
+                cx.emit(PoolEvent::Notice(
+                    NoticeLevel::Warning,
+                    format!(
+                        "Other workspaces have waited {} minutes for {device}, which {name} \
+                         keeps: it goes to the next one in {} s, once no call of {name} is running.",
+                        MAX_HOLD.as_secs() / 60,
+                        ends_in.as_secs()
+                    ),
+                ));
+                let waiting = self
+                    .machine
+                    .sharing(holder, Instant::now())
+                    .filter(|s| s.key == key)
+                    .map(|s| s.queue.into_iter().map(|m| m.name).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                cx.emit(PoolEvent::AgentNotice {
+                    ws: holder,
+                    message: sharing::warn_notice(&device, &waiting, ends_in),
+                });
+            }
+            Command::Revoked { holder, key } => {
+                let device = self.device_label(&key);
+                let name = self.workspace_label(holder);
+                cx.emit(PoolEvent::Notice(
+                    NoticeLevel::Info,
+                    format!("{name} no longer holds {device}: it went to the next workspace."),
+                ));
+                let next = self
+                    .machine
+                    .rows()
+                    .into_iter()
+                    .find(|r| r.key == key)
+                    .and_then(|r| r.holder);
+                cx.emit(PoolEvent::AgentNotice {
+                    ws: holder,
+                    message: sharing::revoked_notice(&device, next.as_deref()),
+                });
+            }
             Command::Notice(level, message) => cx.emit(PoolEvent::Notice(level, message)),
             Command::Save(save) => self.save_setting(save, cx),
             Command::DetectHost { android_base } => self.detect_host(android_base, cx),
             Command::ScanRunning => self.scan_running(cx),
         }
+    }
+
+    fn device_label(&self, key: &PoolKey) -> String {
+        self.machine
+            .name_of(key)
+            .unwrap_or("a shared device")
+            .to_owned()
+    }
+
+    fn workspace_label(&self, ws: WorkspaceId) -> String {
+        self.machine
+            .workspace_name(ws)
+            .unwrap_or("A workspace")
+            .to_owned()
     }
 
     fn save_setting(&self, save: Save, cx: &mut Context<Self>) {
@@ -105,7 +171,7 @@ impl DevicePool {
                 .await;
             let _ = this.update(cx, |pool, cx| {
                 pool.machine
-                    .host_detected(host.map_err(|e| e.to_string()), cost);
+                    .host_detected(host.map_err(|e| e.to_string()), cost, Instant::now());
                 pool.run(cx);
                 cx.notify();
             });

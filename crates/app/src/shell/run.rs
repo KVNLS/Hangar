@@ -29,10 +29,12 @@ const LAUNCH_SCAN_LINES: usize = 2_000;
 /// Lines of build output quoted when a build fails.
 const FAILURE_LINES: usize = 25;
 
-/// Who waits for a run to end, and the device lease it holds until then.
+/// Who waits for a run to be launched, and the device lease it holds until then: the build and
+/// the install keep the device, the running app does not (the workspace keeps an ordinary
+/// reservation that expires idle, so other agents get the device while the app runs).
 struct Completion {
     done: oneshot::Sender<anyhow::Result<String>>,
-    _lease: Lease,
+    lease: Lease,
 }
 
 /// Which terminal a pane shows for its workspace.

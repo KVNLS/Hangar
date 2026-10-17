@@ -2,8 +2,9 @@ use serde_json::{Value, json};
 
 use super::{
     BUTTONS, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES, KEYS, LEVELS,
-    MAX_CHOICE_CHARS, MAX_CHOICES, MAX_LOG_LINES, MAX_NAME_CHARS, MAX_PROMPT_CHARS,
-    MAX_QUESTION_CHARS, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES, MAX_TYPE_TEXT_CHARS,
+    MAX_ACQUIRE_WAIT_S, MAX_CHOICE_CHARS, MAX_CHOICES, MAX_LOG_LINES, MAX_NAME_CHARS,
+    MAX_PROMPT_CHARS, MAX_QUESTION_CHARS, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES,
+    MAX_TYPE_TEXT_CHARS,
 };
 
 fn names<T>(options: &[(&str, T)]) -> Vec<Value> {
@@ -186,6 +187,32 @@ pub(super) fn device_definitions() -> Vec<Value> {
                 "required": ["app_id"],
                 "additionalProperties": false,
             },
+        }),
+        json!({
+            "name": "device_acquire",
+            "description": "Reserve this workspace's device for a sequence of calls, or keep your place in \
+                line when it is busy. Long-polls up to wait_s seconds. The result says granted or queued, \
+                with position, holder and estimated wait. The reservation ends on device_release or after \
+                idle_release_s seconds without a device call.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "wait_s": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_ACQUIRE_WAIT_S,
+                        "default": 0,
+                        "description": "Seconds to wait for the device before answering queued.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+        }),
+        json!({
+            "name": "device_release",
+            "description": "End the device reservation now so the next workspace in line gets the device \
+                (or leave the line, if you are still waiting for it). Call it when you are done verifying.",
+            "inputSchema": no_args,
         }),
     ]
 }

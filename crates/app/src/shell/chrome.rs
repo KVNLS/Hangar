@@ -325,7 +325,10 @@ impl HangarApp {
         // The focused workspace's run when it is busy or failed, else any run in progress.
         let focused_run = match focused {
             Some(id) if pool.is_waiting(id) => {
-                Some(("Waiting for the device".to_owned(), AgentState::Working))
+                let label = crate::device_pool::copy::waiting_label(
+                    pool.sharing(id).and_then(|s| s.position),
+                );
+                Some((label, AgentState::Working))
             }
             Some(id) => self
                 .live

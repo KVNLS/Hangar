@@ -73,7 +73,11 @@ fn pool(limit: Limit, assigned: &[(&WorkspaceRef, Assignment)]) -> Machine {
             Command::ScanRunning
         ]
     ));
-    m.host_detected(Ok(host(Pressure::Normal)), DeviceCost::android(2048, 2));
+    m.host_detected(
+        Ok(host(Pressure::Normal)),
+        DeviceCost::android(2048, 2),
+        Instant::now(),
+    );
     assert!(m.take_commands().is_empty(), "48 GB needs no alert");
     m
 }
@@ -395,7 +399,7 @@ fn leases_queue_hand_over_and_time_out() {
         panic!("c should wait");
     };
     assert_eq!(m.held_by_other(b.id).map(|(ws, _)| ws), Some(a.id));
-    m.release_lease(&x, a.id);
+    m.release_lease(&x, a.id, now);
     let commands = m.take_commands();
     assert!(matches!(
         commands.as_slice(),
@@ -421,7 +425,7 @@ fn archiving_cancels_the_workspace_waiters() {
     let Ok(LeaseStart::Queued(token)) = m.request_lease(&x, b.id, now) else {
         panic!("b should wait");
     };
-    assert!(m.archive(b.id));
+    assert!(m.archive(b.id, now));
     assert!(matches!(
         m.take_commands().as_slice(),
         [Command::FailLease { token: t, message }] if *t == token && message == "the workspace was closed"
@@ -533,7 +537,9 @@ fn a_new_base_replaces_the_own_device() {
     let key = PoolKey::Own(w.id);
     let token = wait(m.open(&key, now));
     let probe = step(&m.take_commands());
-    let replaced = m.assign(w.id, Platform::Ios, "NEW".into()).unwrap();
+    let replaced = m
+        .assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+        .unwrap();
     assert!(replaced.shutdown.is_none(), "not running yet");
     assert_eq!(replaced.clone.as_deref(), Some("CLONE"));
     let commands = m.take_commands();
@@ -549,7 +555,10 @@ fn a_new_base_replaces_the_own_device() {
     // The old bring-up's results land nowhere.
     m.step_done(&key, probe.attempt, StepDone::Probed(Ok(None)), now);
     assert!(m.take_commands().is_empty());
-    assert!(m.assign(w.id, Platform::Ios, "NEW".into()).is_none());
+    assert!(
+        m.assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+            .is_none()
+    );
 }
 
 #[test]
@@ -603,7 +612,7 @@ fn lowering_the_limit_shuts_idle_extras_down() {
         );
         m.take_commands();
     }
-    m.set_limit(Limit::Manual(1));
+    m.set_limit(Limit::Manual(1), Instant::now());
     let commands = m.take_commands();
     let shutdowns: Vec<&PoolKey> = commands
         .iter()
@@ -633,7 +642,7 @@ fn a_small_host_alerts_once() {
         total_ram_mb: 8 * 1024,
         ..host(Pressure::Normal)
     };
-    m.host_detected(Ok(small), DeviceCost::android(2048, 2));
+    m.host_detected(Ok(small), DeviceCost::android(2048, 2), Instant::now());
     let commands = m.take_commands();
     assert!(matches!(
         commands.as_slice(),
@@ -643,7 +652,7 @@ fn a_small_host_alerts_once() {
         ] if n.starts_with("This Mac (8 GB RAM, 6 P + 12 E cores) can run one iOS or Android")
     ));
     assert!(m.single_device(Platform::Ios));
-    m.host_detected(Ok(small), DeviceCost::android(2048, 2));
+    m.host_detected(Ok(small), DeviceCost::android(2048, 2), Instant::now());
     assert!(m.take_commands().is_empty());
 }
 
@@ -664,3 +673,5 @@ fn deleting_a_clone_needs_one() {
     assert_eq!(m.forget(a.id).map(|a| a.base), Some("B".into()));
     assert!(m.assignment(a.id).is_none());
 }
+
+mod sharing;

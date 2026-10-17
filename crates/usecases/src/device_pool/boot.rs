@@ -88,9 +88,35 @@ impl<S: Session> PoolMachine<S> {
             phase: Phase::Probing,
         });
         let target = device.target.clone();
-        self.touch(key);
+        self.mark_used(key);
         self.bring_up(key, token, Step::Probe(target));
         OpenStart::Wait(token)
+    }
+
+    /// Like [`Self::open`], for a call of `ws` granted the lease on `key`. A grant can be taken
+    /// back before its call opens (the bring-up it would join moved its waiters elsewhere,
+    /// [`Self::reroute`]): then [`OpenError::Moved`], so that the call asks again rather than
+    /// boot a device it does not hold.
+    pub fn open_held(&mut self, key: &PoolKey, ws: WorkspaceId, now: Instant) -> OpenStart<S> {
+        if self.holds(ws, key) {
+            return self.open(key, now);
+        }
+        let name = self.name_of(key).unwrap_or("the device").to_owned();
+        tracing::info!(target: "device_pool", workspace = %ws, ?key, "the call's lease was taken back before it opened");
+        OpenStart::Ready(Err(OpenError::Moved {
+            to: self.key_for(ws).unwrap_or_else(|| key.clone()),
+            message: format!(
+                "{name} was taken back from this call before it opened: request the device again"
+            ),
+        }))
+    }
+
+    /// Whether a call of `ws` holds the lease on `key`.
+    pub fn holds(&self, ws: WorkspaceId, key: &PoolKey) -> bool {
+        self.devices
+            .get(key)
+            .and_then(|d| d.leases.holding())
+            .is_some_and(|h| h.who == ws && h.holds > 0)
     }
 
     fn bring_up(&mut self, key: &PoolKey, attempt: u64, step: Step) {
@@ -205,7 +231,8 @@ impl<S: Session> PoolMachine<S> {
         );
     }
 
-    /// Takes a slot within the cap, shutting an idle device down or waiting for one.
+    /// Takes a slot within the cap, shutting an idle device down or waiting for one; while it
+    /// waits, those who wait for this device move to a compatible running one when there is.
     pub(super) fn claim(&mut self, key: &PoolKey, attempt: u64, now: Instant) {
         loop {
             let Some(Phase::Claiming { since, .. }) =
@@ -244,6 +271,9 @@ impl<S: Session> PoolMachine<S> {
                     }
                 }
                 Capacity::Full => {
+                    if self.reroute(key, now) {
+                        return;
+                    }
                     if now.duration_since(since) > LEASE_TIMEOUT {
                         self.waiting_slot.remove(key);
                         self.finish_open(

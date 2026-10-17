@@ -1,6 +1,7 @@
 use hangar_core::device::{Orientation, Platform};
 use serde_json::json;
 
+use super::Sharing;
 use crate::screenshot::Screenshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +76,7 @@ impl ToolOutput {
             "booted": status.booted,
             "screen": screen,
             "orientation": orientation,
+            "sharing": Self::sharing_json(status.sharing.as_ref()),
         });
         Self::text(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
     }
@@ -99,6 +101,7 @@ pub struct DeviceStatus {
     pub screen_pt: Option<(f64, f64)>,
     pub scale: Option<f64>,
     pub orientation: Option<Orientation>,
+    pub sharing: Option<Sharing>,
 }
 
 /// A failed tool call.

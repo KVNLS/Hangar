@@ -81,7 +81,7 @@ impl HangarApp {
             let started = run.build.is_some();
             self.live.runs.insert(id, run);
             if !started {
-                self.finish_run(id, Err(anyhow!("the dependency install did not start")));
+                self.finish_run(id, Err(anyhow!("the dependency install did not start")), cx);
             }
         } else {
             self.live.runs.insert(id, run);
@@ -146,7 +146,7 @@ impl HangarApp {
             run._watch = watch;
         }
         if !started {
-            self.finish_run(id, Err(anyhow!("the build did not start")));
+            self.finish_run(id, Err(anyhow!("the build did not start")), cx);
         }
         self.focus_terminal(window, cx);
         cx.notify();
@@ -179,7 +179,7 @@ impl HangarApp {
                                 r.stack, r.port, r.device
                             )
                         });
-                        this.finish_run(id, Ok(summary.unwrap_or_default()));
+                        this.finish_run(id, Ok(summary.unwrap_or_default()), cx);
                     }
                     launched
                         || this

@@ -1,6 +1,6 @@
 use super::*;
 use hangar_devices::Platform;
-use hangar_mcp::Content;
+use hangar_mcp::{Content, Sharing};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,7 +24,14 @@ fn orchestration_host(
     let sessions = Sessions::default();
     let on = Arc::new(AtomicBool::new(false));
     (
-        McpHost::new(sessions.clone(), tx, timeouts, Arc::clone(&on)).unwrap(),
+        McpHost::new(
+            sessions.clone(),
+            tx,
+            timeouts,
+            Arc::clone(&on),
+            Notices::default(),
+        )
+        .unwrap(),
         sessions,
         rx,
         on,
@@ -62,6 +69,7 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                         screen_pt: Some((402.0, 874.0)),
                         scale: Some(3.0),
                         orientation: None,
+                        sharing: None,
                     }));
                 }
                 McpRequest::Frame { reply, .. } => {
@@ -96,9 +104,34 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                     }));
                 }
                 McpRequest::Signal { signal, .. } => record(format!("signal {}", signal.as_str())),
+                McpRequest::Text { text, reply, .. } if text == "queued" => {
+                    record("text queued".into());
+                    // The app side gives up waiting in line after its budget.
+                    std::thread::spawn(move || {
+                        std::thread::sleep(short().acquire_budget());
+                        let message = hangar_mcp::queued_message(&shared(false));
+                        let _ = reply.send(Err(anyhow::Error::new(ToolError::Failed(message))));
+                    });
+                }
                 McpRequest::Text { text, reply, .. } => {
                     record(format!("text {text}"));
                     let _ = reply.send(Ok(()));
+                }
+                McpRequest::Acquire { wait, reply, .. } => {
+                    record(format!("acquire {wait:?}"));
+                    let granted = !wait.is_zero();
+                    let _ = reply.send(Ok(Acquisition {
+                        granted,
+                        sharing: shared(granted),
+                    }));
+                }
+                McpRequest::Release { reply, .. } => {
+                    record("release".into());
+                    let _ = reply.send(Ok(Released {
+                        had_waiters: true,
+                        next: Some("ws-b".into()),
+                        left_line: false,
+                    }));
                 }
                 McpRequest::Logs {
                     lines,
@@ -198,6 +231,25 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
             }
         }
     });
+}
+
+/// The fake device "iPhone" shared by ws-a and ws-b; `held` by the caller, else ws-a holds it
+/// and the caller is next.
+fn shared(held: bool) -> Sharing {
+    Sharing {
+        device_name: "iPhone".into(),
+        device_id: Some("UDID".into()),
+        holder: Some(if held { "ws-b" } else { "ws-a" }.into()),
+        you_hold: held,
+        position: (!held).then_some(0),
+        queue: if held { vec![] } else { vec!["ws-b".into()] },
+        shared_with: vec!["ws-a".into()],
+        reservation_left_s: Some(60),
+        estimated_wait_s: (!held).then_some(60),
+        idle_release_s: 90,
+        stale_app_from: None,
+        notice: None,
+    }
 }
 
 fn text(out: &ToolOutput) -> String {
@@ -624,4 +676,100 @@ fn an_unanswered_question_times_out() {
         )
         .unwrap_err();
     assert!(err.to_string().contains("ask_user timed out"), "{err}");
+}
+
+#[test]
+fn device_acquire_and_release_round_trip() {
+    let (host, sessions, rx) = host(short());
+    let log = Log::default();
+    fake_consumer(rx, log.clone());
+    let ws = WorkspaceId::new();
+    let s = sessions.register(ws);
+
+    let out = host.call(&s, Tool::DeviceAcquire { wait_s: 0 }).unwrap();
+    let queued: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
+    assert_eq!(queued["status"], "queued");
+    assert_eq!(queued["position"], 0);
+    assert_eq!(queued["holder"], "ws-a");
+
+    // The wait is passed on; the request may take that long on top of a call.
+    let out = host.call(&s, Tool::DeviceAcquire { wait_s: 3 }).unwrap();
+    let granted: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
+    assert_eq!(granted["status"], "granted");
+    assert_eq!(granted["idle_release_s"], 90);
+    assert_eq!(granted["notice"], serde_json::Value::Null);
+
+    let out = host.call(&s, Tool::DeviceRelease).unwrap();
+    assert_eq!(text(&out), "Device released; ws-b is next in line.");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![
+            format!("{ws} acquire 0ns"),
+            format!("{ws} acquire 3s"),
+            format!("{ws} release"),
+        ]
+    );
+}
+
+#[test]
+fn a_device_tool_queued_past_its_budget_reports_its_place() {
+    assert_eq!(
+        Timeouts::default().acquire_budget(),
+        Duration::from_secs(27)
+    );
+    assert!(short().acquire_budget() < short().call);
+    let (host, sessions, rx) = host(short());
+    fake_consumer(rx, Log::default());
+    let s = sessions.register(WorkspaceId::new());
+    let err = host.call(
+        &s,
+        Tool::TypeText {
+            text: "queued".into(),
+        },
+    );
+    let Err(ToolError::Failed(message)) = err else {
+        panic!("a queued call fails: {err:?}");
+    };
+    assert_eq!(message, hangar_mcp::queued_message(&shared(false)));
+    assert!(message.contains("1st in line"), "{message}");
+    assert!(!message.contains("timed out"));
+}
+
+#[test]
+fn pending_notices_ride_on_the_next_device_result() {
+    let (host, sessions, rx) = host(short());
+    fake_consumer(rx, Log::default());
+    let (ws, other) = (WorkspaceId::new(), WorkspaceId::new());
+    let s = sessions.register(ws);
+    let o = sessions.register(other);
+
+    host.notices.push(ws, "ws-c is waiting for iPhone".into());
+    let out = host.call(&o, Tool::Tap { x: 1.0, y: 1.0 }).unwrap();
+    assert!(!text(&out).contains("Notice"), "another workspace's notice");
+    host.call(&s, Tool::WorkspacesList).unwrap_err();
+    let out = host.call(&s, Tool::Tap { x: 1.0, y: 1.0 }).unwrap();
+    assert_eq!(
+        text(&out),
+        "Tapped at (1, 1).Notice: ws-c is waiting for iPhone"
+    );
+    let out = host.call(&s, Tool::Tap { x: 1.0, y: 1.0 }).unwrap();
+    assert_eq!(text(&out), "Tapped at (1, 1).", "delivered once");
+
+    host.notices.push(ws, "revoked".into());
+    let out = host.call(&s, Tool::DeviceAcquire { wait_s: 1 }).unwrap();
+    let got: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
+    assert_eq!(got["notice"], "revoked", "in the sharing state");
+    assert_eq!(out.content.len(), 1);
+
+    host.notices.push(ws, "stale".into());
+    let err = host.call(
+        &s,
+        Tool::Press(hangar_mcp::Press::Button(hangar_mcp::Button::Back)),
+    );
+    assert_eq!(
+        err,
+        Err(ToolError::Unsupported(
+            "Back on iOS\n\nNotice: stale".into()
+        ))
+    );
 }

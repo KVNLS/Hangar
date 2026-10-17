@@ -1,10 +1,17 @@
 //! The cap: saved settings, what the host can run, and the one-time single-device alert.
 
+use std::time::Instant;
+
+use hangar_core::WorkspaceId;
 use hangar_core::device::Platform;
 use hangar_core::device::capacity::{self, DeviceCost, HostResources, Pressure};
 
 use super::policy::{self, Limit};
 use super::{Command, NoticeLevel, PoolMachine, Save, Saved, Session};
+
+/// What a waiting call gets when single-device mode switches on or off.
+const MODE_CHANGED: &str =
+    "the number of devices at once changed while this call waited; call again";
 
 impl<S: Session> PoolMachine<S> {
     /// The saved settings were read (or not); `limit_override` (dev hook) replaces the saved
@@ -36,7 +43,13 @@ impl<S: Session> PoolMachine<S> {
     }
 
     /// What [`Command::DetectHost`] found.
-    pub fn host_detected(&mut self, host: Result<HostResources, String>, android_cost: DeviceCost) {
+    pub fn host_detected(
+        &mut self,
+        host: Result<HostResources, String>,
+        android_cost: DeviceCost,
+        now: Instant,
+    ) {
+        let before = self.modes();
         self.android_cost = android_cost;
         match host {
             Ok(host) => {
@@ -59,6 +72,7 @@ impl<S: Session> PoolMachine<S> {
             }
         }
         self.maybe_alert_single();
+        self.rebind_mode_changes(before, now);
         self.enforce_limit();
     }
 
@@ -147,14 +161,51 @@ impl<S: Session> PoolMachine<S> {
         self.limit_for(platform) == 1
     }
 
-    pub fn set_limit(&mut self, limit: Limit) {
+    pub fn set_limit(&mut self, limit: Limit, now: Instant) {
         if limit == self.limit {
             return;
         }
         tracing::info!(target: "device_pool", ?limit, "devices at once changed");
+        let before = self.modes();
         self.limit = limit;
         self.save(Save::Limit(limit));
+        self.rebind_mode_changes(before, now);
         self.enforce_limit();
+    }
+
+    /// Whether each platform runs one device at a time, in [`Platform::ALL`] order.
+    fn modes(&self) -> Vec<bool> {
+        Platform::ALL
+            .into_iter()
+            .map(|p| self.single_device(p))
+            .collect()
+    }
+
+    /// The workspaces of a platform that switched into or out of single-device mode use
+    /// another device now (the base device, or their own): they leave the one they use.
+    fn rebind_mode_changes(&mut self, before: Vec<bool>, now: Instant) {
+        let switched: Vec<Platform> = Platform::ALL
+            .into_iter()
+            .zip(before)
+            .filter(|(p, was)| self.single_device(*p) != *was)
+            .map(|(p, _)| p)
+            .collect();
+        if switched.is_empty() {
+            return;
+        }
+        let moved: Vec<WorkspaceId> = self
+            .bindings
+            .keys()
+            .filter(|ws| {
+                self.assignments
+                    .get(ws)
+                    .is_some_and(|a| switched.contains(&a.platform))
+            })
+            .copied()
+            .collect();
+        for ws in moved {
+            self.unbind(ws, now, MODE_CHANGED);
+        }
     }
 
     /// Base device used for this platform's workspaces when the user picked none.

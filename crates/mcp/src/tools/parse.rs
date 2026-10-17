@@ -3,9 +3,9 @@ use serde_json::{Map, Value};
 use super::args::{Args, TOOL_NAMES, allowed_args, at_most, kind};
 use super::{
     BUTTONS, DEFAULT_LOG_LINES, DEFAULT_SWIPE_MS, DEFAULT_TRANSCRIPT_MESSAGES, KEYS, LEVELS,
-    MAX_CHOICE_CHARS, MAX_CHOICES, MAX_LOG_LINES, MAX_NAME_CHARS, MAX_PROMPT_CHARS,
-    MAX_QUESTION_CHARS, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES, MAX_TYPE_TEXT_CHARS, ParseError,
-    Press, Tool,
+    MAX_ACQUIRE_WAIT_S, MAX_CHOICE_CHARS, MAX_CHOICES, MAX_LOG_LINES, MAX_NAME_CHARS,
+    MAX_PROMPT_CHARS, MAX_QUESTION_CHARS, MAX_SWIPE_MS, MAX_TRANSCRIPT_MESSAGES,
+    MAX_TYPE_TEXT_CHARS, ParseError, Press, Tool,
 };
 
 impl Tool {
@@ -93,6 +93,13 @@ impl Tool {
                 }
                 Self::LaunchApp { app_id }
             }
+            "device_acquire" => Self::DeviceAcquire {
+                wait_s: a
+                    .integer("wait_s", 0, MAX_ACQUIRE_WAIT_S)
+                    .map_err(invalid)?
+                    .unwrap_or(0),
+            },
+            "device_release" => Self::DeviceRelease,
             "workspaces_list" => Self::WorkspacesList,
             "workspace_create" => {
                 let task = a.required_string("task").map_err(invalid)?;

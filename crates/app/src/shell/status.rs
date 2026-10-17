@@ -179,6 +179,14 @@ impl HangarApp {
         })
     }
 
+    /// "waiting for device (2nd)" while the workspace waits for its device.
+    pub(super) fn device_wait_label(&self, id: WorkspaceId, cx: &App) -> Option<String> {
+        let pool = self.devices.pool.read(cx);
+        pool.is_waiting(id).then(|| {
+            crate::device_pool::copy::waiting_label(pool.sharing(id).and_then(|s| s.position))
+        })
+    }
+
     pub(super) fn agent_state(&self, id: WorkspaceId, cx: &App) -> AgentState {
         if self.queued_ahead(id).is_some() {
             return AgentState::Idle;

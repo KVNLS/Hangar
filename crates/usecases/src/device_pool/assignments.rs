@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use hangar_core::WorkspaceId;
 use hangar_core::device::{DeviceKey, Platform, Target, clone_name};
@@ -9,6 +10,10 @@ use hangar_core::device::{DeviceKey, Platform, Target, clone_name};
 use super::policy::{Assignment, LeaseQueue};
 use super::shutdown::Replaced;
 use super::{PoolDevice, PoolKey, PoolMachine, Save, Session, State, WorkspaceRef};
+
+/// What a waiting call gets when its workspace is given another device.
+const REASSIGNED: &str =
+    "this workspace was given another device while this call waited; call again";
 
 impl<S: Session> PoolMachine<S> {
     /// Records the workspace (name, worktree) for later calls that only have its id.
@@ -25,6 +30,11 @@ impl<S: Session> PoolMachine<S> {
         self.last_target.as_ref()
     }
 
+    /// The name of a tracked workspace.
+    pub fn workspace_name(&self, ws: WorkspaceId) -> Option<&str> {
+        self.workspaces.get(&ws).map(|w| w.name.as_str())
+    }
+
     /// The worktree of a tracked workspace.
     pub fn workspace_root(&self, ws: WorkspaceId) -> Option<PathBuf> {
         self.workspaces.get(&ws).map(|w| w.root.clone())
@@ -37,12 +47,14 @@ impl<S: Session> PoolMachine<S> {
 
     /// Assigns a platform and base device to a workspace (New workspace sheet, device panel).
     /// A different base replaces the workspace's own device: it is shut down and, when it is a
-    /// simulator the pool created, deleted (returned for the caller to carry out).
+    /// simulator the pool created, deleted (returned for the caller to carry out). The
+    /// workspace leaves the device it used ([`Self::unbind`]).
     pub fn assign(
         &mut self,
         ws: WorkspaceId,
         platform: Platform,
         base: String,
+        now: Instant,
     ) -> Option<Replaced<S>> {
         let previous = self.assignments.get(&ws).cloned();
         if previous
@@ -52,6 +64,7 @@ impl<S: Session> PoolMachine<S> {
             return None;
         }
         tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), %base, "device assigned");
+        self.unbind(ws, now, REASSIGNED);
         let assignment = Assignment::new(platform, base.clone());
         self.assignments.insert(ws, assignment.clone());
         self.save(Save::Assignment(ws, assignment));
@@ -95,12 +108,17 @@ impl<S: Session> PoolMachine<S> {
         self.devices.get(key).map(|d| d.name.as_str())
     }
 
-    /// Which device the workspace uses now.
+    /// Which device the workspace uses now: the one it is bound to (possibly another
+    /// workspace's), else its own.
     pub fn key_for(&self, ws: WorkspaceId) -> Option<PoolKey> {
+        if let Some(key) = self.bindings.get(&ws) {
+            return Some(key.clone());
+        }
         let a = self.assignments.get(&ws)?;
         Some(self.key_of(ws, a))
     }
 
+    /// The workspace's own device given its assignment (the base device in single-device mode).
     pub fn key_of(&self, ws: WorkspaceId, a: &Assignment) -> PoolKey {
         if self.single_device(a.platform) {
             PoolKey::Base(DeviceKey {
@@ -163,10 +181,11 @@ impl<S: Session> PoolMachine<S> {
             leases: LeaseQueue::default(),
             error: None,
             conflict: None,
+            installed_by: None,
         })
     }
 
-    pub(super) fn touch(&mut self, key: &PoolKey) {
+    pub(super) fn mark_used(&mut self, key: &PoolKey) {
         self.tick += 1;
         let tick = self.tick;
         if let Some(d) = self.devices.get_mut(key) {
@@ -190,7 +209,7 @@ impl<S: Session> PoolMachine<S> {
 
     fn refocus(&mut self) {
         if let Some(key) = self.focused.and_then(|ws| self.key_for(ws)) {
-            self.touch(&key);
+            self.mark_used(&key);
         }
     }
 

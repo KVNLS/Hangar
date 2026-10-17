@@ -4,8 +4,9 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::*;
+use hangar_core::WorkspaceId;
 use hangar_core::device::Conflict;
-use hangar_usecases::device_pool::{BootFailed, BringUp, OpenStart, Step, StepDone};
+use hangar_usecases::device_pool::{BootFailed, BringUp, DeviceStatus, OpenStart, Step, StepDone};
 use tokio::sync::oneshot;
 
 use crate::adapters;
@@ -18,16 +19,29 @@ fn stopped() -> OpenError {
 }
 
 impl DevicePool {
-    /// Opens the device `key` (booting it if needed), or waits for the boot in progress.
-    pub(super) async fn open(this: WeakEntity<Self>, key: PoolKey, cx: &mut AsyncApp) -> Opened {
+    /// Opens the device `key` (booting it if needed), or waits for the boot in progress. A call
+    /// of `held_by` holding its lease gets [`OpenError::Moved`] once the lease was taken back.
+    /// Past `deadline` the wait ends with [`OpenError::Failed`]; the bring-up goes on.
+    pub(super) async fn open(
+        this: WeakEntity<Self>,
+        key: PoolKey,
+        held_by: Option<WorkspaceId>,
+        deadline: Option<Instant>,
+        cx: &mut AsyncApp,
+    ) -> Opened {
         let started = this
             .update(cx, |pool, cx| {
-                let started = match pool.machine.open(&key, Instant::now()) {
+                let now = Instant::now();
+                let start = match held_by {
+                    Some(ws) => pool.machine.open_held(&key, ws, now),
+                    None => pool.machine.open(&key, now),
+                };
+                let started = match start {
                     OpenStart::Ready(result) => Ok(result),
                     OpenStart::Wait(token) => {
                         let (tx, rx) = oneshot::channel();
                         pool.open_waiters.insert(token, tx);
-                        Err(rx)
+                        Err((token, rx))
                     }
                 };
                 pool.run(cx);
@@ -37,7 +51,30 @@ impl DevicePool {
             .map_err(|_| stopped())?;
         match started {
             Ok(result) => result,
-            Err(rx) => rx.await.unwrap_or_else(|_| Err(stopped())),
+            Err((_, rx)) if deadline.is_none() => rx.await.unwrap_or_else(|_| Err(stopped())),
+            Err((token, rx)) => {
+                let left = deadline.map_or(Duration::ZERO, |d| {
+                    d.saturating_duration_since(Instant::now())
+                });
+                match rx.with_timeout(left, cx.background_executor()).await {
+                    Ok(reply) => reply.unwrap_or_else(|_| Err(stopped())),
+                    Err(_) => this
+                        .update(cx, |pool, _| {
+                            pool.open_waiters.remove(&token);
+                            let device = match held_by
+                                .map(|ws| pool.machine.status(ws, Instant::now()))
+                            {
+                                Some(DeviceStatus::Opening { name, status }) => {
+                                    format!("{name} is still starting ({status})")
+                                }
+                                _ => "The device is still starting".to_owned(),
+                            };
+                            tracing::info!(target: "device_pool", ?key, "call budget spent while the device opens");
+                            Err(OpenError::Failed(format!("{device}; try again shortly")))
+                        })
+                        .unwrap_or_else(|_| Err(stopped())),
+                }
+            }
         }
     }
 
