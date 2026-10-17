@@ -278,3 +278,34 @@ fn a_repeated_name_gets_a_number() {
         .collect();
     assert_eq!(names, ["dev", "dev 2", "dev 3"]);
 }
+
+#[test]
+fn delete_summary_description() {
+    let clean = DeleteSummary {
+        exists: true,
+        ahead: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(
+        clean.describe("main"),
+        [
+            "No uncommitted or untracked files.",
+            "No commits ahead of main."
+        ]
+    );
+    let dirty = DeleteSummary {
+        exists: true,
+        uncommitted: 2,
+        untracked: 1,
+        ahead: Some(3),
+        submodules: 0,
+    };
+    assert_eq!(
+        dirty.describe("main"),
+        [
+            "2 uncommitted and 1 untracked file(s) will be lost.",
+            "3 commit(s) ahead of main."
+        ]
+    );
+    assert_eq!(DeleteSummary::default().describe("main").len(), 1);
+}
