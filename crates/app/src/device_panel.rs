@@ -43,6 +43,8 @@ pub enum DevicePanelEvent {
     Logs(LogsSettings),
     /// "Take over" was pressed: whether the device was granted now, or why not.
     TookOver(Result<bool, String>),
+    /// Switching the workspace to the other platform failed.
+    SwitchFailed(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,9 +241,7 @@ impl DevicePanel {
                     return;
                 };
                 match this.workspace {
-                    Some(ws) => this.pool.update(cx, |pool, cx| {
-                        pool.assign(ws, key.platform, key.id, cx);
-                    }),
+                    Some(ws) => this.choose_device(ws, key, false, cx),
                     None => this.select_device(key, window, cx),
                 }
             },
@@ -367,6 +367,53 @@ impl DevicePanel {
         cx.notify();
     }
 
+    /// Makes `key` the workspace's device. A device of the other platform goes through the
+    /// pool's queue ([`DevicePool::switch_platform`]) before its base is set; `start` then boots it.
+    pub fn choose_device(
+        &mut self,
+        ws: WorkspaceId,
+        key: DeviceKey,
+        start: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.pool.read(cx).assignment(ws).map(|a| a.platform);
+        if !needs_switch(active, key.platform) {
+            self.pool
+                .update(cx, |pool, cx| pool.assign(ws, key.platform, key.id, cx));
+            if start {
+                self.start_workspace_device(ws, cx);
+            }
+            return;
+        }
+        let task = self
+            .pool
+            .update(cx, |pool, cx| pool.switch_platform(ws, key.platform, cx));
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if let Err(err) = result {
+                    cx.emit(DevicePanelEvent::SwitchFailed(format!("{err:#}")));
+                    return;
+                }
+                let attached = this
+                    .pool
+                    .read(cx)
+                    .assignment(ws)
+                    .filter(|a| a.platform == key.platform)
+                    .map(|a| a.base.clone());
+                if attached.is_some_and(|base| base != key.id) {
+                    this.pool
+                        .update(cx, |pool, cx| pool.assign(ws, key.platform, key.id, cx));
+                }
+                if start {
+                    this.start_workspace_device(ws, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Starts (boots if needed, then opens) the focused workspace's device.
     pub fn start_workspace_device(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) {
         let task = self.pool.update(cx, |pool, cx| pool.ensure(ws, cx));
@@ -473,9 +520,21 @@ fn input_status(result: &InputResult) -> InputStatus {
     }
 }
 
+/// Whether choosing a device of `chosen` platform switches the workspace's platform.
+fn needs_switch(active: Option<Platform>, chosen: Platform) -> bool {
+    active.is_some_and(|active| active != chosen)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DeviceState, DeviceStatus};
+    use super::{DeviceState, DeviceStatus, Platform, needs_switch};
+
+    #[test]
+    fn other_platform_switches() {
+        assert!(needs_switch(Some(Platform::Ios), Platform::Android));
+        assert!(!needs_switch(Some(Platform::Ios), Platform::Ios));
+        assert!(!needs_switch(None, Platform::Android));
+    }
 
     #[test]
     fn workspace_device_states() {
