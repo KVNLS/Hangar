@@ -431,3 +431,6 @@ fn share_rank<S>(d: &PoolDevice<S>) -> Option<u8> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;
