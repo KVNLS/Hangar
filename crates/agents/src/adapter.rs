@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
-use crate::path::{find_program, resolve_program};
+use crate::path::resolve_program;
 
 /// Called after each batch of agent output (ACP events; PTY output where the terminal is spawned).
 pub type UpdateHook = Arc<dyn Fn() + Send + Sync>;
@@ -57,8 +57,6 @@ pub struct Launch {
 pub trait AgentAdapter: Send + Sync {
     fn id(&self) -> &str;
     fn display_name(&self) -> &str;
-    /// Whether the program resolves on the current process `PATH`.
-    fn is_installed(&self) -> bool;
     /// Resolves the program and checks the directory; starts nothing.
     fn launch(&self, ctx: &SpawnContext) -> Result<Launch>;
 }
@@ -119,10 +117,6 @@ impl AgentAdapter for PtyAdapter {
 
     fn display_name(&self) -> &str {
         &self.display_name
-    }
-
-    fn is_installed(&self) -> bool {
-        find_program(&self.program, std::env::var_os("PATH").as_deref()).is_some()
     }
 
     fn launch(&self, ctx: &SpawnContext) -> Result<Launch> {
