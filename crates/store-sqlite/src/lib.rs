@@ -21,7 +21,7 @@ pub use migrations::SCHEMA_VERSION;
 use migrations::{migrate, user_version};
 
 #[cfg(test)]
-mod tests;
+mod fixtures;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -116,4 +116,82 @@ fn db_path_for(
         None => home?.join(".local/share"),
     };
     Some(data_home.join("hangar/hangar.db"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    use crate::fixtures::{project, store};
+
+    #[test]
+    fn store_is_shareable_across_threads() {
+        let store = Arc::new(store());
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                std::thread::spawn(move || {
+                    store
+                        .insert_project(&project(&format!("/repos/{i}")))
+                        .unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(store.list_projects().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn fresh_file_database_is_migrated_and_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/hangar.db");
+        let p = project("/repos/demo");
+        {
+            let store = Store::open(&path).unwrap();
+            assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+            store.insert_project(&p).unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(store.list_projects().unwrap(), vec![p]);
+        let mode: String = store
+            .conn()
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let fk: bool = store
+            .conn()
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert!(fk);
+    }
+
+    #[test]
+    fn db_path_resolution() {
+        let home = Some(PathBuf::from("/home/u"));
+        assert_eq!(
+            db_path_for(true, home.clone(), None),
+            Some(PathBuf::from(
+                "/home/u/Library/Application Support/Hangar/hangar.db"
+            ))
+        );
+        assert_eq!(
+            db_path_for(false, home.clone(), None),
+            Some(PathBuf::from("/home/u/.local/share/hangar/hangar.db"))
+        );
+        assert_eq!(
+            db_path_for(false, home.clone(), Some(PathBuf::from("/data"))),
+            Some(PathBuf::from("/data/hangar/hangar.db"))
+        );
+        assert_eq!(
+            db_path_for(false, home, Some(PathBuf::from("relative"))),
+            Some(PathBuf::from("/home/u/.local/share/hangar/hangar.db"))
+        );
+        assert_eq!(db_path_for(true, None, None), None);
+        assert!(default_db_path().is_some_and(|p| p.ends_with("hangar.db")));
+    }
 }

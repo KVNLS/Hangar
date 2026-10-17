@@ -210,3 +210,60 @@ pub(super) fn session_from_row(row: &Row<'_>) -> rusqlite::Result<Session> {
             .map(|(amount, currency)| Cost { amount, currency }),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use hangar_core::{AgentKind, Project, Session};
+
+    use crate::StoreError;
+    use crate::fixtures::{project, store, workspace};
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_paths_are_rejected() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let store = store();
+        let p = Project::new("Bad", OsStr::from_bytes(b"/repos/\xff"), "main");
+        assert!(matches!(
+            store.insert_project(&p),
+            Err(StoreError::NonUtf8Path(_))
+        ));
+    }
+
+    #[test]
+    fn unreadable_rows_are_skipped_not_fatal() {
+        let store = store();
+        let p = project("/repos/demo");
+        store.insert_project(&p).unwrap();
+        let good = workspace(p.id, "Good");
+        let bad = workspace(p.id, "Bad");
+        store.insert_workspace(&good).unwrap();
+        store.insert_workspace(&bad).unwrap();
+        let ok = Session::new(good.id, AgentKind::Shell);
+        let odd = Session::new(good.id, AgentKind::Shell);
+        store.insert_session(&ok).unwrap();
+        store.insert_session(&odd).unwrap();
+        {
+            let conn = store.conn();
+            conn.execute(
+                "UPDATE workspaces SET status = 'paused' WHERE id = ?1",
+                [bad.id.0.to_string()],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE sessions SET agent = 'from-a-newer-hangar' WHERE id = ?1",
+                [odd.id.0.to_string()],
+            )
+            .unwrap();
+        }
+        let workspaces = store.list_workspaces(p.id).unwrap();
+        assert_eq!(
+            workspaces.iter().map(|w| w.id).collect::<Vec<_>>(),
+            [good.id]
+        );
+        let sessions = store.list_sessions(good.id).unwrap();
+        assert_eq!(sessions.iter().map(|s| s.id).collect::<Vec<_>>(), [ok.id]);
+    }
+}
