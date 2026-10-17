@@ -8,7 +8,7 @@ use std::process::Command;
 
 use hangar_app::agents;
 use hangar_app::ops::{
-    DeleteOptions, DeleteSummary, NewWorkspace, add_project, archive_workspace, create_workspace,
+    DeleteOptions, DeleteSummary, NewWorkspace, add_project, archive_workspace,
     create_workspace_from, delete_summary, delete_workspace, load, remove_project,
     restore_workspace, sessions_ended_since,
 };
@@ -88,7 +88,13 @@ fn fixture() -> Fixture {
 
 impl Fixture {
     fn workspace(&self, name: &str) -> Workspace {
-        let ws = create_workspace(&self.store, &self.project, name, self.root.path()).unwrap();
+        let ws = create_workspace_from(
+            &self.store,
+            &self.project,
+            self.root.path(),
+            &NewWorkspace::named(name),
+        )
+        .unwrap();
         self.store
             .insert_session(&Session::new(ws.id, agents::kind("shell")))
             .unwrap();
@@ -275,7 +281,13 @@ fn create_workspace_makes_branch_worktree_and_row() {
     let store = Store::open_in_memory().unwrap();
     let project = add_project(&store, repo.path()).unwrap();
 
-    let ws = create_workspace(&store, &project, "Fix Login", root.path()).unwrap();
+    let ws = create_workspace_from(
+        &store,
+        &project,
+        root.path(),
+        &NewWorkspace::named("Fix Login"),
+    )
+    .unwrap();
     assert_eq!(ws.slug, "fix-login");
     assert_eq!(ws.branch, "hangar/fix-login");
     assert!(ws.worktree_path.is_dir());
@@ -284,7 +296,13 @@ fn create_workspace_makes_branch_worktree_and_row() {
             .ends_with(format!("{}/fix-login", hangar_core::slugify(&project.name)))
     );
 
-    let again = create_workspace(&store, &project, "fix login", root.path()).unwrap();
+    let again = create_workspace_from(
+        &store,
+        &project,
+        root.path(),
+        &NewWorkspace::named("fix login"),
+    )
+    .unwrap();
     assert_eq!(again.slug, "fix-login-2");
     assert_eq!(again.branch, "hangar/fix-login-2");
 
@@ -292,7 +310,9 @@ fn create_workspace_makes_branch_worktree_and_row() {
     assert_eq!(loaded.entries.len(), 1);
     assert_eq!(loaded.entries[0].workspaces.len(), 2);
 
-    assert!(create_workspace(&store, &project, "   ", root.path()).is_err());
+    assert!(
+        create_workspace_from(&store, &project, root.path(), &NewWorkspace::named("   ")).is_err()
+    );
 }
 
 #[test]

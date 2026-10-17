@@ -464,18 +464,8 @@ pub fn add_project(store: &dyn Store, path: &Path) -> anyhow::Result<Project> {
     Ok(workspaces(store).add_project(path)?)
 }
 
-/// Creates the branch, the worktree and the workspace row. The slug gets a numeric suffix when
-/// the name, branch or directory is already taken.
-pub fn create_workspace(
-    store: &dyn Store,
-    project: &Project,
-    name: &str,
-    worktrees_root: &Path,
-) -> anyhow::Result<Workspace> {
-    create_workspace_from(store, project, worktrees_root, &NewWorkspace::named(name))
-}
-
-/// As [`create_workspace`], with a base, branch name, task or group (see [`NewWorkspace`]).
+/// Creates the branch, the worktree and the workspace row (see [`NewWorkspace`]). The slug gets a
+/// numeric suffix when the name, branch or directory is already taken.
 pub fn create_workspace_from(
     store: &dyn Store,
     project: &Project,
@@ -492,27 +482,9 @@ pub struct StartedSession {
     pub record_error: Option<anyhow::Error>,
 }
 
-/// Spawns `adapter` in the workspace and records the session. A failed spawn is recorded too.
-pub fn start_session(
-    store: &dyn Store,
-    adapter: &PtyAdapter,
-    workspace: &Workspace,
-    path_env: Option<&str>,
-    on_update: UpdateHook,
-) -> anyhow::Result<StartedSession> {
-    start_session_with(
-        store,
-        adapter,
-        workspace,
-        path_env,
-        on_update,
-        &AgentExtras::default(),
-    )
-}
-
-/// [`start_session`] with `extra` arguments and environment (appended after the adapter's,
-/// winning on conflicts) and files written first (0600, missing directories 0700). Files inside
-/// the worktree are refused.
+/// Spawns `adapter` in the workspace and records the session; a failed spawn is recorded too.
+/// `extra` arguments and environment come after the adapter's (winning on conflicts); its files
+/// are written first (0600, missing directories 0700), and files inside the worktree are refused.
 pub fn start_session_with(
     store: &dyn Store,
     adapter: &PtyAdapter,

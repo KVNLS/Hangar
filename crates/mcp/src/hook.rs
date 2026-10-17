@@ -83,12 +83,8 @@ pub fn notify_from_env(event: &str, input: impl Read) -> io::Result<()> {
     send(Path::new(&socket), session.trim(), signal, extra)
 }
 
-/// Sends one `hangar/agentSignal` and waits (briefly) for the app's answer.
-pub fn send_signal(socket: &Path, session: &str, signal: AgentSignal) -> io::Result<()> {
-    send(socket, session, signal, json!({}))
-}
-
-/// `extra`: more `params` fields (event, agent, transcript), all optional.
+/// Sends one `hangar/agentSignal` and waits (briefly) for the app's answer. `extra`: more
+/// `params` fields (event, agent, transcript), all optional.
 fn send(socket: &Path, session: &str, signal: AgentSignal, extra: Value) -> io::Result<()> {
     let mut params = json!({ "signal": signal.as_str() });
     if let (Some(params), Value::Object(extra)) = (params.as_object_mut(), extra) {
@@ -173,8 +169,8 @@ mod tests {
                 crate::serve_connection(stream, served.as_ref());
             }
         });
-        send_signal(&path, SESSION, AgentSignal::Approval).unwrap();
-        let stale = send_signal(&path, "stale", AgentSignal::Working).unwrap_err();
+        send(&path, SESSION, AgentSignal::Approval, json!({})).unwrap();
+        let stale = send(&path, "stale", AgentSignal::Working, json!({})).unwrap_err();
         assert!(stale.to_string().contains("-32001"), "{stale}");
         assert_eq!(*host.signals.lock().unwrap(), [AgentSignal::Approval]);
     }

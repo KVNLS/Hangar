@@ -35,7 +35,6 @@ pub struct GrpcEmulator {
     screen: ScreenSpec,
     avd_id: String,
     sdk: AndroidSdk,
-    boot_options: BootOptions,
     conn: Arc<RwLock<Option<Conn>>>,
     frames: Arc<FrameSender>,
     /// Shape of the display the input space follows; kept from the latest frame.
@@ -76,18 +75,12 @@ impl GrpcEmulator {
             screen,
             avd_id: running.discovery.avd_id.clone(),
             sdk: sdk.clone(),
-            boot_options: BootOptions::default(),
             conn,
             frames,
             landscape,
             rotation: AtomicU8::new(0),
             rt: Some(rt),
         })
-    }
-
-    /// Options used when [`Device::boot`] relaunches this AVD after a shutdown.
-    pub fn set_boot_options(&mut self, options: BootOptions) {
-        self.boot_options = options;
     }
 
     fn client(&self) -> Result<Client> {
@@ -154,16 +147,6 @@ impl GrpcEmulator {
         self.rotation
             .store(fresh.android_rotation(), Ordering::Relaxed);
         fresh
-    }
-
-    pub fn status(&self) -> Result<proto::EmulatorStatus> {
-        let mut c = self.client()?;
-        self.call(async move {
-            c.get_status(())
-                .await
-                .map(tonic::Response::into_inner)
-                .map_err(|s| grpc::status_err("getStatus", &s))
-        })
     }
 }
 
@@ -417,7 +400,7 @@ impl Device for GrpcEmulator {
         if alive {
             return Ok(());
         }
-        let running = emulator::boot(&self.sdk, &self.avd_id, &self.boot_options, &|_| {})?;
+        let running = emulator::boot(&self.sdk, &self.avd_id, &BootOptions::default(), &|_| {})?;
         let rt = self
             .rt
             .as_ref()

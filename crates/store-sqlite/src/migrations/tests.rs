@@ -1,6 +1,5 @@
 use rusqlite::{Connection, params};
 
-use hangar_core::Setting;
 use hangar_core::changes::{Cost, UsageEntry};
 use hangar_core::{AgentKind, Session, SessionStatus, Timestamp, Workspace, WorkspaceGroupId};
 
@@ -49,12 +48,14 @@ fn v1_database_file_is_migrated_to_settings() {
     let store = Store::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(store.list_projects().unwrap(), vec![p]);
-    const AGENT: Setting<String> = Setting::new("agent");
-    assert_eq!(store.get_setting(&AGENT).unwrap(), None);
-    store.set_setting(&AGENT, &"codex".to_owned()).unwrap();
+    assert_eq!(store.read_setting("agent").unwrap(), None);
+    store.write_setting("agent", r#""codex""#).unwrap();
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get_setting(&AGENT).unwrap().as_deref(), Some("codex"));
+    assert_eq!(
+        store.read_setting("agent").unwrap().as_deref(),
+        Some(r#""codex""#)
+    );
 }
 
 #[test]

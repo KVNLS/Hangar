@@ -15,10 +15,6 @@ pub struct AgentHandle {
 }
 
 impl AgentHandle {
-    pub fn agent_id(&self) -> &str {
-        &self.agent_id
-    }
-
     /// Resolved executable that was started.
     pub fn program(&self) -> &Path {
         &self.program
@@ -26,10 +22,6 @@ impl AgentHandle {
 
     pub fn session(&self) -> &Arc<TerminalSession> {
         &self.session
-    }
-
-    pub fn into_session(self) -> Arc<TerminalSession> {
-        self.session
     }
 }
 

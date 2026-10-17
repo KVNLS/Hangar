@@ -28,12 +28,7 @@ pub const PANEL_TAB_HEIGHT: Pixels = px(36.);
 pub const BUTTON_HEIGHT: Pixels = px(26.);
 pub const BUTTON_HEIGHT_SHEET: Pixels = px(28.);
 pub const BUTTON_HEIGHT_SMALL: Pixels = px(24.);
-pub const ICON_SIZE: Pixels = px(14.);
-pub const ICON_HIT: Pixels = px(26.);
-pub const SIDEBAR_WIDTH: Pixels = px(256.);
-pub const SIDEBAR_MIN_WIDTH: Pixels = px(200.);
 pub const RIGHT_PANEL_WIDTH: Pixels = px(440.);
-pub const RIGHT_PANEL_MIN_WIDTH: Pixels = px(360.);
 
 /// The single overlay shadow: `0 8 24 #000 35%`.
 pub fn overlay_shadow() -> Vec<BoxShadow> {

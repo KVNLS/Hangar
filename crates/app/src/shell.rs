@@ -84,7 +84,6 @@ pub use chrome::titlebar_options;
 use database::open_and_load;
 pub use dev::DevOptions;
 use dev::run_dev_hooks;
-pub use device_api::{DeviceFrame, DeviceStatusInfo};
 use dialogs::DeleteWorkspaceDialog;
 use state::*;
 use types::*;

@@ -15,7 +15,15 @@ fn session_runs_records_and_stale_sessions_are_failed_on_load() {
 
     let adapter =
         hangar_agents::PtyAdapter::new("sh", "sh", "/bin/sh").with_args(["-c", "pwd; exit 3"]);
-    let started = start_session(store, &adapter, &ws, None, Arc::new(|| {})).unwrap();
+    let started = start_session_with(
+        store,
+        &adapter,
+        &ws,
+        None,
+        Arc::new(|| {}),
+        &AgentExtras::default(),
+    )
+    .unwrap();
     let exit = started
         .handle
         .session()
@@ -81,8 +89,14 @@ fn failed_spawn_is_recorded() {
     let Some(agents::AgentPreset::Pty(adapter)) = agents::preset("claude") else {
         panic!("claude is a terminal preset");
     };
-    let Err(err) = start_session(store, &adapter, &ws, Some("/nonexistent"), Arc::new(|| {}))
-    else {
+    let Err(err) = start_session_with(
+        store,
+        &adapter,
+        &ws,
+        Some("/nonexistent"),
+        Arc::new(|| {}),
+        &AgentExtras::default(),
+    ) else {
         panic!("claude is not on /nonexistent");
     };
     let cause = "claude: `claude` was not found on PATH";

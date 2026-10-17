@@ -1,8 +1,6 @@
 use rusqlite::{OptionalExtension, params};
 
-use hangar_core::Setting;
-
-use crate::{Result, Store, StoreError};
+use crate::{Result, Store};
 
 impl Store {
     /// The raw JSON stored under `key`; `None` when it was never set.
@@ -41,79 +39,35 @@ impl Store {
         let keys = stmt.query_map([prefix], |row| row.get(0))?;
         Ok(keys.collect::<rusqlite::Result<_>>()?)
     }
-
-    /// Reads a JSON-encoded setting; `None` when the key was never set.
-    pub fn get_setting<T: serde::de::DeserializeOwned>(
-        &self,
-        setting: &Setting<T>,
-    ) -> Result<Option<T>> {
-        self.read_setting(setting.key())?
-            .map(|v| serde_json::from_str(&v))
-            .transpose()
-            .map_err(StoreError::from)
-    }
-
-    /// Stores `value` as JSON under `setting`, replacing any previous value.
-    pub fn set_setting<T: serde::Serialize>(&self, setting: &Setting<T>, value: &T) -> Result<()> {
-        self.write_setting(setting.key(), &serde_json::to_string(value)?)
-    }
-
-    /// Removes `setting`; removing a missing one is not an error.
-    pub fn delete_setting<T>(&self, setting: &Setting<T>) -> Result<()> {
-        self.remove_setting(setting.key())
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use hangar_core::{Setting, WorkspaceId};
-
     use crate::fixtures::store;
-    use crate::{Store, StoreError};
 
     #[test]
     fn settings_round_trip_and_overwrite() {
-        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-        struct Layout {
-            panes: Vec<Option<WorkspaceId>>,
-            split: Option<f32>,
-        }
         let store = store();
-        let layout = Layout {
-            panes: vec![Some(WorkspaceId::new()), None],
-            split: Some(0.4),
-        };
-        const LAYOUT: Setting<Layout> = Setting::new("layout");
-        store.set_setting(&LAYOUT, &layout).unwrap();
-        assert_eq!(store.get_setting(&LAYOUT).unwrap(), Some(layout));
-
-        let empty = Layout {
-            panes: vec![],
-            split: None,
-        };
-        store.set_setting(&LAYOUT, &empty).unwrap();
-        assert_eq!(store.get_setting(&LAYOUT).unwrap(), Some(empty));
-
-        // A value of the wrong shape is an error, not a silent default.
-        store
-            .set_setting(&Setting::new("layout"), &"not a layout")
-            .unwrap();
-        assert!(matches!(
-            store.get_setting(&LAYOUT),
-            Err(StoreError::Serde(_))
-        ));
+        assert_eq!(store.read_setting("layout").unwrap(), None);
+        store.write_setting("layout", r#"{"split":0.4}"#).unwrap();
+        assert_eq!(
+            store.read_setting("layout").unwrap().as_deref(),
+            Some(r#"{"split":0.4}"#)
+        );
+        store.write_setting("layout", "null").unwrap();
+        assert_eq!(
+            store.read_setting("layout").unwrap().as_deref(),
+            Some("null")
+        );
     }
 
     #[test]
     fn delete_setting_removes_the_key() {
-        let store = Store::open_in_memory().unwrap();
-        let run = Setting::<u16>::scoped("run", "x");
-        store.set_setting(&run, &8100).unwrap();
-        store.delete_setting(&run).unwrap();
-        assert_eq!(store.get_setting(&run).unwrap(), None);
-        store
-            .delete_setting(&Setting::<u16>::new("missing"))
-            .unwrap();
+        let store = store();
+        store.write_setting("run:x", "8100").unwrap();
+        store.remove_setting("run:x").unwrap();
+        assert_eq!(store.read_setting("run:x").unwrap(), None);
+        store.remove_setting("missing").unwrap();
     }
 
     #[test]

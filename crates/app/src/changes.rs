@@ -17,7 +17,4 @@ pub fn init(cx: &mut gpui_kit::App) {
         gpui_kit::KeyBinding::new("cmd-enter", CommitStaged, Some("ChangesPanel")),
     ]);
 }
-pub use view::{
-    AgentProbe, Busy, ChangesEvent, ChangesPanel, CommitStaged, ExitReview, PanelSource,
-    ReviewStats, WorkspaceAgent,
-};
+pub use view::{ChangesEvent, ChangesPanel, CommitStaged, ExitReview, PanelSource, WorkspaceAgent};

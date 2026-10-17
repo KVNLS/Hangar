@@ -16,7 +16,7 @@ use super::protocol::{
 };
 use crate::SpawnContext;
 use crate::error::{Error, Result};
-use crate::path::{find_program, resolve_program};
+use crate::path::resolve_program;
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `session/new` starts the session's MCP servers, which can be slow.
@@ -75,10 +75,6 @@ impl AcpAdapter {
     pub fn with_login_hint(mut self, hint: impl Into<String>) -> Self {
         self.login_hint = hint.into();
         self
-    }
-
-    pub fn is_installed(&self) -> bool {
-        find_program(&self.program, std::env::var_os("PATH").as_deref()).is_some()
     }
 
     /// Spawns the agent, then runs `initialize` and opens a session for `ctx.cwd`: `resume` (a

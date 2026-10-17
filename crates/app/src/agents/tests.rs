@@ -1,6 +1,6 @@
 use super::{
     AgentChoice, AgentExtras, AgentPreset, BridgeLaunch, McpWiring, PROFILES, apply_ollama,
-    choices, default_agent, is_installed, kind, mcp_launch, preset, shell_quote, toml_string,
+    choices, default_agent, kind, mcp_launch, preset, shell_quote, toml_string,
 };
 use hangar_core::AgentKind;
 use serde_json::{Value, json};
@@ -26,13 +26,6 @@ fn default_prefers_installed_claude() {
         "shell"
     );
     assert_eq!(default_agent(&[]), "shell");
-}
-
-#[test]
-fn installed_check_uses_given_path() {
-    assert!(is_installed("sh", Some("/nonexistent:/bin")));
-    assert!(!is_installed("sh", Some("/nonexistent")));
-    assert!(!is_installed("sh", None));
 }
 
 #[test]

@@ -29,7 +29,6 @@ pub use hangar_core::review::{
     CreatePr, GhStatus, MergeOutcome, MergeStrategy, PrInfo, PullOutcome, PushOutcome, Upstream,
 };
 pub use ignore::{check_ignored, git_dirs};
-pub use patch::parse_patch;
 pub use repo::{
     base_branch_name, branch_exists, branch_tips, current_branch, default_branch,
     is_valid_branch_name, local_branches, repo_root,

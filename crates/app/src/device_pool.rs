@@ -140,8 +140,6 @@ pub struct Acquired {
     pub borrowed: bool,
     /// The other workspaces using the device now.
     pub shared_with: Vec<String>,
-    /// Another workspace installed the app now on the device (its name).
-    pub stale_app: Option<String>,
 }
 
 pub struct DevicePool {
@@ -265,11 +263,6 @@ impl DevicePool {
     /// What the host can run of this platform's devices (1 when it cannot be read).
     pub fn recommended(&self, platform: Platform) -> u32 {
         self.machine.recommended(platform)
-    }
-
-    /// The cap on booted devices when booting one of `platform`.
-    pub fn limit_for(&self, platform: Platform) -> u32 {
-        self.machine.limit_for(platform)
     }
 
     pub fn single_device(&self, platform: Platform) -> bool {

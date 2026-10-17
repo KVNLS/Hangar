@@ -93,7 +93,6 @@ impl DevicePool {
                             avd: (a.platform == Platform::Android).then(|| a.base.clone()),
                             borrowed,
                             shared_with,
-                            stale_app,
                         });
                     }
                     Err(OpenError::Failed(err)) => return Err(anyhow!(err)),

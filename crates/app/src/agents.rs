@@ -84,10 +84,6 @@ pub fn choices(path: Option<&str>) -> Vec<AgentChoice> {
         .collect()
 }
 
-pub fn is_installed(program: &str, path: Option<&str>) -> bool {
-    find_program(program, path.map(OsStr::new)).is_some()
-}
-
 /// Claude Code if installed, else the shell.
 pub fn default_agent(choices: &[AgentChoice]) -> &'static str {
     let claude = choices.iter().any(|c| c.id == DEFAULT_AGENT && c.installed);

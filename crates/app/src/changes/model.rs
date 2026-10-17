@@ -29,11 +29,6 @@ pub fn apply_update(files: &mut FileMap, changed: Vec<FileDiff>, removed: &[Path
     dirty
 }
 
-/// Sidebar badge: `3 +12 −4`, or `None` when nothing changed.
-pub fn badge_text(files: usize, insertions: u64, deletions: u64) -> Option<String> {
-    (files > 0).then(|| format!("{files} +{insertions} −{deletions}"))
-}
-
 /// Short merge-base for the summary line.
 pub fn short_sha(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)

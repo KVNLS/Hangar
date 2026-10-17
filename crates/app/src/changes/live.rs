@@ -7,7 +7,7 @@ use gpui_kit::*;
 use hangar_core::WorkspaceId;
 use hangar_files::{DiffSummary, DiffUpdate, LiveDiff, LiveDiffConfig};
 
-use super::model::{FileMap, apply_update, badge_text};
+use super::model::{FileMap, apply_update};
 
 pub struct WorkspaceDiff {
     workspace: WorkspaceId,
@@ -139,10 +139,5 @@ impl WorkspaceDiff {
 
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
-    }
-
-    pub fn badge(&self) -> Option<String> {
-        let s = self.summary.as_ref()?;
-        badge_text(s.files, s.insertions, s.deletions)
     }
 }

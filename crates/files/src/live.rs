@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Instant;
 
@@ -59,19 +59,11 @@ pub struct DiffUpdate {
 pub struct LiveDiff {
     _watcher: Watcher,
     input: mpsc::Sender<Input>,
-    shared: Arc<Mutex<Shared>>,
-}
-
-#[derive(Default)]
-struct Shared {
-    files: BTreeMap<PathBuf, FileDiff>,
-    summary: Option<DiffSummary>,
 }
 
 enum Input {
     Batch(ChangeBatch),
     Refresh,
-    SetBase(String),
 }
 
 impl LiveDiff {
@@ -92,14 +84,14 @@ impl LiveDiff {
             move |batch| batch_tx.send(Input::Batch(batch)).is_ok(),
         )?;
         let (out_tx, out_rx) = unbounded_channel();
-        let shared = Arc::new(Mutex::new(Shared::default()));
         let worker = Worker {
             changes,
             worktree: watcher.root().to_path_buf(),
             base: base.into(),
             config,
             merge_base: None,
-            shared: shared.clone(),
+            files: BTreeMap::new(),
+            summary: None,
             out: out_tx,
         };
         thread::Builder::new()
@@ -109,7 +101,6 @@ impl LiveDiff {
             Self {
                 _watcher: watcher,
                 input,
-                shared,
             },
             out_rx,
         ))
@@ -119,31 +110,6 @@ impl LiveDiff {
     pub fn refresh(&self) -> Result<()> {
         self.input.send(Input::Refresh).map_err(|_| Error::Stopped)
     }
-
-    /// Diffs against a different base from now on (full recompute).
-    pub fn set_base(&self, base: impl Into<String>) -> Result<()> {
-        self.input
-            .send(Input::SetBase(base.into()))
-            .map_err(|_| Error::Stopped)
-    }
-
-    /// Current per-file diffs, as of the last emitted update.
-    pub fn snapshot(&self) -> BTreeMap<PathBuf, FileDiff> {
-        lock(&self.shared).files.clone()
-    }
-
-    pub fn file(&self, path: &Path) -> Option<FileDiff> {
-        lock(&self.shared).files.get(path).cloned()
-    }
-
-    /// `None` until the first update is computed.
-    pub fn summary(&self) -> Option<DiffSummary> {
-        lock(&self.shared).summary.clone()
-    }
-}
-
-fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
-    shared.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Coalesced work drained from the input channel.
@@ -155,7 +121,7 @@ struct Job {
 }
 
 impl Job {
-    fn add(&mut self, input: Input, base: &mut String) {
+    fn add(&mut self, input: Input) {
         match input {
             Input::Batch(batch) => {
                 // An ignore file changes which files count, not just itself.
@@ -168,10 +134,6 @@ impl Job {
                 self.trigger = Some(self.trigger.map_or(batch.at, |t| t.min(batch.at)));
             }
             Input::Refresh => self.full = true,
-            Input::SetBase(new) => {
-                *base = new;
-                self.full = true;
-            }
         }
     }
 }
@@ -182,7 +144,9 @@ struct Worker {
     base: String,
     config: LiveDiffConfig,
     merge_base: Option<String>,
-    shared: Arc<Mutex<Shared>>,
+    /// The diff as of the last emitted update, patched by incremental jobs.
+    files: BTreeMap<PathBuf, FileDiff>,
+    summary: Option<DiffSummary>,
     out: UnboundedSender<Result<DiffUpdate>>,
 }
 
@@ -195,7 +159,7 @@ impl Worker {
         let mut first = true;
         loop {
             while let Ok(more) = input.try_recv() {
-                job.add(more, &mut self.base);
+                job.add(more);
             }
             let result = self.process(std::mem::take(&mut job), first);
             let sent = match result {
@@ -215,7 +179,7 @@ impl Worker {
                 return;
             }
             match input.recv() {
-                Ok(next) => job.add(next, &mut self.base),
+                Ok(next) => job.add(next),
                 Err(_) => return,
             }
         }
@@ -229,13 +193,8 @@ impl Worker {
             self.merge_base = Some(self.changes.merge_base(&self.worktree, &self.base)?);
         }
         let merge_base = self.merge_base.clone().unwrap_or_default();
-        let (mut files, previous_status) = {
-            let shared = lock(&self.shared);
-            (
-                shared.files.clone(),
-                shared.summary.as_ref().map(|s| s.status.clone()),
-            )
-        };
+        let mut files = self.files.clone();
+        let previous_status = self.summary.as_ref().map(|s| s.status.clone());
         let (pathspecs, covered): (Vec<PathBuf>, Vec<PathBuf>) = if full {
             (Vec::new(), files.keys().cloned().collect())
         } else {
@@ -304,11 +263,9 @@ impl Worker {
             deletions: files.values().map(|f| u64::from(f.deletions)).sum(),
             status,
         };
-        let mut shared = lock(&self.shared);
-        let summary_changed = shared.summary.as_ref() != Some(&summary);
-        shared.files = files;
-        shared.summary = Some(summary.clone());
-        drop(shared);
+        let summary_changed = self.summary.as_ref() != Some(&summary);
+        self.files = files;
+        self.summary = Some(summary.clone());
 
         if changed.is_empty() && removed.is_empty() && !summary_changed && !force_emit {
             return Ok(None);

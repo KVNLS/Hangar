@@ -330,10 +330,6 @@ fn panel_width_shared_and_migrated() {
         crate::ui::RIGHT_PANEL_WIDTH,
         gpui_kit::px(PANEL_DEFAULT_WIDTH)
     );
-    assert_eq!(
-        crate::ui::RIGHT_PANEL_MIN_WIDTH,
-        gpui_kit::px(PANEL_WIDTH_RANGE.0)
-    );
 }
 
 #[test]
@@ -352,14 +348,6 @@ fn sidebar_width_saved_and_migrated() {
         SIDEBAR_WIDTH_RANGE.0
     );
     assert_eq!(sidebar_width(f32::NAN), None);
-    assert_eq!(
-        crate::ui::SIDEBAR_WIDTH,
-        gpui_kit::px(SIDEBAR_DEFAULT_WIDTH)
-    );
-    assert_eq!(
-        crate::ui::SIDEBAR_MIN_WIDTH,
-        gpui_kit::px(SIDEBAR_WIDTH_RANGE.0)
-    );
 }
 
 #[test]

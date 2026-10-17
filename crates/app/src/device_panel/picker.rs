@@ -82,6 +82,7 @@ impl Picker {
         self.entries.iter().find(|e| &e.key == key)
     }
 
+    #[cfg(test)]
     pub fn active(&self) -> Option<&DeviceKey> {
         self.active.as_ref()
     }

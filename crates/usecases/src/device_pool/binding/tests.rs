@@ -123,7 +123,6 @@ fn another_class_is_never_shared() {
     let start = m.request_device(ws[2].id, t).unwrap();
     assert_eq!((&start.key, start.shared), (&own, false));
     assert!(notices(&m.take_commands()).is_empty());
-    assert_eq!(m.borrowable(Platform::Ios, "C", &own), None);
     // Its own device waits for a slot.
     wait(m.open(&own, t));
     let probe = step(&m.take_commands());

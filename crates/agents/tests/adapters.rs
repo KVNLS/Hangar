@@ -84,7 +84,6 @@ fn context_path_is_used_to_resolve_the_program() {
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
 
     let adapter = PtyAdapter::new("fake", "Fake", "hangar-fake-agent");
-    assert!(!adapter.is_installed());
     let mut ctx = SpawnContext::new(tmp.path());
     ctx.env.push((
         "PATH".into(),
@@ -155,7 +154,6 @@ fn spawns_in_a_worktree_with_env() {
 #[test]
 fn unknown_program_is_explicit() {
     let adapter = PtyAdapter::new("ghost", "Ghost", "hangar-no-such-agent-xyz");
-    assert!(!adapter.is_installed());
     let tmp = TempDir::new().unwrap();
     match adapter.launch(&SpawnContext::new(tmp.path())) {
         Err(Error::NotInstalled { agent, program }) => {
@@ -166,7 +164,6 @@ fn unknown_program_is_explicit() {
     }
 
     let sh = PtyAdapter::new("sh", "sh", "/bin/sh");
-    assert!(sh.is_installed());
     let missing = tmp.path().join("missing");
     assert!(matches!(
         sh.launch(&SpawnContext::new(&missing)),
