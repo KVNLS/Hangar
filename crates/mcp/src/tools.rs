@@ -1,7 +1,7 @@
 //! The device and orchestration tools: typed calls parsed from `tools/call`, their JSON Schemas,
 //! and results.
 
-use hangar_core::device::{Input, Key, LogLevel};
+use hangar_core::device::{Input, Key, LogLevel, Platform};
 
 mod args;
 mod output;
@@ -70,6 +70,8 @@ pub enum Tool {
     DeviceAcquire {
         /// 0..=[`MAX_ACQUIRE_WAIT_S`]: how long to wait for the device.
         wait_s: u64,
+        /// Switch the workspace to this platform; `None` keeps the current one.
+        platform: Option<Platform>,
     },
     DeviceRelease,
     /// Asks the user a question and waits for the answer.
@@ -155,6 +157,8 @@ const LEVELS: [(&str, LogLevel); 5] = [
     ("warning", LogLevel::Warn),
     ("error", LogLevel::Error),
 ];
+
+const PLATFORMS: [(&str, Platform); 2] = [("ios", Platform::Ios), ("android", Platform::Android)];
 
 /// Why a `tools/call` could not be turned into a [`Tool`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

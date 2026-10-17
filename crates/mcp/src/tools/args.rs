@@ -34,7 +34,7 @@ pub(super) fn allowed_args(tool: &str) -> &'static [&'static str] {
         "press" => &["button", "key"],
         "logs" => &["lines", "level", "process"],
         "launch_app" => &["app_id"],
-        "device_acquire" => &["wait_s"],
+        "device_acquire" => &["wait_s", "platform"],
         "ask_user" => &["question", "choices"],
         "workspace_create" => &["task", "name", "agent"],
         "agent_prompt" => &["workspace", "text"],

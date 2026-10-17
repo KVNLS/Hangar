@@ -70,6 +70,7 @@ fn fake_consumer(mut rx: mpsc::UnboundedReceiver<McpRequest>, log: Log) {
                         scale: Some(3.0),
                         orientation: None,
                         sharing: None,
+                        platforms: Vec::new(),
                     }));
                 }
                 McpRequest::Frame { reply, .. } => {
@@ -249,6 +250,7 @@ fn shared(held: bool) -> Sharing {
         idle_release_s: 90,
         stale_app_from: None,
         notice: None,
+        switched_from: None,
     }
 }
 
@@ -686,14 +688,30 @@ fn device_acquire_and_release_round_trip() {
     let ws = WorkspaceId::new();
     let s = sessions.register(ws);
 
-    let out = host.call(&s, Tool::DeviceAcquire { wait_s: 0 }).unwrap();
+    let out = host
+        .call(
+            &s,
+            Tool::DeviceAcquire {
+                wait_s: 0,
+                platform: None,
+            },
+        )
+        .unwrap();
     let queued: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
     assert_eq!(queued["status"], "queued");
     assert_eq!(queued["position"], 0);
     assert_eq!(queued["holder"], "ws-a");
 
     // The wait is passed on; the request may take that long on top of a call.
-    let out = host.call(&s, Tool::DeviceAcquire { wait_s: 3 }).unwrap();
+    let out = host
+        .call(
+            &s,
+            Tool::DeviceAcquire {
+                wait_s: 3,
+                platform: None,
+            },
+        )
+        .unwrap();
     let granted: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
     assert_eq!(granted["status"], "granted");
     assert_eq!(granted["idle_release_s"], 90);
@@ -756,7 +774,15 @@ fn pending_notices_ride_on_the_next_device_result() {
     assert_eq!(text(&out), "Tapped at (1, 1).", "delivered once");
 
     host.notices.push(ws, "revoked".into());
-    let out = host.call(&s, Tool::DeviceAcquire { wait_s: 1 }).unwrap();
+    let out = host
+        .call(
+            &s,
+            Tool::DeviceAcquire {
+                wait_s: 1,
+                platform: None,
+            },
+        )
+        .unwrap();
     let got: serde_json::Value = serde_json::from_str(&text(&out)).unwrap();
     assert_eq!(got["notice"], "revoked", "in the sharing state");
     assert_eq!(out.content.len(), 1);

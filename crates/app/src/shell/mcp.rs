@@ -60,6 +60,7 @@ fn status(info: DeviceStatusInfo) -> hangar_mcp::DeviceStatus {
         scale: info.scale,
         orientation: info.orientation,
         sharing: info.sharing,
+        platforms: Vec::new(),
     }
 }
 

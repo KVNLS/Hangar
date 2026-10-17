@@ -50,6 +50,7 @@ pub fn agent_sharing(s: &Sharing, ws: WorkspaceId) -> hangar_mcp::Sharing {
         idle_release_s: RESERVATION_IDLE.as_secs(),
         stale_app_from: s.stale_app_from.clone(),
         notice: None,
+        switched_from: None,
     }
 }
 
@@ -112,6 +113,7 @@ mod tests {
                 idle_release_s: 90,
                 stale_app_from: Some("ws-a".into()),
                 notice: None,
+                switched_from: None,
             }
         );
         assert!(agent_sharing(&pool, a).you_hold);

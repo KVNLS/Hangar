@@ -570,7 +570,7 @@ impl McpHost {
                 })?;
                 Ok(ToolOutput::text(summary))
             }
-            Tool::DeviceAcquire { wait_s } => {
+            Tool::DeviceAcquire { wait_s, .. } => {
                 let wait = Duration::from_secs(wait_s);
                 let mut got = self.ask("device_acquire", call + wait, |reply| {
                     McpRequest::Acquire { ws, wait, reply }

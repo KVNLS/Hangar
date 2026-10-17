@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
 
+use hangar_core::device::Platform;
+
 use super::output::ToolOutput;
 
 /// A device's sharing state as seen by the calling workspace.
@@ -24,6 +26,8 @@ pub struct Sharing {
     pub stale_app_from: Option<String>,
     /// A pending warning for the caller.
     pub notice: Option<String>,
+    /// The platform this workspace just switched away from.
+    pub switched_from: Option<Platform>,
 }
 
 /// "1st", "2nd", "11th" for a 1-based place.
@@ -85,6 +89,11 @@ impl ToolOutput {
             "reservation_left_s": s.reservation_left_s,
             "stale_app_from": s.stale_app_from,
             "notice": s.notice,
+            "switched_from": s.switched_from.map(Platform::id),
+            "hint": s.switched_from.map(|from| format!(
+                "Switched from {}: the app from this branch may not be installed on this device yet, run build_and_run before testing.",
+                from.label()
+            )),
         });
         Self::text(serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()))
     }
