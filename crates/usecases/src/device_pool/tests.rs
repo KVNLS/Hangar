@@ -542,6 +542,7 @@ fn a_new_base_replaces_the_own_device() {
     let probe = step(&m.take_commands());
     let replaced = m
         .assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+        .unwrap()
         .unwrap();
     assert!(replaced.shutdown.is_none(), "not running yet");
     assert_eq!(replaced.clone.as_deref(), Some("CLONE"));
@@ -560,6 +561,7 @@ fn a_new_base_replaces_the_own_device() {
     assert!(m.take_commands().is_empty());
     assert!(
         m.assign(w.id, Platform::Ios, "NEW".into(), Instant::now())
+            .unwrap()
             .is_none()
     );
 }

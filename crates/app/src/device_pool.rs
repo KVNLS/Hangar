@@ -62,6 +62,8 @@ pub enum PoolEvent {
 }
 
 type Opened = Result<DeviceSession, OpenError>;
+/// A settings write, run in order with the others ([`DevicePool::queue_save`]).
+type SaveJob = Box<dyn FnOnce() + Send>;
 type LeaseReply = oneshot::Sender<anyhow::Result<Granted>>;
 
 /// A call's lease, handed over by the machine.
@@ -148,6 +150,7 @@ pub struct DevicePool {
     release: mpsc::UnboundedSender<(PoolKey, WorkspaceId)>,
     /// Boot stages reported from the background executor: key, attempt, stage.
     stages: mpsc::UnboundedSender<(PoolKey, u64, String)>,
+    saves: mpsc::UnboundedSender<SaveJob>,
     open_waiters: HashMap<Token, oneshot::Sender<Opened>>,
     lease_waiters: HashMap<Token, LeaseReply>,
     /// The device and installer each workspace was last told about, so the agent hears of
@@ -182,6 +185,12 @@ impl DevicePool {
                 }
             }
         });
+        let (saves, mut queued) = mpsc::unbounded_channel::<SaveJob>();
+        let saver = cx.background_executor().spawn(async move {
+            while let Some(job) = queued.recv().await {
+                job();
+            }
+        });
         let monitor = cx.spawn(async move |this, cx| Self::monitor(this, cx).await);
         let forced_backend = std::env::var("HANGAR_DEVICE_BACKEND")
             .ok()
@@ -194,10 +203,11 @@ impl DevicePool {
             store: None,
             release,
             stages,
+            saves,
             open_waiters: HashMap::new(),
             lease_waiters: HashMap::new(),
             stale_told: HashMap::new(),
-            _tasks: vec![releases, stage_updates, monitor],
+            _tasks: vec![releases, stage_updates, saver, monitor],
         }
     }
 
@@ -279,23 +289,24 @@ impl DevicePool {
         cx.notify();
     }
 
-    fn save<T: serde::Serialize + Send + 'static>(
-        &self,
-        setting: Setting<T>,
-        value: T,
-        cx: &mut Context<Self>,
-    ) {
+    fn save<T: serde::Serialize + Send + 'static>(&self, setting: Setting<T>, value: T) {
+        self.queue_save(move |store| {
+            if let Err(err) = store.set_setting(&setting, &value) {
+                let key = setting.key();
+                tracing::error!(target: "device_pool", %key, %err, "failed to save");
+            }
+        });
+    }
+
+    /// Runs a settings write off the UI thread after the ones queued before it, so that the
+    /// last write of a key wins.
+    fn queue_save(&self, write: impl FnOnce(&dyn Store) + Send + 'static) {
         let Some(store) = self.store.clone() else {
             return;
         };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(err) = store.set_setting(&setting, &value) {
-                    let key = setting.key();
-                    tracing::error!(target: "device_pool", %key, %err, "failed to save");
-                }
-            })
-            .detach();
+        if self.saves.send(Box::new(move || write(&*store))).is_err() {
+            tracing::error!(target: "device_pool", "the settings queue stopped: not saved");
+        }
     }
 }
 

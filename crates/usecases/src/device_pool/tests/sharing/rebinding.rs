@@ -106,7 +106,7 @@ fn a_new_assignment_leaves_the_device_it_shared() {
     let for_b = queued(m.request_device(b.id, t).map(|s| s.lease));
     let for_c = queued(m.request_device(c.id, t).map(|s| s.lease));
     m.take_commands();
-    m.assign(b.id, Platform::Android, "P".into(), t);
+    m.assign(b.id, Platform::Android, "P".into(), t).unwrap();
     let commands = m.take_commands();
     assert_eq!(failed(&commands), [for_b]);
     assert!(grants(&commands).is_empty(), "a keeps the device");
@@ -116,7 +116,7 @@ fn a_new_assignment_leaves_the_device_it_shared() {
     assert_eq!((&start.key, start.lease), (&p, LeaseStart::Granted));
     assert_bound_to_held(&m);
     // The holder moves during a call: the call finishes on X, then X passes on.
-    m.assign(a.id, Platform::Android, "Q".into(), t);
+    m.assign(a.id, Platform::Android, "Q".into(), t).unwrap();
     assert!(grants(&m.take_commands()).is_empty(), "a call is in flight");
     let q = android_base("Q");
     assert_eq!(m.key_for(a.id), Some(q.clone()));

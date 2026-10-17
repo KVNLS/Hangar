@@ -4,6 +4,8 @@
 use std::time::{Duration, Instant};
 
 use super::*;
+use hangar_usecases::device_pool::SwitchBy;
+
 use crate::device_panel::Platform;
 use crate::mcp_host::{Acquisition, Released, acquisition, released};
 
@@ -26,10 +28,9 @@ impl HangarApp {
         }
         self.track_workspace(ws, cx);
         let switch = match platform {
-            Some(platform) => self
-                .devices
-                .pool
-                .update(cx, |pool, cx| pool.switch_platform(ws, platform, cx)),
+            Some(platform) => self.devices.pool.update(cx, |pool, cx| {
+                pool.switch_platform(ws, platform, None, SwitchBy::Agent, cx)
+            }),
             None => Task::ready(Ok(None)),
         };
         let pool = self.devices.pool.downgrade();

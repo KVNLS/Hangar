@@ -106,26 +106,30 @@ impl<S: Session> PoolMachine<S> {
     /// A different base replaces the workspace's own device: it is shut down and, when it is a
     /// simulator the pool created, deleted (returned for the caller to carry out). A parked
     /// assignment of the new platform is taken back ([`Self::switch_platform`] keeps the old
-    /// one instead). The workspace leaves the device it used ([`Self::unbind`]).
+    /// one instead). The workspace leaves the device it used ([`Self::unbind`]). Refused while a
+    /// call of another workspace uses an own device of `ws` it replaces; other workspaces that
+    /// only reserve or wait for it lose it.
     pub fn assign(
         &mut self,
         ws: WorkspaceId,
         platform: Platform,
         base: String,
         now: Instant,
-    ) -> Option<Replaced<S>> {
+    ) -> Result<Option<Replaced<S>>, String> {
         let previous = self.assignments.get(&ws).cloned();
         if previous
             .as_ref()
             .is_some_and(|a| a.platform == platform && a.base == base)
         {
-            return None;
+            return Ok(None);
         }
+        let mut assignment = Assignment::new(platform, base.clone());
+        self.check_replaceable(ws, previous.as_ref().map(|a| PoolKey::Own(ws, a.platform)))?;
+        self.check_replaceable(ws, self.replaced_parked(ws, &assignment))?;
         tracing::info!(target: "device_pool", workspace = %ws, platform = platform.label(), %base, "device assigned");
         self.unbind(ws, now, REASSIGNED);
-        let mut assignment = Assignment::new(platform, base.clone());
         let unparking = self.parked(ws).is_some_and(|p| p.platform == platform);
-        let unparked = self.unpark(ws, &mut assignment);
+        let unparked = self.unpark(ws, &mut assignment, now);
         if unparking {
             self.save(Save::Unparked(ws));
         }
@@ -134,12 +138,13 @@ impl<S: Session> PoolMachine<S> {
         let last = DeviceKey { platform, id: base };
         self.last_target = Some(last.clone());
         self.save(Save::LastTarget(last));
-        let replaced = previous.map(|previous| self.drop_own(ws, &previous));
+        let replaced = previous.map(|previous| self.drop_own(ws, &previous, now));
+        self.enforce_limit();
         self.refocus();
-        match (replaced, unparked) {
+        Ok(match (replaced, unparked) {
             (Some(a), Some(b)) => Some(self.merge_replaced(a, b)),
             (a, b) => a.or(b),
-        }
+        })
     }
 
     /// The assignment resolved off the UI thread for `ws`; another call may have resolved it

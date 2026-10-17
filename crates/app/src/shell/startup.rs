@@ -103,6 +103,11 @@ impl HangarApp {
                     format!("Could not switch platform: {err}"),
                     cx,
                 ),
+                DevicePanelEvent::AssignFailed(err) => this.show_toast(
+                    toast::ToastKind::Info,
+                    format!("Could not change the device: {err}"),
+                    cx,
+                ),
                 DevicePanelEvent::Logs(logs) => {
                     this.layout.device.logs = logs.open;
                     this.layout.device.log_level = Some(logs.min_level.as_str().to_owned());

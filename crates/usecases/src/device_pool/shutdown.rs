@@ -44,7 +44,8 @@ impl<S: Session> PoolMachine<S> {
     pub fn shutdown(&mut self, key: &PoolKey) -> Option<ShutdownJob<S>> {
         let device = self.devices.get_mut(key)?;
         let platform = device.platform;
-        match std::mem::replace(&mut device.state, State::ShuttingDown) {
+        let stopping = State::ShuttingDown { reopen: Vec::new() };
+        match std::mem::replace(&mut device.state, stopping) {
             State::Open { session, .. } => {
                 tracing::info!(target: "device_pool", ?key, name = %device.name, "shutting down");
                 Some(ShutdownJob {
@@ -78,7 +79,10 @@ impl<S: Session> PoolMachine<S> {
     }
 
     /// How the shutdown of `key` went (`Err` holds the message).
+    /// How the shutdown of `key` went (`Err` holds the message). Opens asked meanwhile start
+    /// the device again.
     pub fn shutdown_finished(&mut self, key: &PoolKey, result: Result<(), String>, now: Instant) {
+        let mut reopen = Vec::new();
         if let Some(device) = self.devices.get_mut(key) {
             let before = std::mem::replace(&mut device.state, State::Closed);
             match &result {
@@ -91,14 +95,23 @@ impl<S: Session> PoolMachine<S> {
                     device.error = Some(format!("Shutdown failed: {err}"));
                 }
             }
-            self.abandon(before);
+            match before {
+                State::ShuttingDown { reopen: waiters } => reopen = waiters,
+                other => self.abandon(other),
+            }
         }
         self.evicted(key, &result, now);
+        if let Some(&attempt) = reopen.first() {
+            tracing::info!(target: "device_pool", ?key, "opening again for the calls that waited");
+            self.start(key, attempt, reopen, now);
+        }
     }
 
-    /// Shuts down idle devices above the cap. The cap counts booted devices of every platform;
-    /// with several platforms booted the tightest of their caps applies.
+    /// Shuts down the parked devices nobody uses ([`Self::retire_parked`]) and idle devices
+    /// above the cap. The cap counts booted devices of every platform; with several platforms
+    /// booted the tightest of their caps applies.
     pub(super) fn enforce_limit(&mut self) {
+        self.retire_parked(None);
         if !self.host_known() {
             return;
         }
@@ -213,7 +226,7 @@ impl<S: Session> PoolMachine<S> {
     /// The workspace is archived: its waiters give up and its reservations end. Its own device
     /// is about to shut down, so the workspaces sharing it lose it too (waiters fail, a holder
     /// is revoked). Whether its assignment is known; the caller reads an unknown one
-    /// ([`Self::adopt_assignment`]) before [`Self::shutdown_own`].
+    /// ([`Self::adopt`]) before [`Self::shutdown_own`].
     pub fn archive(&mut self, ws: WorkspaceId, now: Instant) -> bool {
         let mut cancelled = Vec::new();
         for device in self.devices.values_mut() {
@@ -226,40 +239,47 @@ impl<S: Session> PoolMachine<S> {
             });
         }
         for own in Platform::ALL.map(|p| PoolKey::Own(ws, p)) {
-            let Some(device) = self.devices.get_mut(&own) else {
-                continue;
-            };
-            let message = format!("{} was shut down with its workspace", device.name);
-            let other = device.leases.holder().copied().filter(|h| *h != ws);
-            for token in device.leases.take_waiting() {
-                self.push(Command::FailLease {
-                    token,
-                    message: message.clone(),
-                });
-            }
-            if let Some(other) = other {
-                self.drop_holder(&own, other, now);
-                self.push(Command::Revoked {
-                    holder: other,
-                    key: own,
-                });
+            if let Some(name) = self.name_of(&own) {
+                let message = format!("{name} was shut down with its workspace");
+                self.evict_users(&own, ws, &message, now);
             }
         }
-        self.release_reservation(ws, now);
+        self.leave(ws, now, "the workspace was closed");
+        self.prune_bindings();
+        // Its own devices are shut down by `shutdown_own`, whose jobs the caller waits for.
+        self.retire_parked(Some(ws));
         if self.focused == Some(ws) {
             self.focused = None;
         }
         self.assignments.contains_key(&ws)
     }
 
-    /// A saved assignment read after launch; one already known wins.
-    pub fn adopt_assignment(&mut self, ws: WorkspaceId, assignment: Assignment) {
-        self.assignments.entry(ws).or_insert(assignment);
-    }
-
-    /// A saved parked assignment read after launch; one already known wins.
-    pub fn adopt_parked(&mut self, ws: WorkspaceId, assignment: Assignment) {
-        self.parked.entry(ws).or_insert(assignment);
+    /// The device `key` of `owner` goes away: the other workspaces waiting for it fail with
+    /// `message` and one holding it is revoked.
+    pub(super) fn evict_users(
+        &mut self,
+        key: &PoolKey,
+        owner: WorkspaceId,
+        message: &str,
+        now: Instant,
+    ) {
+        let Some(device) = self.devices.get_mut(key) else {
+            return;
+        };
+        let other = device.leases.holder().copied().filter(|h| *h != owner);
+        for token in device.leases.take_waiting() {
+            self.push(Command::FailLease {
+                token,
+                message: message.to_owned(),
+            });
+        }
+        if let Some(other) = other {
+            self.drop_holder(key, other, now);
+            self.push(Command::Revoked {
+                holder: other,
+                key: key.clone(),
+            });
+        }
     }
 
     /// Shuts the workspace's own devices down (the active platform's and the parked one's).

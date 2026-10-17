@@ -84,19 +84,34 @@ impl DevicePool {
     /// The workspace is archived: its waiters give up and its own device shuts down.
     pub fn archive(&mut self, ws: WorkspaceId, cx: &mut Context<Self>) -> Task<anyhow::Result<()>> {
         let known = self.machine.archive(ws, Instant::now());
+        let parked_known = self.machine.parked(ws).is_some();
         self.run(cx);
         cx.notify();
         let store = self.store.clone();
         cx.spawn(async move |this, cx| {
-            // Right after launch the saved assignment may not be loaded yet.
-            if !known && let Some(store) = store {
-                let saved = cx
+            // Right after launch the saved assignments may not be loaded yet; a parked device
+            // may still run from an earlier launch.
+            if (!known || !parked_known)
+                && let Some(store) = store
+            {
+                let (active, parked) = cx
                     .background_executor()
-                    .spawn(async move { store.get_setting(&setting_keys::device_assignment(ws)) })
+                    .spawn(async move {
+                        let active = match known {
+                            true => None,
+                            false => store.get_setting(&setting_keys::device_assignment(ws))?,
+                        };
+                        let parked = match parked_known {
+                            true => None,
+                            false => store.get_setting(&setting_keys::device_parked(ws))?,
+                        };
+                        anyhow::Ok((active, parked))
+                    })
                     .await?;
-                if let Some(a) = saved {
-                    this.update(cx, |pool, _| pool.machine.adopt_assignment(ws, a))?;
-                }
+                this.update(cx, |pool, cx| {
+                    pool.machine.adopt(ws, active, parked);
+                    pool.run(cx);
+                })?;
             }
             this.update(cx, |pool, cx| pool.shutdown_own(ws, cx))?.await
         })

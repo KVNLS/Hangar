@@ -14,7 +14,7 @@ use hangar_core::device::capacity::{DeviceCost, HostResources, Pressure};
 use hangar_core::device::{DeviceInfo, Platform};
 use hangar_devices::Frame;
 use hangar_usecases::device_pool::policy::{Assignment, Limit};
-use hangar_usecases::device_pool::{PoolMachine, Saved, Session, WorkspaceRef};
+use hangar_usecases::device_pool::{PoolMachine, Saved, Session, SwitchBy, WorkspaceRef};
 use serde_json::Value;
 
 fn fake_gpui_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>) {
@@ -284,7 +284,9 @@ fn fake_pool_side(mut rx: tokio::sync::mpsc::UnboundedReceiver<McpRequest>, pool
                                     Platform::Android => ANDROID_BASE,
                                 };
                                 let target = target.unwrap_or_else(|| Assignment::new(p, base));
-                                if let Err(err) = m.switch_platform(ws, target, now) {
+                                if let Err(err) =
+                                    m.switch_platform(ws, target, SwitchBy::Agent, now)
+                                {
                                     let _ = reply.send(Err(anyhow::anyhow!(err)));
                                     return;
                                 }

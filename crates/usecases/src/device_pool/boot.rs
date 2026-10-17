@@ -48,7 +48,7 @@ impl<S: Session> PoolMachine<S> {
             .map(|(k, d)| Slot {
                 key: k.clone(),
                 // One shutting down already makes room.
-                booted: d.booted() && !matches!(d.state, State::ShuttingDown),
+                booted: d.booted() && !matches!(d.state, State::ShuttingDown { .. }),
                 busy: d.busy(),
                 focused: focused.as_ref() == Some(k),
                 last_used: d.last_used,
@@ -56,7 +56,8 @@ impl<S: Session> PoolMachine<S> {
             .collect()
     }
 
-    /// Opens the device `key` (booting it if needed), or joins the bring-up in progress.
+    /// Opens the device `key` (booting it if needed), or joins the bring-up in progress. One
+    /// shutting down is opened again once it is down.
     pub fn open(&mut self, key: &PoolKey, now: Instant) -> OpenStart<S> {
         let token = self.token();
         let Some(device) = self.entry(key) else {
@@ -70,27 +71,34 @@ impl<S: Session> PoolMachine<S> {
                 opening.waiters.push(token);
                 return OpenStart::Wait(token);
             }
-            State::ShuttingDown => {
-                return OpenStart::Ready(Err(OpenError::Failed(format!(
-                    "{} is shutting down; try again in a moment",
-                    device.name
-                ))));
+            State::ShuttingDown { reopen } => {
+                tracing::info!(target: "device_pool", ?key, "open asked while shutting down: reopening after");
+                reopen.push(token);
+                return OpenStart::Wait(token);
             }
             State::Closed => {}
         }
+        self.start(key, token, vec![token], now);
+        OpenStart::Wait(token)
+    }
+
+    /// Starts bringing the closed device `key` up for `waiters`, as bring-up `attempt`.
+    pub(super) fn start(&mut self, key: &PoolKey, attempt: u64, waiters: Vec<Token>, now: Instant) {
+        let Some(device) = self.devices.get_mut(key) else {
+            return;
+        };
         device.error = None;
         device.conflict = None;
         device.state = State::Opening(Opening {
             stage: "checking the device".to_owned(),
             started: now,
-            waiters: vec![token],
-            attempt: token,
+            waiters,
+            attempt,
             phase: Phase::Probing,
         });
         let target = device.target.clone();
         self.mark_used(key);
-        self.bring_up(key, token, Step::Probe(target));
-        OpenStart::Wait(token)
+        self.bring_up(key, attempt, Step::Probe(target));
     }
 
     /// Like [`Self::open`], for a call of `ws` granted the lease on `key`. A grant can be taken
@@ -235,6 +243,9 @@ impl<S: Session> PoolMachine<S> {
     /// waits, those who wait for this device move to a compatible running one when there is.
     pub(super) fn claim(&mut self, key: &PoolKey, attempt: u64, now: Instant) {
         loop {
+            if self.abandon_parked(key) {
+                return;
+            }
             let Some(Phase::Claiming { since, .. }) =
                 self.opening(key, attempt).map(|o| o.phase.clone())
             else {
@@ -345,6 +356,9 @@ impl<S: Session> PoolMachine<S> {
         else {
             return;
         };
+        if self.abandon_parked(key) {
+            return;
+        }
         let guard = match &host {
             Ok(host) => policy::guard(Some(host), cost),
             Err(err) => {
@@ -390,6 +404,9 @@ impl<S: Session> PoolMachine<S> {
             if let PoolKey::Own(ws, platform) = key {
                 self.record_own(*ws, *platform, Some(udid.clone()), udid);
             }
+        }
+        if self.abandon_parked(key) {
+            return;
         }
         let Some(target) = self.devices.get(key).map(|d| d.target.clone()) else {
             return;

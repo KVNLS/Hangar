@@ -17,6 +17,7 @@ use gpui_kit::component::select::{SelectEvent, SelectItem, SelectState};
 use gpui_kit::*;
 use hangar_core::WorkspaceId;
 use hangar_core::device::Input;
+use hangar_usecases::device_pool::SwitchBy;
 
 use logs::LogsPane;
 
@@ -45,6 +46,8 @@ pub enum DevicePanelEvent {
     TookOver(Result<bool, String>),
     /// Switching the workspace to the other platform failed.
     SwitchFailed(String),
+    /// Changing the workspace's device of the same platform was refused.
+    AssignFailed(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -368,7 +371,7 @@ impl DevicePanel {
     }
 
     /// Makes `key` the workspace's device. A device of the other platform goes through the
-    /// pool's queue ([`DevicePool::switch_platform`]) before its base is set; `start` then boots it.
+    /// pool's queue ([`DevicePool::switch_platform`]) with its base; `start` then boots it.
     pub fn choose_device(
         &mut self,
         ws: WorkspaceId,
@@ -378,36 +381,25 @@ impl DevicePanel {
     ) {
         let active = self.pool.read(cx).assignment(ws).map(|a| a.platform);
         if !needs_switch(active, key.platform) {
-            self.pool
+            let assigned = self
+                .pool
                 .update(cx, |pool, cx| pool.assign(ws, key.platform, key.id, cx));
-            if start {
-                self.start_workspace_device(ws, cx);
+            match assigned {
+                Err(err) => cx.emit(DevicePanelEvent::AssignFailed(format!("{err:#}"))),
+                Ok(()) if start => self.start_workspace_device(ws, cx),
+                Ok(()) => {}
             }
             return;
         }
-        let task = self
-            .pool
-            .update(cx, |pool, cx| pool.switch_platform(ws, key.platform, cx));
+        let task = self.pool.update(cx, |pool, cx| {
+            pool.switch_platform(ws, key.platform, Some(key.id), SwitchBy::User, cx)
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            this.update(cx, |this, cx| {
-                if let Err(err) = result {
-                    cx.emit(DevicePanelEvent::SwitchFailed(format!("{err:#}")));
-                    return;
-                }
-                let attached = this
-                    .pool
-                    .read(cx)
-                    .assignment(ws)
-                    .filter(|a| a.platform == key.platform)
-                    .map(|a| a.base.clone());
-                if attached.is_some_and(|base| base != key.id) {
-                    this.pool
-                        .update(cx, |pool, cx| pool.assign(ws, key.platform, key.id, cx));
-                }
-                if start {
-                    this.start_workspace_device(ws, cx);
-                }
+            this.update(cx, |this, cx| match result {
+                Err(err) => cx.emit(DevicePanelEvent::SwitchFailed(format!("{err:#}"))),
+                Ok(_) if start => this.start_workspace_device(ws, cx),
+                Ok(_) => {}
             })
             .ok();
         })

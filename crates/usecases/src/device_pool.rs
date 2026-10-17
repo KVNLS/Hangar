@@ -47,7 +47,7 @@ pub use leases::LeaseStart;
 pub use policy::{LEASE_TIMEOUT, MAX_HOLD, RESERVATION_IDLE, REVOKE_GRACE};
 pub use shutdown::{Forgotten, OwnShutdown, Replaced};
 pub use status::{DeviceRow, DeviceStatus, Member, Sharing};
-pub use switch::Switched;
+pub use switch::{SwitchBy, Switched};
 
 /// How often memory pressure, lease timeouts, the cap and open simulators are checked.
 pub const MONITOR_TICK: Duration = Duration::from_secs(10);
@@ -217,6 +217,11 @@ pub enum Command<S> {
         holder: WorkspaceId,
         key: PoolKey,
     },
+    /// The user switched `ws` to `platform` ([`SwitchBy::User`]): tell its agent.
+    UserSwitched {
+        ws: WorkspaceId,
+        platform: Platform,
+    },
     Notice(NoticeLevel, String),
     Save(Save),
     /// Read the host and what an Android device of `android_base` costs; report with
@@ -275,7 +280,10 @@ enum State<S> {
         session: S,
         reason: Option<BackendReason>,
     },
-    ShuttingDown,
+    /// Opens asked meanwhile wait in `reopen`: the device opens again once it is down.
+    ShuttingDown {
+        reopen: Vec<Token>,
+    },
 }
 
 #[derive(Debug)]
@@ -411,15 +419,18 @@ impl<S: Session> PoolMachine<S> {
         self.bindings.retain(|_, k| k != key);
     }
 
-    /// Answers the waiters of a bring-up that will not finish.
+    /// Answers the waiters of a bring-up (or reopen) that will not happen.
     fn abandon(&mut self, state: State<S>) {
-        if let State::Opening(opening) = state {
-            for token in opening.waiters {
-                self.push(Command::ReplyOpen {
-                    token,
-                    result: Err(OpenError::stopped()),
-                });
-            }
+        let waiters = match state {
+            State::Opening(opening) => opening.waiters,
+            State::ShuttingDown { reopen } => reopen,
+            State::Closed | State::Open { .. } => return,
+        };
+        for token in waiters {
+            self.push(Command::ReplyOpen {
+                token,
+                result: Err(OpenError::stopped()),
+            });
         }
     }
 }

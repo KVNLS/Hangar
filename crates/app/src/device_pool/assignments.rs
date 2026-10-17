@@ -29,22 +29,26 @@ impl DevicePool {
 
     /// Assigns a platform and base device to a workspace (New workspace sheet, device panel).
     /// A different base replaces the workspace's own device: it is shut down and, when it is
-    /// a simulator the pool created, deleted.
+    /// a simulator the pool created, deleted. Refused while a call of another workspace uses
+    /// that device.
     pub fn assign(
         &mut self,
         ws: WorkspaceId,
         platform: Platform,
         base: String,
         cx: &mut Context<Self>,
-    ) {
-        if let Some(replaced) = self
+    ) -> anyhow::Result<()> {
+        let assigned = self
             .machine
-            .assign(ws, platform, base, std::time::Instant::now())
-        {
-            self.drop_replaced(replaced, cx);
-        }
+            .assign(ws, platform, base, std::time::Instant::now());
+        let assigned = assigned.map(|replaced| {
+            if let Some(replaced) = replaced {
+                self.drop_replaced(replaced, cx);
+            }
+        });
         self.run(cx);
         cx.notify();
+        assigned.map_err(|err| anyhow!(err))
     }
 
     /// Shuts a replaced own device down, then deletes the simulator the pool created for it.

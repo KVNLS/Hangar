@@ -164,7 +164,7 @@ impl<S: Session> PoolMachine<S> {
                 session,
                 reason: reason.as_ref(),
             },
-            State::ShuttingDown => DeviceStatus::ShuttingDown { name: &device.name },
+            State::ShuttingDown { .. } => DeviceStatus::ShuttingDown { name: &device.name },
         }
     }
 
@@ -220,7 +220,7 @@ impl<S: Session> PoolMachine<S> {
                     state: match &d.state {
                         State::Open { .. } => "open",
                         State::Opening(_) => "starting",
-                        State::ShuttingDown => "shutting down",
+                        State::ShuttingDown { .. } => "shutting down",
                         State::Closed if d.running => "running",
                         State::Closed => "off",
                     },
