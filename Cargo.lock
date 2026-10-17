@@ -3063,7 +3063,6 @@ dependencies = [
  "hangar-core",
  "hangar-devices",
  "hangar-terminal",
- "image",
 ]
 
 [[package]]

@@ -13,7 +13,6 @@ hangar-app.workspace = true
 hangar-core.workspace = true
 hangar-terminal.workspace = true
 hangar-devices.workspace = true
-image.workspace = true
 
 [lints]
 workspace = true
