@@ -142,8 +142,13 @@ impl HangarApp {
                 let task = self.launch_app(ws, app_id, cx);
                 answer(task, reply, |()| (), cx);
             }
-            McpRequest::Acquire { ws, wait, reply } => {
-                let task = self.device_acquire(ws, None, wait, cx);
+            McpRequest::Acquire {
+                ws,
+                wait,
+                platform,
+                reply,
+            } => {
+                let task = self.device_acquire(ws, platform, wait, cx);
                 answer(task, reply, |got| got, cx);
             }
             McpRequest::Release { ws, reply } => {
