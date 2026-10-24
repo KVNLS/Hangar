@@ -210,3 +210,17 @@ Built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [alacritty_terminal](https://github.com/alacritty/alacritty) and
 [portable-pty](https://github.com/wezterm/wezterm/tree/main/pty). The simulator work learned from
 baguette, SimView and [idb](https://github.com/facebook/idb) (no code copied; see [CREDITS.md](CREDITS.md)).
+
+## Contributing
+
+Issues and pull requests are welcome. Before sending a change, run `cargo fmt --all`,
+`cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`; the architecture
+and code rules are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [CLAUDE.md](CLAUDE.md). Report
+security issues privately, see [SECURITY.md](SECURITY.md).
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at
+your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion
+in Hangar by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.
