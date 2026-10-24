@@ -7,6 +7,9 @@
 #   scripts/release.sh dmg       target/release/Hangar-<version>-<arch>.dmg, signed
 #   scripts/release.sh publish   tag v<version>, push it, create the GitHub release with the DMG
 #
+# Release notes come from docs/releases/v<version>.md; the requirements, install steps and SHA-256
+# are appended here.
+#
 # HANGAR_SIGN_IDENTITY overrides the codesign identity (default: first "Apple Development"
 # identity in the keychain, else ad-hoc "-"). Not notarized: needs a Developer ID certificate.
 set -euo pipefail
@@ -22,6 +25,7 @@ OUT="$ROOT/target/release"
 APP="$OUT/bundle/Hangar.app"
 DMG="$OUT/Hangar-$VERSION-$ARCH.dmg"
 ICON_SRC="$ROOT/crates/app/assets/brand/hangar-app-icon-1024.png"
+NOTES="$ROOT/docs/releases/$TAG.md"
 
 log() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 
@@ -94,16 +98,8 @@ cmd_dmg() {
 }
 
 release_notes() {
+    cat "$NOTES"
     cat <<EOF
-First public build of Hangar: a macOS workbench for running coding agents on Git worktrees, with
-live iOS and Android device panels.
-
-## Highlights
-- Projects and workspaces backed by Git worktrees; PTY terminals; live changes and review.
-- iOS simulator and Android emulator panels, with a build-and-run loop per stack.
-- Structured agents over ACP (Claude Code, OpenCode, Codex; Gemini unchecked) and terminal agents.
-- MCP device tools so agents can screenshot, tap, type and read logs.
-- Orchestration: agent queue, approvals inbox, tasks, batch and best-of-N.
 
 ## Requirements
 - Apple Silicon Mac ($ARCH build), macOS 14 or later.
@@ -124,6 +120,7 @@ EOF
 
 cmd_publish() {
     [[ -f "$DMG" && -f "$DMG.sha256" ]] || { echo "no $DMG; run all first" >&2; exit 1; }
+    [[ -f "$NOTES" ]] || { echo "no release notes at $NOTES" >&2; exit 1; }
     [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || { echo "publish from main" >&2; exit 1; }
     [[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean" >&2; exit 1; }
     if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
@@ -153,7 +150,7 @@ case "${1:-}" in
         ;;
     publish) cmd_publish ;;
     *)
-        sed -n '2,10p' "$0"
+        sed -n '2,14p' "$0"
         exit 1
         ;;
 esac

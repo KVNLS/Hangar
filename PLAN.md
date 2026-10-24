@@ -51,7 +51,7 @@ output, not a library.
   - Onboarding (done 2026-10-08): a setup checklist on the welcome screen and in Settings › Setup (git and
     its identity, agents and ACP adapters, `gh` and its sign-in, Xcode, iOS runtimes, Android SDK and AVDs,
     JDK, Node), each with the command that fixes it; Hangar never runs installers itself.
-  - Distribution: .app bundle, .icns and DMG shipped as v0.1.0 (`scripts/release.sh`, 2026-10-14), signed
+  - Distribution: .app bundle, .icns and DMG shipped as v0.1.0 (2026-10-14) and v0.2.0 (2026-10-24) (`scripts/release.sh`), signed
     with an Apple Development certificate, arm64 only. Still open: Developer ID + notarisation (question 6),
     universal binary, light/tinted icon variants.
   - Done when: ARCHITECTURE "Done when" all ticked, the checklist seen, a signed .app runs on a clean user.

@@ -58,7 +58,11 @@ request through `gh`.
 - **iOS simulator**: headless boot, live frames, taps, swipes, keyboard and hardware buttons through the
   private CoreSimulator frameworks, with a public `simctl` fallback.
 - **Android emulator**: frames and input over the emulator's gRPC console, with an `adb` fallback.
-- **Device pool**: one device per workspace, cloned on demand, with a limit on how many run at once.
+- **Device pool**: one device per workspace, cloned on demand, with a limit on how many run at once. At the
+  limit, workspaces share a running device and wait their turn: the device panel shows who holds it and
+  who is next, with a **Take over** button.
+- **Platform switch**: a workspace has one platform attached at a time. Switch from the device picker, or
+  let the agent switch; the other device is parked and reused when you switch back.
 - **Logs** pane, screenshots (⌘S), rotation where the platform allows it.
 
 ### Run loop
@@ -66,14 +70,15 @@ request through `gh`.
 worktree gets its own Metro / Expo port, so several dev servers run side by side.
 
 ### MCP tools for agents
-Every agent gets a `hangar` MCP server, so it can check its own work on the device. Each call goes
-through the same permission prompts as any other tool:
+Every agent gets a `hangar` MCP server, so it can check its own work on the device. An agent acquires the
+device before a sequence of calls and waits in line when it is shared. Each call goes through the same
+permission prompts as any other tool:
 
 <img src="docs/assets/agent-device.png" alt="Claude Code asks to take a screenshot of the simulator after building the app">
 
 | Device | Orchestration |
 |---|---|
-| `device_info`, `screenshot`, `tap`, `swipe`, `type_text`, `press`, `logs`, `launch_app`, `build_and_run` | `workspaces_list`, `workspace_create`, `agent_prompt`, `agent_transcript`, `ask_user` |
+| `device_info`, `device_acquire`, `device_release`, `screenshot`, `tap`, `swipe`, `type_text`, `press`, `logs`, `launch_app`, `build_and_run` | `workspaces_list`, `workspace_create`, `agent_prompt`, `agent_transcript`, `ask_user` |
 
 ### Orchestration
 An overview of every agent, an approvals inbox, a queue with a "max concurrent agents" limit, and
@@ -194,7 +199,8 @@ The terminal and simulator spikes are runnable from `examples/`; their results a
 
 Hangar is early and moving fast. Milestones M1–M9 are in (terminal, workspaces, review, Android and iOS
 devices, run loop, structured agents, MCP device tools, orchestration); M10 (hardening, notarized `.app`)
-is in progress. v0.1.0 is the first packaged release. See [PLAN.md](PLAN.md) for the roadmap and known gaps, and
+is in progress. v0.2.0 adds device sharing between agents and platform switching; release notes are in
+[docs/releases/](docs/releases/). See [PLAN.md](PLAN.md) for the roadmap and known gaps, and
 [docs/HISTORY.md](docs/HISTORY.md) for what shipped.
 
 ## Acknowledgements

@@ -632,6 +632,14 @@ What each milestone shipped and how it was checked; PLAN.md holds the current pl
   switches A from iOS to Android while B waits on iOS, and B gets the iOS device. Not yet seen on screen
   (PLAN M10 checklist).
 
+## Release v0.2.0 (2026-10-24, branch `release-v0.2.0`)
+- Device sharing and platform switch, plus the M10 hardening merged since v0.1.0. README covers sharing,
+  the switch and the `device_acquire` / `device_release` tools.
+- Release notes live in `docs/releases/v<version>.md` (v0.1.0's moved there); `scripts/release.sh` appends
+  the requirements, install steps and SHA-256, and `publish` refuses a version with no notes file.
+- Checked: `codesign --verify --deep --strict` passes; the app copied out of the mounted DMG launches and
+  reports 0.2.0.
+
 ## Resolved questions (moved from PLAN.md, 2026-10-14)
 2. ~~Rust FFI vs Swift helper for Indigo HID~~ — resolved: objc2 works on Xcode 27, no helper (docs/notes/spike-b-notes.md).
    Keep `sim_probe` to re-check each Xcode release.
