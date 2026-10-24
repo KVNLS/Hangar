@@ -7,4 +7,4 @@ Vendored and patched: `third_party/gpui-pre-apple` (Apache-2.0), with a port of 
 CoreVideo surfaces, by michaelsieminski).
 
 Bundled assets: Geist and Geist Mono fonts (SIL OFL 1.1, `crates/app/assets/fonts/OFL.txt`); Lucide icons
-(ISC) through gpui-kit-assets. UI design reference: `design/Hangar.dc.html` (design system v0.1).
+(ISC) through gpui-kit-assets.

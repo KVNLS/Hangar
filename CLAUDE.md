@@ -71,6 +71,4 @@ shipped, docs/notes/ for spike results and per-milestone engineering notes.
     (`app/tests/workspaces.rs`), named after what they cover.
 
 ## Workflow
-- In agent worktrees (`.claude/worktrees/`) the rtk hook refuses plain `git`/`cargo`: use `/usr/bin/git` and
-  `~/.cargo/bin/cargo`.
 - Plan each step, keep it small, commit after fmt + clippy + tests pass.
