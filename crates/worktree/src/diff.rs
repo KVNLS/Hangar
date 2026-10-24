@@ -16,12 +16,6 @@ pub struct FileStat {
     pub deletions: Option<u32>,
 }
 
-impl FileStat {
-    pub fn is_binary(&self) -> bool {
-        self.insertions.is_none()
-    }
-}
-
 /// Per-file line counts of everything the worktree changed since it diverged from `base`:
 /// commits on HEAD since `merge-base(base, HEAD)` plus staged and unstaged edits.
 /// Untracked files are not included (see [`crate::status`]).
@@ -383,7 +377,7 @@ mod tests {
                 },
             ]
         );
-        assert!(stats[1].is_binary());
+        assert!(stats[1].insertions.is_none());
         assert!(parse_numstat(b"").unwrap().is_empty());
     }
 
