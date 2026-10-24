@@ -170,7 +170,7 @@ fn scripted_agent_handshake_and_turn() {
         .start(&SpawnContext::new(dir.path()), &[], None)
         .expect("starts");
     assert_eq!(session.session_id(), "s-1");
-    assert!(session.info().load_session);
+    assert!(session.info.load_session);
     let rx = &events;
     session.prompt("go").expect("prompt");
     let wait = |rx: &Receiver<AcpEvent>| rx.recv_timeout(Duration::from_secs(5)).expect("event");

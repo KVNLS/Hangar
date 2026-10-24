@@ -124,9 +124,7 @@ fn spawns_in_a_worktree_with_env() {
     )
     .unwrap();
 
-    let adapter = PtyAdapter::new("sh", "Shell test", "/bin/sh")
-        .with_args(["-c"])
-        .with_env("HANGAR_TEST", "from-adapter");
+    let adapter = PtyAdapter::new("sh", "Shell test", "/bin/sh").with_args(["-c"]);
     let updates = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&updates);
     let mut ctx = SpawnContext::new(&wt.path);
@@ -178,7 +176,6 @@ fn presets_cover_the_supported_agents() {
     assert_eq!(ids, ["claude", "codex", "opencode", "gemini", "shell"]);
     for preset in &presets {
         assert!(!preset.display_name().is_empty());
-        assert!(preset.env.is_empty());
         if preset.id != "shell" {
             assert!(preset.args.is_empty(), "{preset:?}");
         }

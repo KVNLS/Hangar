@@ -322,7 +322,7 @@ fn diff_stat_includes_commits_and_working_tree() {
             ("lib.rs", Some(1), Some(0)),
         ]
     );
-    assert!(stats[1].is_binary());
+    assert!(stats[1].insertions.is_none());
 
     assert!(matches!(
         diff_stat(&wt, "no-such-branch"),

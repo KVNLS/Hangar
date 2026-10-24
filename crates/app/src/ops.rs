@@ -483,8 +483,9 @@ pub struct StartedSession {
 }
 
 /// Spawns `adapter` in the workspace and records the session; a failed spawn is recorded too.
-/// `extra` arguments and environment come after the adapter's (winning on conflicts); its files
-/// are written first (0600, missing directories 0700), and files inside the worktree are refused.
+/// `extra` arguments come after the adapter's and its environment is added to the inherited one
+/// (winning on conflicts); its files are written first (0600, missing directories 0700), and files
+/// inside the worktree are refused.
 pub fn start_session_with(
     store: &dyn Store,
     adapter: &PtyAdapter,

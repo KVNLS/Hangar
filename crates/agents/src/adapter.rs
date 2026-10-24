@@ -12,7 +12,7 @@ pub type UpdateHook = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone)]
 pub struct SpawnContext {
     pub cwd: PathBuf,
-    /// Added on top of the adapter's env; wins on conflicts.
+    /// Added on top of the inherited environment; wins on conflicts.
     pub env: Vec<(String, String)>,
     /// Appended after the adapter's own arguments.
     pub extra_args: Vec<String>,
@@ -69,7 +69,6 @@ pub struct PtyAdapter {
     /// Bare name looked up on `PATH`, or a path containing `/`.
     pub program: String,
     pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
     /// Shell command that installs the program; empty when there is none.
     pub install_hint: String,
 }
@@ -85,7 +84,6 @@ impl PtyAdapter {
             display_name: display_name.into(),
             program: program.into(),
             args: Vec::new(),
-            env: Vec::new(),
             install_hint: String::new(),
         }
     }
@@ -100,13 +98,8 @@ impl PtyAdapter {
         self
     }
 
-    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.push((key.into(), value.into()));
-        self
-    }
-
     fn resolve(&self, ctx: &SpawnContext) -> Result<PathBuf> {
-        resolve_program(&self.id, &self.program, &self.env, &ctx.env)
+        resolve_program(&self.id, &self.program, &ctx.env)
     }
 }
 
@@ -128,7 +121,7 @@ impl AgentAdapter for PtyAdapter {
             program: self.resolve(ctx)?,
             args: self.args.iter().chain(&ctx.extra_args).cloned().collect(),
             cwd: ctx.cwd.clone(),
-            env: self.env.iter().chain(&ctx.env).cloned().collect(),
+            env: ctx.env.clone(),
         })
     }
 }
