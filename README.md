@@ -113,7 +113,7 @@ Hangar detects which CLIs are on your `PATH` (Settings › Agents & providers).
 ### Install a release
 
 Download `Hangar-<version>-arm64.dmg` from [Releases](https://github.com/KVNLS/Hangar/releases) and drag
-Hangar to Applications. Builds are signed with a development certificate but not notarized, so macOS blocks
+Hangar to Applications. Builds are ad-hoc signed and not notarized, so macOS blocks
 the first launch: right-click Hangar › Open › Open, or run
 `xattr -dr com.apple.quarantine /Applications/Hangar.app`. Apple Silicon only for now.
 
