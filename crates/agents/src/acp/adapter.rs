@@ -38,7 +38,6 @@ pub struct AcpAdapter {
     /// Bare name looked up on `PATH`, or a path containing `/`.
     pub program: String,
     pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
     /// Shown when the program is missing.
     pub install_hint: String,
     /// Shown when the agent refuses to start a session until the user signs in.
@@ -56,7 +55,6 @@ impl AcpAdapter {
             display_name: display_name.into(),
             program: program.into(),
             args: Vec::new(),
-            env: Vec::new(),
             install_hint: String::new(),
             login_hint: String::new(),
         }
@@ -92,12 +90,12 @@ impl AcpAdapter {
         if !ctx.cwd.is_dir() {
             return Err(Error::InvalidCwd(ctx.cwd.clone()));
         }
-        let program = resolve_program(&self.id, &self.program, &self.env, &ctx.env)?;
+        let program = resolve_program(&self.id, &self.program, &ctx.env)?;
         let mut command = Command::new(&program);
         command
             .args(self.args.iter().chain(&ctx.extra_args))
             .current_dir(&ctx.cwd)
-            .envs(self.env.iter().chain(&ctx.env).map(|(k, v)| (k, v)))
+            .envs(ctx.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
