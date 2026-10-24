@@ -14,6 +14,8 @@ with Claude Code, Codex, OpenCode or Gemini CLI.
 ![macOS](https://img.shields.io/badge/platform-macOS-1F2128?logo=apple&logoColor=white)
 ![GPUI](https://img.shields.io/badge/UI-GPUI-1F2128)
 
+**[Website](https://kvnls.github.io/Hangar/)** · **[Download](https://github.com/KVNLS/Hangar/releases/latest)**
+
 <img src="docs/assets/hero.png" alt="Hangar: Claude Code finished a task in its worktree, with the iOS simulator running the app next to it">
 
 <sub>Claude Code added an empty state to an Expo app, ran the tests, built the app with Hangar's

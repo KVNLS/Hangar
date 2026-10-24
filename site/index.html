@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hangar — parallel coding agents for mobile developers</title>
+<meta name="description" content="A native macOS app that runs Claude Code, Codex, OpenCode and Gemini CLI in parallel, each in its own Git worktree with its own iOS simulator or Android emulator.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="apple-touch-icon" href="assets/logo.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Hangar — parallel coding agents for mobile developers">
+<meta property="og:description" content="Run your coding agents in parallel — each in its own worktree, each with its own simulator.">
+<meta property="og:url" content="https://kvnls.github.io/Hangar/">
+<meta property="og:image" content="https://kvnls.github.io/Hangar/assets/hero.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top"><img src="assets/logo.png" width="28" height="28" alt="">Hangar</a>
+    <nav class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#agents">Agents</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/KVNLS/Hangar">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap">
+    <img class="hero-logo" src="assets/logo.png" width="96" height="96" alt="Hangar logo">
+    <p class="eyebrow">Native macOS app · Free and open source</p>
+    <h1>Run your coding agents in parallel.</h1>
+    <p class="lede">Each in its own worktree, each with its own simulator. Hangar runs Claude Code, Codex,
+      OpenCode and Gemini CLI side by side, and lets them check their UI work on a real iOS simulator or
+      Android emulator.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/KVNLS/Hangar/releases/latest">Download for macOS</a>
+      <a class="btn" href="https://github.com/KVNLS/Hangar">View on GitHub</a>
+    </div>
+    <p class="fine">Apple Silicon · macOS · MIT OR Apache-2.0</p>
+  </div>
+  <div class="wrap wide">
+    <figure class="shot shot-hero">
+      <img src="assets/hero.png" width="1600" height="1000"
+           alt="Hangar: Claude Code finished a task in its worktree, with the iOS simulator running the app next to it">
+    </figure>
+    <p class="caption">Claude Code added an empty state to an Expo app, ran the tests, built the app with
+      Hangar's <code>build_and_run</code> tool and checked the result on the simulator itself.</p>
+  </div>
+</section>
+
+<section class="why">
+  <div class="wrap">
+    <div class="grid4">
+      <div class="card">
+        <h3>Your agents, your accounts</h3>
+        <p>Hangar runs the CLIs you already use. It never proxies a model call.</p>
+      </div>
+      <div class="card">
+        <h3>One task, one worktree</h3>
+        <p>Every workspace is a Git worktree on its own branch, so agents never step on each other.</p>
+      </div>
+      <div class="card">
+        <h3>Built for mobile</h3>
+        <p>Each workspace can get its own iOS simulator or Android emulator, live in the window.</p>
+      </div>
+      <div class="card">
+        <h3>Native and fast</h3>
+        <p>Rust and GPUI, no Electron. Simulator frames are painted straight from their IOSurface.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features" class="features">
+  <div class="wrap">
+
+    <article class="feature">
+      <div class="feature-text">
+        <p class="eyebrow">Parallel workspaces</p>
+        <h2>As many agents as you like, none in each other's way.</h2>
+        <p>Add a repository, start workspaces and pick an agent for each. Hangar creates the worktree and
+          branch, starts the agent in it, and keeps projects, workspaces and sessions across restarts. The
+          sidebar shows who is working, waiting for approval or done, and macOS notifications tell you
+          when one needs you.</p>
+      </div>
+      <figure class="shot"><img src="assets/new-workspace.png" width="1600" height="1000" loading="lazy"
+        alt="New workspace sheet with three agents picked"></figure>
+    </article>
+
+    <article class="feature flip">
+      <div class="feature-text">
+        <p class="eyebrow">Devices in the window</p>
+        <h2>Agents that test on the simulator themselves.</h2>
+        <p>Every agent gets a <code>hangar</code> MCP server: screenshots, taps, swipes, typing, logs and
+          <code>build_and_run</code>. Devices are pooled and shared fairly, and every call goes through the
+          same permission prompts as any other tool.</p>
+        <ul class="ticks">
+          <li>iOS simulator through CoreSimulator, with a <code>simctl</code> fallback</li>
+          <li>Android emulator over gRPC, with an <code>adb</code> fallback</li>
+          <li>⌘R builds and runs Xcode, Gradle, React Native and Expo projects</li>
+        </ul>
+      </div>
+      <figure class="shot"><img src="assets/agent-device.png" width="1600" height="1000" loading="lazy"
+        alt="Claude Code asks to take a screenshot of the simulator after building the app"></figure>
+    </article>
+
+    <article class="feature">
+      <div class="feature-text">
+        <p class="eyebrow">Live changes and review</p>
+        <h2>Review each change on its own.</h2>
+        <p>Files are watched as agents write them. The review screen shows the workspace's diff, split or
+          inline with syntax highlighting, and lets you commit, push, rebase, merge or open a pull
+          request.</p>
+      </div>
+      <figure class="shot"><img src="assets/review.png" width="1600" height="1000" loading="lazy"
+        alt="Review screen with a split diff"></figure>
+    </article>
+
+    <article class="feature flip">
+      <div class="feature-text">
+        <p class="eyebrow">Orchestration</p>
+        <h2>Best-of-N, queues and an approvals inbox.</h2>
+        <p>Start the same task with several agents and compare their attempts side by side. An overview
+          shows every agent, a queue caps how many run at once, and usage and cost are tracked per session
+          and per day.</p>
+      </div>
+      <figure class="shot"><img src="assets/compare.png" width="1600" height="1000" loading="lazy"
+        alt="Comparing three attempts at the same task"></figure>
+    </article>
+
+  </div>
+</section>
+
+<section id="agents" class="agents">
+  <div class="wrap">
+    <p class="eyebrow">Supported agents</p>
+    <h2>Bring the CLIs you already use.</h2>
+    <p class="sub">Run each as a plain terminal, or as a structured chat through the
+      <a href="https://agentclientprotocol.com">Agent Client Protocol</a>, with tool-call cards, permission
+      prompts, model pickers and session resume.</p>
+    <ul class="chips">
+      <li>Claude Code</li>
+      <li>Codex CLI</li>
+      <li>OpenCode</li>
+      <li>Gemini CLI</li>
+      <li>Ollama models <span>via OpenCode</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="install" class="install">
+  <div class="wrap">
+    <p class="eyebrow">Install</p>
+    <h2>Up and running in a minute.</h2>
+    <ol class="steps">
+      <li>
+        <h3>Download</h3>
+        <p>Get <code>Hangar-&lt;version&gt;-arm64.dmg</code> from the
+          <a href="https://github.com/KVNLS/Hangar/releases/latest">latest release</a>.</p>
+      </li>
+      <li>
+        <h3>Install</h3>
+        <p>Open the disk image and drag Hangar to Applications.</p>
+      </li>
+      <li>
+        <h3>First launch</h3>
+        <p>Builds are not notarized yet: right-click Hangar › Open › Open, or run</p>
+        <pre><code>xattr -dr com.apple.quarantine /Applications/Hangar.app</code></pre>
+      </li>
+    </ol>
+    <p class="sub">Prefer to build it yourself?</p>
+    <pre class="block"><code>git clone https://github.com/KVNLS/Hangar.git
+cd Hangar
+cargo run -p hangar-app</code></pre>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/KVNLS/Hangar/releases/latest">Download for macOS</a>
+      <a class="btn" href="https://github.com/KVNLS/Hangar#getting-started">Read the docs</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <span>Hangar · MIT OR Apache-2.0</span>
+    <nav>
+      <a href="https://github.com/KVNLS/Hangar">GitHub</a>
+      <a href="https://github.com/KVNLS/Hangar/releases">Releases</a>
+      <a href="https://github.com/KVNLS/Hangar/issues">Issues</a>
+      <a href="https://github.com/KVNLS/Hangar/blob/main/SECURITY.md">Security</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>
