@@ -302,10 +302,6 @@ impl AcpSession {
         &self.session_id
     }
 
-    pub fn info(&self) -> &AgentInfo {
-        &self.info
-    }
-
     /// The mode the session started in; later changes arrive as `CurrentMode` updates.
     pub fn initial_mode(&self) -> Option<&str> {
         self.current_mode.as_deref()
